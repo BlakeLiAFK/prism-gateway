@@ -103,6 +103,19 @@ def run_ui_checks(page, base, token, results):
     page.wait_for_timeout(200)
     results.append('provider editor drawer')
 
+    # 模型编辑器：确认新增的能力开关渲染出来且可读取
+    page.click('.nav-item[data-nav="models"]')
+    page.wait_for_timeout(250)
+    page.evaluate("document.querySelector('[data-action=\"add-model\"], [data-action=\"edit-model\"]')?.click()")
+    page.wait_for_timeout(400)
+    if page.locator('input[name="drop_reasoning"]').count() == 0:
+        fail('模型编辑器缺少 drop_reasoning 开关')
+    if page.locator('input[name="drop_reasoning"]').is_checked():
+        fail('drop_reasoning 默认必须关闭')
+    page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
+    page.wait_for_timeout(200)
+    results.append('model editor capability toggles')
+
     # 设置页往返：确认表单取值与提交链路完整
     page.click('.nav-item[data-nav="settings"]')
     page.wait_for_timeout(300)

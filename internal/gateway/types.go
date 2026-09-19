@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.5.2"
+const Version = "1.6.0"
 
 type Object = map[string]any
 
@@ -27,27 +27,30 @@ type Provider struct {
 	Description  string `json:"description"`
 }
 type Model struct {
-	ID          string  `json:"id"`
-	ProviderID  string  `json:"provider_id"`
-	Upstream    string  `json:"upstream"`
-	Name        string  `json:"name"`
-	Protocol    string  `json:"protocol"`
-	Enabled     bool    `json:"enabled"`
-	Tools       bool    `json:"tools"`
-	Vision      bool    `json:"vision"`
-	NativeCount bool    `json:"native_count"`
-	Context     int     `json:"context_window"`
-	MaxOutput   int     `json:"max_output_tokens"`
-	Concurrency int     `json:"concurrency"`
-	RPM         int     `json:"rpm"`
-	InputPrice  float64 `json:"input_price"`
-	OutputPrice float64 `json:"output_price"`
-	CachePrice  float64 `json:"cache_price"`
-	WritePrice  float64 `json:"write_price"`
-	PricingSet  bool    `json:"pricing_set"`
-	Limit5h     float64 `json:"limit_5h"`
-	Limit7d     float64 `json:"limit_7d"`
-	Limit30d    float64 `json:"limit_30d"`
+	ID          string `json:"id"`
+	ProviderID  string `json:"provider_id"`
+	Upstream    string `json:"upstream"`
+	Name        string `json:"name"`
+	Protocol    string `json:"protocol"`
+	Enabled     bool   `json:"enabled"`
+	Tools       bool   `json:"tools"`
+	Vision      bool   `json:"vision"`
+	NativeCount bool   `json:"native_count"`
+	// 上游会返回推理内容而又需要跨协议调用时，由管理员显式打开。
+	// 打开后跨协议转换会丢弃推理内容，并在响应头 X-Prism-Dropped 中标注。
+	DropReasoning bool    `json:"drop_reasoning"`
+	Context       int     `json:"context_window"`
+	MaxOutput     int     `json:"max_output_tokens"`
+	Concurrency   int     `json:"concurrency"`
+	RPM           int     `json:"rpm"`
+	InputPrice    float64 `json:"input_price"`
+	OutputPrice   float64 `json:"output_price"`
+	CachePrice    float64 `json:"cache_price"`
+	WritePrice    float64 `json:"write_price"`
+	PricingSet    bool    `json:"pricing_set"`
+	Limit5h       float64 `json:"limit_5h"`
+	Limit7d       float64 `json:"limit_7d"`
+	Limit30d      float64 `json:"limit_30d"`
 }
 type Candidate struct {
 	ModelID string `json:"model_id"`

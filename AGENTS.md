@@ -24,4 +24,8 @@ This is a Go + SQLite + embedded WebUI gateway. Preserve these invariants:
 14. `make check` is the only quality gate; keep it green and do not lower the coverage
     thresholds in scripts/cover.sh without saying why in the commit message.
 
+15. Dropping reasoning across protocols is allowed only behind an explicit per-model opt-in
+    that defaults to off, and every dropping response must carry X-Prism-Dropped. The rule
+    was never "don't drop" - it is "don't drop silently".
+
 No third-party Go modules are currently required. Target Go >=1.23. Native Windows is not supported; use WSL2. Tests must not require real provider API keys or the Internet.

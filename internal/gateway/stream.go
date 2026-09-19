@@ -371,7 +371,7 @@ func (e *emitter) finish() error {
 		return e.send(typ, Object{"type": typ, "response": r})
 	}
 }
-func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id string, u *Usage) error {
+func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id string, u *Usage, dropReasoning bool) error {
 	em := newEmitter(w, to, model, id)
 	done := false
 	err := readSSE(r, func(f frame) error {
@@ -397,8 +397,15 @@ func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id str
 					return errors.New("multiple stream choices unsupported")
 				}
 				d := obj(v["delta"])
-				if str(d, "reasoning_content") != "" || str(d, "reasoning") != "" || str(d, "refusal") != "" {
-					return errors.New("unmappable reasoning/refusal in stream")
+				if str(d, "refusal") != "" {
+					return errors.New("unmappable refusal in stream")
+				}
+				if str(d, "reasoning_content") != "" || str(d, "reasoning") != "" {
+					// 未显式开启丢弃时，宁可中断也不悄悄吞掉推理内容
+					if !dropReasoning {
+						return errors.New("unmappable reasoning in stream")
+					}
+					// 已开启：不产出任何块，响应头在流开始前已标注
 				}
 				if t := str(d, "content"); t != "" {
 					if err = em.start(0, Block{Kind: "text"}); err != nil {

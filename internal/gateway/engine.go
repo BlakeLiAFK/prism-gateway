@@ -496,6 +496,11 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				co := demoCompletion(o, p)
 				u = co.Usage
 				if boolean(o, "stream") {
+					if s.Cross && s.Model.DropReasoning {
+						// 流式无法等到发现推理内容再补响应头，所以开关开启时先声明：
+						// 本次跨协议响应会丢弃推理内容（如果上游返回了的话）
+						w.Header().Set("X-Prism-Dropped", "reasoning")
+					}
 					w.Header().Set("Content-Type", "text/event-stream")
 					em := newEmitter(w, p, s.Model.ID, id)
 					em.usage = u
@@ -575,7 +580,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				w.Header().Set("X-Accel-Buffering", "no")
 				w.WriteHeader(200)
 				if s.Cross {
-					runErr = convertedStream(w, res.Body, s.Model.Protocol, p, s.Model.ID, id, &u)
+					runErr = convertedStream(w, res.Body, s.Model.Protocol, p, s.Model.ID, id, &u, s.Model.DropReasoning)
 				} else {
 					runErr = nativeStream(w, res.Body, p, &u)
 				}
@@ -609,6 +614,13 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			extractUsage(obj(ro["usage"]), s.Model.Protocol, &u)
 			if s.Cross {
 				co, er := decodeCompletion(ro, s.Model.Protocol)
+				if er != nil && s.Model.DropReasoning && stripReasoning(ro, s.Model.Protocol) {
+					// 管理员为这个模型显式接受了丢弃推理内容。剥离后重试，
+					// 并在响应头标注——丢弃可以被接受，静默不行。
+					if co, er = decodeCompletion(ro, s.Model.Protocol); er == nil {
+						w.Header().Set("X-Prism-Dropped", "reasoning")
+					}
+				}
 				if er != nil {
 					// 上游是通的，也确实返回了内容；问题出在响应里有跨协议表达不了的
 					// 部分（典型是带签名的推理）。必须如实说明，否则调用方只会去

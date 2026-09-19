@@ -630,7 +630,7 @@ data: {"type":"message_stop"}
 `
 	w := httptest.NewRecorder()
 	u := Usage{}
-	err := convertedStream(w, strings.NewReader(src), "messages", "chat", "m", "r", &u)
+	err := convertedStream(w, strings.NewReader(src), "messages", "chat", "m", "r", &u, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -677,7 +677,7 @@ func TestAnthropicZeroArgumentToolStream(t *testing.T) {
 	src := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_1\",\"name\":\"clock\",\"input\":{}}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	u := Usage{}
 	w := httptest.NewRecorder()
-	if err := convertedStream(w, strings.NewReader(src), "messages", "chat", "m", "r", &u); err != nil {
+	if err := convertedStream(w, strings.NewReader(src), "messages", "chat", "m", "r", &u, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(w.Body.String(), `"arguments":"{}"`) {
@@ -1937,3 +1937,129 @@ func TestSessionCookieSecureBehindProxy(t *testing.T) {
 }
 
 var tlsConnectionState = tls.ConnectionState{HandshakeComplete: true}
+
+// drop_reasoning 是管理员对单个模型显式作出的取舍：接受丢弃推理内容，
+// 换取跨协议可用。默认必须关闭，且丢弃时必须在响应头标注——
+// 「不静默丢弃」的关键在于「不静默」，而不是「不丢弃」。
+func TestDropReasoningIsOptInAndAnnounced(t *testing.T) {
+	const withReasoning = `{"id":"g","object":"chat.completion","choices":[{"index":0,"finish_reason":"stop",
+	 "message":{"role":"assistant","content":"Hello!","reasoning":"internal thought",
+	 "reasoning_details":[{"type":"reasoning.text","text":"internal"}]}}],
+	 "usage":{"prompt_tokens":5,"completion_tokens":7}}`
+
+	setup := func(t *testing.T, drop bool, body string) *harness {
+		t.Helper()
+		h := newHarness(t)
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, body)
+		}))
+		t.Cleanup(upstream.Close)
+		h.change(t, func(c *Config) {
+			c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+				BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+			m := modelFixture("m_drop", "chat")
+			m.DropReasoning = drop
+			c.Models = append(c.Models, m)
+		})
+		return h
+	}
+	call := func(h *harness) *httptest.ResponseRecorder {
+		key := h.createKey(t)
+		r := httptest.NewRequest("POST", "http://localhost/anthropic/v1/messages",
+			strings.NewReader(raw(Object{"model": "m_drop", "max_tokens": 64,
+				"messages": []any{Object{"role": "user", "content": "hi"}}})))
+		r.Header.Set("x-api-key", key)
+		r.Header.Set("anthropic-version", "2023-06-01")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.a.ServeHTTP(w, r)
+		return w
+	}
+
+	// 默认关闭：仍然拒绝
+	w := call(setup(t, false, withReasoning))
+	if w.Code == 200 {
+		t.Fatal("未开启开关时不得丢弃推理内容")
+	}
+	if w.Header().Get("X-Prism-Dropped") != "" {
+		t.Fatal("没有丢弃就不该标注")
+	}
+
+	// 开启：成功，且必须标注
+	w = call(setup(t, true, withReasoning))
+	if w.Code != 200 {
+		t.Fatalf("开启后应当成功: %d %s", w.Code, w.Body)
+	}
+	if w.Header().Get("X-Prism-Dropped") != "reasoning" {
+		t.Fatalf("丢弃必须标注，得到 %q", w.Header().Get("X-Prism-Dropped"))
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Hello!") {
+		t.Fatalf("正文内容丢失: %s", body)
+	}
+	if strings.Contains(body, "internal thought") {
+		t.Fatal("推理内容不应出现在转换结果里")
+	}
+
+	// 上游没有推理内容时，开着开关也不该平白标注
+	const clean = `{"id":"g","choices":[{"index":0,"finish_reason":"stop",
+	 "message":{"role":"assistant","content":"Hi"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`
+	w = call(setup(t, true, clean))
+	if w.Code != 200 {
+		t.Fatalf("干净响应应当成功: %d", w.Code)
+	}
+	if w.Header().Get("X-Prism-Dropped") != "" {
+		t.Fatal("没有实际丢弃时不应标注")
+	}
+
+	// 开关只针对推理内容，其它不可转换内容照旧拒绝
+	const refusal = `{"id":"g","choices":[{"index":0,"finish_reason":"stop",
+	 "message":{"role":"assistant","content":"","refusal":"I cannot help"}}],"usage":{}}`
+	if w = call(setup(t, true, refusal)); w.Code == 200 {
+		t.Fatal("refusal 不在开关覆盖范围内，必须仍然拒绝")
+	}
+}
+
+func TestStripReasoningAcrossProtocols(t *testing.T) {
+	chat := Object{"choices": []any{Object{"message": Object{
+		"content": "x", "reasoning": "r", "reasoning_details": []any{Object{"text": "r"}}}}}}
+	if !stripReasoning(chat, "chat") {
+		t.Fatal("chat 应报告发生了剥离")
+	}
+	m := obj(obj(arr(chat["choices"])[0])["message"])
+	for _, k := range []string{"reasoning", "reasoning_content", "reasoning_details"} {
+		if _, ok := m[k]; ok {
+			t.Fatalf("chat 残留字段 %s", k)
+		}
+	}
+	if m["content"] != "x" {
+		t.Fatal("正文不应被动到")
+	}
+
+	msg := Object{"content": []any{
+		Object{"type": "thinking", "thinking": "t"},
+		Object{"type": "text", "text": "keep"},
+		Object{"type": "redacted_thinking", "data": "z"}}}
+	if !stripReasoning(msg, "messages") {
+		t.Fatal("messages 应报告发生了剥离")
+	}
+	if left := arr(msg["content"]); len(left) != 1 || str(obj(left[0]), "type") != "text" {
+		t.Fatalf("messages 剥离结果不对: %v", left)
+	}
+
+	resp := Object{"output": []any{
+		Object{"type": "reasoning", "summary": []any{}},
+		Object{"type": "message", "content": []any{}}}}
+	if !stripReasoning(resp, "responses") {
+		t.Fatal("responses 应报告发生了剥离")
+	}
+	if left := arr(resp["output"]); len(left) != 1 || str(obj(left[0]), "type") != "message" {
+		t.Fatalf("responses 剥离结果不对: %v", left)
+	}
+
+	// 没有推理内容时必须返回 false，否则会产生无意义的标注和重试
+	if stripReasoning(Object{"choices": []any{Object{"message": Object{"content": "x"}}}}, "chat") {
+		t.Fatal("无推理内容时不应报告剥离")
+	}
+}

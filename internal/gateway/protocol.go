@@ -743,3 +743,51 @@ func completionObject(c Completion, p, model, id string) Object {
 		return Object{"id": "resp_" + id, "object": "response", "created_at": now() / 1000, "status": status, "error": nil, "incomplete_details": details, "model": model, "output": items, "usage": usageObject(c.Usage, p), "parallel_tool_calls": true, "store": false}
 	}
 }
+
+// stripReasoning 从上游响应里移除推理内容，供显式开启 drop_reasoning 的模型使用。
+// 返回是否确实移除了东西——只有真的移除了，才值得重试解码并在响应头上标注。
+// 它只动推理相关的部分；refusal、annotations 等其它不可转换内容仍然会被拒绝。
+func stripReasoning(o Object, protocol string) bool {
+	dropped := false
+	switch protocol {
+	case "chat":
+		for _, v := range arr(o["choices"]) {
+			m := obj(obj(v)["message"])
+			if m == nil {
+				continue
+			}
+			for _, k := range []string{"reasoning", "reasoning_content", "reasoning_details"} {
+				if _, ok := m[k]; ok {
+					delete(m, k)
+					dropped = true
+				}
+			}
+		}
+	case "messages":
+		kept := []any{}
+		for _, v := range arr(o["content"]) {
+			switch str(obj(v), "type") {
+			case "thinking", "redacted_thinking":
+				dropped = true
+			default:
+				kept = append(kept, v)
+			}
+		}
+		if dropped {
+			o["content"] = kept
+		}
+	case "responses":
+		kept := []any{}
+		for _, v := range arr(o["output"]) {
+			if str(obj(v), "type") == "reasoning" {
+				dropped = true
+				continue
+			}
+			kept = append(kept, v)
+		}
+		if dropped {
+			o["output"] = kept
+		}
+	}
+	return dropped
+}
