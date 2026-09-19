@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.1.0"
+const Version = "1.2.0"
 
 type Object = map[string]any
 
@@ -75,6 +75,8 @@ type Settings struct {
 	GlobalConcurrency   int    `json:"global_concurrency"`
 	SessionTTLHours     int    `json:"session_ttl_hours"`
 	AllowEstimatedCount bool   `json:"allow_estimated_count"`
+	LogLevel            string `json:"log_level"`
+	LogFormat           string `json:"log_format"`
 }
 type Config struct {
 	Version   int64      `json:"version"`
@@ -86,7 +88,7 @@ type Config struct {
 }
 
 func defaults() Config {
-	return Config{Version: 1, Providers: []Provider{}, Models: []Model{}, Routes: []Route{}, Aliases: []Alias{}, Settings: Settings{AppName: "Prism Gateway", DefaultRoute: "auto-coding", RetentionDays: 90, MaxBodyMB: 8, GlobalConcurrency: 8, SessionTTLHours: 24, AllowEstimatedCount: true}}
+	return Config{Version: 1, Providers: []Provider{}, Models: []Model{}, Routes: []Route{}, Aliases: []Alias{}, Settings: Settings{AppName: "Prism Gateway", DefaultRoute: "auto-coding", RetentionDays: 90, MaxBodyMB: 8, GlobalConcurrency: 8, SessionTTLHours: 24, AllowEstimatedCount: true, LogLevel: "info", LogFormat: "text"}}
 }
 func (c Config) provider(id string) (Provider, bool) {
 	for _, p := range c.Providers {
@@ -247,6 +249,17 @@ func (c Config) Validate() error {
 	s := c.Settings
 	if s.MaxBodyMB < 1 || s.MaxBodyMB > 32 || s.GlobalConcurrency < 1 || s.GlobalConcurrency > 512 || s.RetentionDays < 31 || s.RetentionDays > 3650 || s.SessionTTLHours < 1 || s.SessionTTLHours > 720 {
 		return errors.New("设置范围：body 1–32MB，并发 1–512，保留 31–3650 天，会话 1–720 小时")
+	}
+	// 空值表示沿用默认，兼容升级前写入的旧配置
+	switch strings.ToLower(s.LogLevel) {
+	case "", "debug", "info", "warn", "error":
+	default:
+		return errors.New("日志级别必须是 debug / info / warn / error")
+	}
+	switch strings.ToLower(s.LogFormat) {
+	case "", "text", "json":
+	default:
+		return errors.New("日志格式必须是 text / json")
 	}
 	return nil
 }

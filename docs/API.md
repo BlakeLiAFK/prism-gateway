@@ -159,6 +159,30 @@ curl http://127.0.0.1:8080/api.json \
 
 更新已有模型/路由可在 params.id 指定对象，并只提交变化字段。数组替换整体列表，不做隐藏的逐项 merge。模型、路由、别名对外 ID 共用一个命名空间。
 
+## 运行设置
+
+`settings.get` / `settings.update` 管理运行设置。全部字段保存即生效，不需要重启进程：
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `app_name` | 文本 | 后台识别名称 |
+| `default_route` | 文本 | 配置指引用；调用仍须显式传 model |
+| `global_concurrency` | 1–512 | 超出返回 429，不排队 |
+| `max_body_mb` | 1–32 | 请求体上限 |
+| `retention_days` | 31–3650 | 请求记录保留天数 |
+| `session_ttl_hours` | 1–720 | 会话亲和映射保留时长 |
+| `allow_estimated_count` | 布尔 | 原生计数不可用时是否返回本地估算 |
+| `log_level` | `debug` / `info` / `warn` / `error` | 默认 `info` |
+| `log_format` | `text` / `json` | 默认 `text`；接采集器时用 `json` |
+
+```json
+{"action":"settings.update","params":{"version":7,"settings":{"log_level":"debug","log_format":"json"}}}
+```
+
+`log_level=debug` 会额外输出管理接口的错误详情。**这些详情可能包含管理员刚提交的配置片段**（例如误填到 Base URL 里的 Key），排障结束后请调回 `info`。默认级别只记录 `request_id` 与 `action`。
+
+启动横幅、管理员令牌和 TLS 警告写终端标准输出，不经过 slog，因此不会进入日志采集链路。
+
 ## 配置导出与导入
 
 `config.export` 返回可直接保存为文件的业务配置快照：

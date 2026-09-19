@@ -144,6 +144,13 @@ def main():
             assert restored['settings']['app_name'] == 'Persisted smoke'
             assert len(restored['models']) == 3
             results.append('config export/import round trip')
+            version = rpc('config.get')['version']
+            rpc('settings.update', {'version': version, 'settings': {'log_level': 'debug', 'log_format': 'json'}})
+            assert rpc('config.get')['settings']['log_level'] == 'debug'
+            status, _, body = request('/api.json', {'action': 'settings.update', 'params': {'version': rpc('config.get')['version'], 'settings': {'log_level': 'verbose'}}}, {'Authorization': 'Bearer ' + token})
+            assert status == 400 and not json.loads(body)['ok']
+            rpc('settings.update', {'version': rpc('config.get')['version'], 'settings': {'log_level': 'info', 'log_format': 'text'}})
+            results.append('runtime log level switching')
             info = rpc('system.info')
             print(json.dumps({'passed': results, 'runtime': info}, ensure_ascii=False, indent=2))
         finally:

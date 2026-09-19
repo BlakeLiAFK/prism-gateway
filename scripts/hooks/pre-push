@@ -1,0 +1,6 @@
+#!/bin/sh
+# 推送前强制跑一遍质量门；替代 CI
+make check || {
+  echo "make check 未通过，已阻止 push" >&2
+  exit 1
+}

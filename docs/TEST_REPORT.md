@@ -1,4 +1,4 @@
-# 实测报告 · v1.1.0
+# 实测报告 · v1.2.0
 
 此报告描述交付时实际执行的验证，不代表所有供应商、操作系统或客户端已经验证。
 
@@ -101,6 +101,17 @@ python3 scripts/smoke.py --binary ./bin/prism-gateway
   导入文件无法伪造 `has_key`；SQLite 多语句 SQL 被拒绝且不产生副作用。
 
 这轮同时补上了 v1.0.0 报告中列为「尚未验证」的 macOS 实机编译与运行。
+
+## 4.2 v1.2.0 增量验证
+
+同一 macOS arm64 环境执行 `go build` / `go test` / `-race` / `go vet` / `smoke.py`，全部通过。
+
+- 冒烟检查 **11 组**（新增 `runtime log level switching`：后台改级别即刻生效、非法值被拒、可改回）。
+- 覆盖率：`cmd/gateway` **0% → 21.6%**、`internal/gateway` 66.5%、`internal/sqlite` 63.2%。
+- 新增 Go 测试：`checkListen` 八种地址组合、`checkTLS` 四种参数组合、进程锁冲突与释放后重取、
+  日志级别与格式运行时切换（含 JSON 行解析与非法值拒绝）、业务校验错误不写日志。
+- WebUI 实测（Playwright，同源 HTTP）：登录、设置页两个新下拉渲染与保存落库、
+  版本号由 `auth.status` 下发正确显示、0 console error、无横向溢出。
 
 ## 5. 尚未验证 / 不在交付承诺内
 

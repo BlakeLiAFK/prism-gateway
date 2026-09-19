@@ -214,6 +214,7 @@ func (s *Store) load() error {
 		return e
 	}
 	s.snapshot.Store(&c)
+	applyLogSettings(c.Settings)
 	return nil
 }
 func (s *Store) Config() Config { return *s.snapshot.Load() }
@@ -290,6 +291,7 @@ func (s *Store) Change(version int64, action, target string, fn func(*Config) er
 		return s.Config(), e
 	}
 	s.snapshot.Store(&c)
+	applyLogSettings(c.Settings)
 	return c, nil
 }
 func (s *Store) AdminToken(reset bool) (string, error) {

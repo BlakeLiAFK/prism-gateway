@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net/http"
 	"sort"
@@ -355,7 +356,7 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 		}
 	}
 	if err := e.store.DB.Exec(`UPDATE requests SET status=?,http_status=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_tokens=?,write_tokens=?,cost_nano=?,cost_known=?,usage_mode=?,error_code=? WHERE id=?`, state, status, now()-start, u.Input, u.Output, u.Cache, u.Write, value, known, mode, code, id); err != nil {
-		fmt.Printf("request accounting write failed: %s\n", id)
+		slog.Error("request accounting write failed", "request_id", id, "model", s.Model.ID, "err", err)
 	}
 	if session != "" && state == "success" {
 		e.store.DB.Exec(`INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET model_id=excluded.model_id,provider_id=excluded.provider_id,updated_at=excluded.updated_at,requests=requests.requests+1`, session, keyID, s.Model.ID, s.Provider.ID, now())

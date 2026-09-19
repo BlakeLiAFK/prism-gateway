@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -806,4 +807,101 @@ func mustData(t *testing.T, h *harness, action string) Object {
 		t.Fatalf("%s 失败: %s", action, w.Body)
 	}
 	return obj(o["data"])
+}
+
+// syncBuffer 让测试安全地收集来自后台 goroutine 的日志。
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+func (b *syncBuffer) Reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf.Reset()
+}
+
+func TestLogLevelAndFormatAreRuntimeConfigurable(t *testing.T) {
+	buf := &syncBuffer{}
+	SetupLogging(buf)
+	t.Cleanup(func() { SetupLogging(os.Stderr) })
+	h := newHarness(t)
+
+	// 默认 info：debug 不落盘，管理错误详情不外泄
+	buf.Reset()
+	slog.Debug("hidden detail", "secret", "must-not-appear")
+	if strings.Contains(buf.String(), "must-not-appear") {
+		t.Fatal("默认级别不应输出 debug")
+	}
+
+	// 后台改设置即刻生效，不需要重启进程
+	w, o := h.rpc(t, "settings.update", Object{
+		"version":  h.s.Config().Version,
+		"settings": Object{"log_level": "debug", "log_format": "json"},
+	}, h.token)
+	if w.Code != 200 || o["ok"] != true {
+		t.Fatalf("设置日志级别失败: %s", w.Body)
+	}
+	buf.Reset()
+	slog.Debug("now visible", "request_id", "rpc_test")
+	out := strings.TrimSpace(buf.String())
+	if out == "" {
+		t.Fatal("切到 debug 后仍未输出")
+	}
+	var line Object
+	if err := json.Unmarshal([]byte(out), &line); err != nil {
+		t.Fatalf("log_format=json 必须输出合法 JSON 行: %q", out)
+	}
+	if line["msg"] != "now visible" || line["request_id"] != "rpc_test" {
+		t.Fatalf("结构化字段缺失: %v", line)
+	}
+
+	// 调回 info 同样立即生效
+	_, o = h.rpc(t, "settings.update", Object{
+		"version":  h.s.Config().Version,
+		"settings": Object{"log_level": "info", "log_format": "text"},
+	}, h.token)
+	if o["ok"] != true {
+		t.Fatalf("恢复设置失败: %v", o)
+	}
+	buf.Reset()
+	slog.Debug("hidden again", "secret", "must-not-appear")
+	if strings.Contains(buf.String(), "must-not-appear") {
+		t.Fatal("调回 info 后 debug 应重新关闭")
+	}
+
+	// 非法值被拒绝，不会把 handler 置于未知状态
+	_, o = h.rpc(t, "settings.update", Object{
+		"version":  h.s.Config().Version,
+		"settings": Object{"log_level": "verbose"},
+	}, h.token)
+	if o["ok"] != false {
+		t.Fatalf("非法日志级别应被拒绝: %v", o)
+	}
+}
+
+func TestManagementErrorDetailStaysOutOfDefaultLog(t *testing.T) {
+	buf := &syncBuffer{}
+	SetupLogging(buf)
+	t.Cleanup(func() { SetupLogging(os.Stderr) })
+	h := newHarness(t)
+	// APIError 是预期内的业务错误，连 Error 行都不该产生
+	buf.Reset()
+	w, _ := h.rpc(t, "model.save", Object{"version": h.s.Config().Version, "model": Object{"id": "no-such-provider", "provider_id": "missing"}}, h.token)
+	if w.Code < 400 {
+		t.Fatal("前置条件失败：该请求应当出错")
+	}
+	if strings.Contains(buf.String(), "management call") {
+		t.Fatalf("业务校验错误不应写入日志: %s", buf.String())
+	}
 }

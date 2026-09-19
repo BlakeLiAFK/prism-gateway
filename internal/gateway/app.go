@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net"
 	"net/http"
@@ -238,7 +239,10 @@ func (a *App) management(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var ae *APIError
 		if !errors.As(err, &ae) {
-			fmt.Printf("management error [%s]: %v\n", id, err)
+			// 错误内容可能包含管理员刚提交的配置片段，默认只记可定位的元数据；
+			// 详情降到 DEBUG，需要排障时在后台把日志级别切到 debug
+			slog.Error("management call failed", "request_id", id, "action", req.Action)
+			slog.Debug("management call detail", "request_id", id, "action", req.Action, "err", err)
 		}
 	}
 	send(data, err)

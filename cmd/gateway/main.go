@@ -2,9 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +18,33 @@ import (
 	"time"
 )
 
+// checkListen 判定监听地址是否为回环，并拦截未显式授权的对外监听。
+func checkListen(listen string, allowRemote bool) (bool, error) {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return false, err
+	}
+	ip := net.ParseIP(host)
+	local := host == "localhost" || (ip != nil && ip.IsLoopback())
+	if !local && !allowRemote {
+		return false, errors.New("非 loopback 监听需要显式 --allow-remote；请启用 TLS 或置于可信 HTTPS 反向代理后")
+	}
+	return local, nil
+}
+
+// checkTLS 要求证书与私钥成对出现，避免只配一半就以明文启动。
+func checkTLS(cert, key string) error {
+	if (cert == "") != (key == "") {
+		return errors.New("--tls-cert 与 --tls-key 必须一起提供")
+	}
+	return nil
+}
+
+func fatal(v any) {
+	slog.Error("startup failed", "err", v)
+	os.Exit(1)
+}
+
 func main() {
 	db := flag.String("db", "./data/gateway.db", "SQLite 数据库路径；同目录 .key 为凭证加密主密钥")
 	listen := flag.String("listen", "127.0.0.1:8080", "监听地址")
@@ -27,45 +55,41 @@ func main() {
 	cert := flag.String("tls-cert", "", "TLS 证书文件（可选）")
 	tlsKey := flag.String("tls-key", "", "TLS 私钥文件（可选）")
 	flag.Parse()
+	gateway.SetupLogging(os.Stderr)
 	if *version {
 		fmt.Println("Prism Gateway " + gateway.Version)
 		return
 	}
-	host, _, err := net.SplitHostPort(*listen)
+	local, err := checkListen(*listen, *allowRemote)
 	if err != nil {
-		log.Fatal(err)
+		fatal(err)
 	}
-	ip := net.ParseIP(host)
-	local := host == "localhost" || (ip != nil && ip.IsLoopback())
-	if !local && !*allowRemote {
-		log.Fatal("非 loopback 监听需要显式 --allow-remote；请启用 TLS 或置于可信 HTTPS 反向代理后")
-	}
-	if (*cert == "") != (*tlsKey == "") {
-		log.Fatal("--tls-cert 与 --tls-key 必须一起提供")
+	if err = checkTLS(*cert, *tlsKey); err != nil {
+		fatal(err)
 	}
 	if err = os.MkdirAll(filepath.Dir(*db), 0700); err != nil {
-		log.Fatal(err)
+		fatal(err)
 	}
 	unlock, err := lockDatabase(*db + ".lock")
 	if err != nil {
-		log.Fatal(err)
+		fatal(err)
 	}
 	defer unlock()
 	s, err := gateway.OpenStore(*db)
 	if err != nil {
-		log.Fatal(err)
+		fatal(err)
 	}
 	defer s.DB.Close()
 	token, err := s.AdminToken(*reset)
 	if err != nil {
-		log.Fatal(err)
+		fatal(err)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	app := gateway.NewApp(ctx, s, webui.Handler())
 	if *demo {
 		if _, err = app.EnableDemo(s.Config().Version); err != nil {
-			log.Fatal(err)
+			fatal(err)
 		}
 	}
 	server := &http.Server{Addr: *listen, Handler: app, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
@@ -98,7 +122,7 @@ func main() {
 	case <-ctx.Done():
 	case err := <-done:
 		if err != http.ErrServerClosed {
-			log.Printf("server: %v", err)
+			slog.Error("server stopped", "err", err)
 		}
 		cancel()
 	}
@@ -109,5 +133,5 @@ func main() {
 	}
 	cancel()
 	app.Wait()
-	log.Println("Prism 已安全停止")
+	slog.Info("Prism 已安全停止")
 }

@@ -13,4 +13,10 @@ This is a Go + SQLite + embedded WebUI gateway. Preserve these invariants:
 9. Do not add multi-account limit evasion, public subscription resale or background quota-burning jobs.
 10. Test real handlers with httptest. Run go test ./..., go test -race ./..., go vet ./... before delivery. Keep the README honest about CGo/SQLite build prerequisites and untested cloud integrations.
 
+11. Runtime configuration belongs in SQLite and must be adjustable from the admin UI while the
+    process runs. Do not add command-line flags for anything a running gateway should be able to
+    change; flags cover the database path, the listening address and bootstrap-only operations.
+12. Startup banner output is terminal UI, not log stream. Never route the admin token through slog.
+    Management error details may echo submitted configuration, so keep them at DEBUG level.
+
 No third-party Go modules are currently required. Target Go >=1.23. Native Windows is not supported; use WSL2. Tests must not require real provider API keys or the Internet.

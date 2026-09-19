@@ -136,7 +136,7 @@ curl --fail-with-body -N http://127.0.0.1:8080/anthropic/v1/messages \
 | 三协议 | 原生转发；常用文本、图片引用、函数工具调用及结果的显式跨协议转换；SSE 转发和转换 |
 | 路由 | 显式模型、路由与别名；优先级 / 本地预算压力均衡；会话亲和；安全的 429/503 备用切换 |
 | 速率与预算 | 全局/模型并发、模型 RPM、冷却；滚动 5h/7d/30d 本地预算；在途预留与未知用量保留 |
-| 运维 | 免鉴权 `GET /healthz` 探活（含数据库检查）；`config.export` / `config.import` 无凭证配置快照迁移 |
+| 运维 | 免鉴权 `GET /healthz` 探活（含数据库检查）；`config.export` / `config.import` 无凭证配置快照迁移；slog 结构化日志，级别与格式在后台随时切换 |
 | 观测 | 元数据日志、协议模式、实际供应商/模型、用量、缓存 token、费用估算、后台同步任务与操作审计 |
 | 本地 Sandbox | 三协议普通响应和 SSE，可离线验证链路，始终标注为演示 |
 
@@ -189,6 +189,7 @@ make test                     # 自动化测试
 make race                     # Go 竞态检测
 make vet                      # Go 静态检查
 make demo                     # 构建后启动演示
+make hooks                    # 安装 pre-push 质量门（推送前自动跑 make check）
 python3 scripts/smoke.py --binary ./bin/prism-gateway  # 实际进程冒烟；先 make build
 ./prism-gateway --help
 ./prism-gateway --db ./data/work.db --listen 127.0.0.1:9090
@@ -196,6 +197,8 @@ curl -sf http://127.0.0.1:8080/healthz   # 免鉴权存活探测；数据库异�
 ```
 
 前端直接修改 `internal/webui/dist/assets/` 内源码，再重新 `go build` 即可。这里保存的是可读的 ES Module / CSS 源码，没有缺失的前端构建步骤。网页不从 CDN 加载运行库或字体。
+
+日志级别与格式在“系统设置”里改，保存即生效，不需要重启。默认 `info` + `text`；接日志采集器时切 `json`。临时排障可切 `debug`，它会额外记录管理接口的错误详情——**这些详情可能包含刚提交的配置片段，排障结束请调回 `info`**。启动横幅和管理员令牌只写终端，不进日志流。
 
 外网访问需显式 `--allow-remote`，并配置 TLS 或可信 HTTPS 反向代理；不要直接裸露 HTTP。详见 [安全与部署](docs/SECURITY.md)。Dockerfile 是额外交付方式，构建镜像需要网络拉取基础镜像和系统开发包；不影响本机离线 Go 构建。
 
@@ -209,4 +212,4 @@ curl -sf http://127.0.0.1:8080/healthz   # 免鉴权存活探测；数据库异�
 - [实测记录与未验证范围](docs/TEST_REPORT.md)
 - [维护者约束](AGENTS.md)
 
-版本 1.1.0 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。
+版本 1.2.0 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。
