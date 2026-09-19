@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.7.2"
+const Version = "1.8.0"
 
 type Object = map[string]any
 
@@ -282,3 +282,99 @@ type APIError struct {
 
 func (e *APIError) Error() string             { return e.Message }
 func fail(code, msg string, status int) error { return &APIError{code, msg, status} }
+
+// nameTaken 报告某个对外 ID 是否已被模型、路由或别名占用——它们共用命名空间。
+func (c Config) nameTaken(id string) bool {
+	for _, m := range c.Models {
+		if m.ID == id {
+			return true
+		}
+	}
+	for _, r := range c.Routes {
+		if r.ID == id {
+			return true
+		}
+	}
+	for _, a := range c.Aliases {
+		if a.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// newSyncedModel 把上游 /models 里已经声明的能力抄下来。
+// 抄的是事实（上下文、输出上限、工具、图像、单价），不做推断；
+// pricing_set 一律保持 false：价格要由人对着自己的账户确认过才算数，
+// 否则费用统计会拿着一个没人看过的数字装作确定。
+func newSyncedModel(id, providerID, upstream, name, protocol string, src Object) Model {
+	m := Model{
+		ID: id, ProviderID: providerID, Upstream: upstream, Name: name,
+		Protocol: protocol, Enabled: false, Concurrency: 2,
+		Context: int(num(src, "context_length")),
+	}
+	if m.Context < 1 {
+		m.Context = 128000
+	}
+	top := obj(src["top_provider"])
+	m.MaxOutput = int(num(top, "max_completion_tokens"))
+	if m.MaxOutput < 1 {
+		// 上游没声明就按上下文估一个够用的值。
+		// 原来固定 4096，同步来的模型连 Claude Code 的 64000 都满足不了。
+		m.MaxOutput = min(m.Context, 32768)
+	}
+	m.MaxOutput = clamp(m.MaxOutput, 1, 1000000)
+	m.Context = clamp(m.Context, 1, 10000000)
+
+	for _, v := range arr(src["supported_parameters"]) {
+		if s, _ := v.(string); s == "tools" {
+			m.Tools = true
+		}
+	}
+	for _, v := range arr(obj(src["architecture"])["input_modalities"]) {
+		if s, _ := v.(string); s == "image" {
+			m.Vision = true
+		}
+	}
+	// 单价按「每百万 token 美元」存储，上游给的是每 token
+	pricing := obj(src["pricing"])
+	m.InputPrice = clampPrice(price(pricing, "prompt"))
+	m.OutputPrice = clampPrice(price(pricing, "completion"))
+	m.CachePrice = clampPrice(price(pricing, "input_cache_read"))
+	m.WritePrice = clampPrice(price(pricing, "input_cache_write"))
+	return m
+}
+
+func price(o Object, key string) float64 {
+	switch v := o[key].(type) {
+	case float64:
+		return roundPrice(v * 1e6)
+	case string:
+		var f float64
+		if _, err := fmt.Sscanf(v, "%g", &f); err == nil {
+			return roundPrice(f * 1e6)
+		}
+	}
+	return 0
+}
+
+// roundPrice 收敛浮点误差：每 token 单价乘以一百万后会得到
+// 0.44999999999999996 这种值，直接存起来会一路显示到界面上。
+// 保留六位小数，足以表达 $0.000001/M 的精度。
+func roundPrice(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return math.Round(v*1e6) / 1e6
+}
+
+// clampPrice 把异常单价压回合法区间，避免一条畸形记录让整次同步因校验失败而回滚。
+func clampPrice(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+		return 0
+	}
+	if v > 1000000 {
+		return 1000000
+	}
+	return v
+}

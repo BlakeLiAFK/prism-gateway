@@ -116,6 +116,32 @@ def run_ui_checks(page, base, token, results):
     page.wait_for_timeout(200)
     results.append('model editor capability toggles')
 
+    # 路由编辑器的候选搜索：模型多起来之后这是唯一能用的定位方式
+    page.click('.nav-item[data-nav="routes"]')
+    page.wait_for_timeout(250)
+    page.evaluate("document.querySelector('[data-action=\"add-route\"]')?.click()")
+    page.wait_for_timeout(400)
+    if page.locator('#candidate-search').count() == 0:
+        fail('路由编辑器缺少候选搜索框')
+    total = page.locator('.candidate-row').count()
+    if total == 0:
+        fail('候选列表为空，无法验证搜索')
+    # 先勾上第一个，确认它在搜索无匹配时依然可见
+    page.locator('.candidate-row input[name="candidate"]').first.check()
+    page.fill('#candidate-search', 'zzz-no-such-model-zzz')
+    page.wait_for_timeout(250)
+    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>!r.hidden).length")
+    if visible != 1:
+        fail(f'搜索无匹配时应只剩已勾选的 1 行，实得 {visible}')
+    page.fill('#candidate-search', '')
+    page.wait_for_timeout(250)
+    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>!r.hidden).length")
+    if visible != total:
+        fail(f'清空搜索应恢复全部 {total} 行，实得 {visible}')
+    page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
+    page.wait_for_timeout(200)
+    results.append('route candidate search')
+
     # 设置页往返：确认表单取值与提交链路完整
     page.click('.nav-item[data-nav="settings"]')
     page.wait_for_timeout(300)

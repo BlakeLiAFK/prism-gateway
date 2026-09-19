@@ -814,15 +814,23 @@ func (a *App) syncModels(ctx context.Context, p Provider, version int64) (any, e
 			if p.Kind == "opencode" {
 				protocol = openCodeProtocol(up)
 			}
-			name := str(v, "display_name")
+			name := str(v, "name")
+			if name == "" {
+				name = str(v, "display_name")
+			}
 			if name == "" {
 				name = up
 			}
-			mid := p.ID + "/" + up
+			// 模型 ID 直接用上游原名，客户端传 model 时更直观；
+			// 与已有对象重名时才退回带 provider 前缀的形式
+			mid := up
+			if !validID(mid) || c.nameTaken(mid) {
+				mid = p.ID + "/" + up
+			}
 			if !validID(mid) {
 				mid = "model_" + digest(p.ID + up)[:20]
 			}
-			c.Models = append(c.Models, Model{ID: mid, ProviderID: p.ID, Upstream: up, Name: name, Protocol: protocol, Enabled: false, Tools: true, Context: 128000, MaxOutput: 4096, Concurrency: 2})
+			c.Models = append(c.Models, newSyncedModel(mid, p.ID, up, name, protocol, v))
 			added++
 		}
 		return nil

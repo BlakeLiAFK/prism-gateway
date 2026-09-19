@@ -2205,3 +2205,133 @@ func TestClaudeCodeShapedRequestIsAcceptedAndDisclosed(t *testing.T) {
 		t.Fatalf("错误应指出是哪个候选模型被排除: %s", msg)
 	}
 }
+
+// 同步过来的模型此前只有 id 和名字，其余全是硬编码：上下文 128000、
+// 输出上限 4096、工具 true。4096 意味着同步来的模型连 Claude Code 都跑不了，
+// 于是「同步」形同虚设，只能一个个手工补齐。
+func TestSyncCarriesUpstreamCapabilities(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[
+		  {"id":"vendor/big-model","name":"Vendor: Big Model","context_length":1048576,
+		   "architecture":{"input_modalities":["text","image"]},
+		   "pricing":{"prompt":"0.00000045","completion":"0.0000009","input_cache_read":"0.0000001"},
+		   "top_provider":{"max_completion_tokens":384000},
+		   "supported_parameters":["max_tokens","tools","temperature"]},
+		  {"id":"vendor/plain-model","name":"Vendor: Plain","context_length":8192,
+		   "architecture":{"input_modalities":["text"]},
+		   "pricing":{"prompt":"0","completion":"0"},
+		   "supported_parameters":["max_tokens"]}
+		]}`)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_sync", Name: "S", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+	})
+	_, o := h.rpc(t, "provider.sync_models", Object{"id": "p_sync"}, h.token)
+	jobID := str(obj(o["data"]), "job_id")
+	for i := 0; i < 200; i++ {
+		_, jo := h.rpc(t, "job.get", Object{"id": jobID}, h.token)
+		if st := str(obj(jo["data"]), "status"); st != "queued" && st != "running" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	byID := map[string]Model{}
+	for _, m := range h.s.Config().Models {
+		byID[m.ID] = m
+	}
+	big, ok := byID["vendor/big-model"]
+	if !ok {
+		t.Fatalf("模型 ID 应直接用上游原名: %v", byID)
+	}
+	if big.Name != "Vendor: Big Model" {
+		t.Fatalf("名称未同步: %q", big.Name)
+	}
+	if big.Context != 1048576 {
+		t.Fatalf("上下文未同步: %d", big.Context)
+	}
+	if big.MaxOutput != 384000 {
+		t.Fatalf("输出上限未同步: %d", big.MaxOutput)
+	}
+	if !big.Tools || !big.Vision {
+		t.Fatalf("能力未同步: tools=%v vision=%v", big.Tools, big.Vision)
+	}
+	// 单价按每百万 token 存，上游给的是每 token
+	if big.InputPrice != 0.45 || big.OutputPrice != 0.9 || big.CachePrice != 0.1 {
+		t.Fatalf("单价换算不对: %v/%v/%v", big.InputPrice, big.OutputPrice, big.CachePrice)
+	}
+	// 关键约束：价格抄来了，但没有人确认过，不能当作已知费用
+	if big.PricingSet {
+		t.Fatal("同步不得代替人确认计价")
+	}
+	if big.Enabled {
+		t.Fatal("同步的模型必须默认禁用")
+	}
+
+	plain := byID["vendor/plain-model"]
+	if plain.Tools || plain.Vision {
+		t.Fatalf("不支持的能力不应被标为支持: %+v", plain)
+	}
+	// 上游没声明输出上限时按上下文估，而不是退回 4096
+	if plain.MaxOutput != 8192 {
+		t.Fatalf("输出上限回退不对: %d", plain.MaxOutput)
+	}
+
+	// 同步来的模型应当可以直接启用并使用，不需要先手工补字段
+	cfg := h.s.Config()
+	for i := range cfg.Models {
+		if cfg.Models[i].ID == "vendor/big-model" {
+			m := cfg.Models[i]
+			m.Enabled = true
+			if _, err := h.s.Change(cfg.Version, "test", "t", func(c *Config) error {
+				for j := range c.Models {
+					if c.Models[j].ID == m.ID {
+						c.Models[j] = m
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatalf("同步来的模型应当能直接通过校验并启用: %v", err)
+			}
+		}
+	}
+}
+
+func TestSyncedIDFallsBackOnCollision(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[{"id":"shared-name","context_length":4096,"supported_parameters":[]}]}`)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_sync", Name: "S", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+		// 先占掉这个名字：模型、路由、别名共用命名空间
+		m := modelFixture("shared-name", "chat")
+		m.ProviderID = "p_sync"
+		c.Models = append(c.Models, m)
+	})
+	_, o := h.rpc(t, "provider.sync_models", Object{"id": "p_sync"}, h.token)
+	jobID := str(obj(o["data"]), "job_id")
+	for i := 0; i < 200; i++ {
+		_, jo := h.rpc(t, "job.get", Object{"id": jobID}, h.token)
+		if st := str(obj(jo["data"]), "status"); st != "queued" && st != "running" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	found := false
+	for _, m := range h.s.Config().Models {
+		if m.Upstream == "shared-name" && m.ID != "shared-name" {
+			found = true
+			if !strings.HasPrefix(m.ID, "p_sync/") {
+				t.Fatalf("重名时应退回带 provider 前缀的 ID: %s", m.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("重名的上游模型仍应被同步进来，只是换个 ID")
+	}
+}

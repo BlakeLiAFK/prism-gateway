@@ -157,6 +157,31 @@ export function modelEditor(id=''){
 
 }
 
+// 候选池可能有几百个模型，没有搜索就翻不动。
+// 已勾选的行任何时候都保持可见：搜索把自己已经选中的东西藏起来，
+// 会让人以为选择丢了。
+export function bindCandidateSearch(){
+  const box=$('#candidate-search');
+  if(!box)return;
+  const rows=$$('.candidate-row');
+  const count=$('#candidate-count');
+  const apply=()=>{
+    const q=box.value.trim().toLowerCase();
+    let shown=0;
+    rows.forEach(row=>{
+      const checked=$('input[name=candidate]',row)?.checked;
+      const hit=!q||row.dataset.search.includes(q);
+      row.hidden=!(hit||checked);
+      if(!row.hidden)shown++;
+    });
+    if(count)count.textContent=q?`匹配 ${shown} / ${rows.length} 个（已选中的始终显示）`:`共 ${rows.length} 个模型`;
+  };
+  box.addEventListener('input',apply);
+  // 勾选状态变化后要重算，否则取消勾选的行在搜索状态下不会隐藏
+  rows.forEach(row=>$('input[name=candidate]',row)?.addEventListener('change',apply));
+  apply();
+}
+
 export function routeEditor(id=''){
 
  if(!state.config.models.length){
@@ -173,7 +198,8 @@ export function routeEditor(id=''){
 
  const order=[...r.candidates.map(x=>getModel(x.model_id)).filter(Boolean),...state.config.models.filter(m=>!r.candidates.some(c=>c.model_id===m.id))];
 
- showDialog(old?'编辑路由':'创建智能路由','明确候选池；会话亲和优先，安全失败后才尝试备用。',`<div class="form-grid">${field('路由 ID','id',r.id,'text','客户端可直接将其作为 model。',`${old?'readonly':''} required placeholder="auto-coding"`)}${field('显示名称','name',r.name,'text','','required')}${selectField('选择策略','strategy',r.strategy,[['priority','优先级（按候选顺序）'],['balanced','本地预算压力均衡']])}</div>${field('路由描述','description',r.description)}${check('启用路由','enabled',r.enabled)}${check('启用会话亲和','affinity',r.affinity)}<div class="form-section"><h3>候选模型</h3><p class="small muted" style="margin:8px 0 14px">选中加入路由，权重参与均衡评分。保存后可在路由画布拖动排序。</p>${order.map(m=>{const c=r.candidates.find(x=>x.model_id===m.id);return `<div class="setting-row" style="gap:10px"><label class="checkline" style="flex:1"><input name="candidate" type="checkbox" value="${E(m.id)}" ${c?'checked':''}><span>${E(m.name||m.id)}<small>${E(m.protocol)} · ${E(getProvider(m.provider_id)?.name)}${m.enabled?'':' · 未启用'}</small></span></label><input class="weight-field" type="number" min="1" max="1000" value="${c?.weight||10}" data-weight="${E(m.id)}" style="width:80px" aria-label="候选权重"></div>`}).join('')}</div>`,async f=>{const candidates=$$('input[name=candidate]:checked',f).map(el=>({model_id:el.value,weight:Number($$('[data-weight]',f).find(x=>x.dataset.weight===el.value).value)}));await save('route.save',{id,route:{id:val(f,'id').trim(),name:val(f,'name').trim(),strategy:val(f,'strategy'),description:val(f,'description'),enabled:checked(f,'enabled'),affinity:checked(f,'affinity'),candidates}},f);});
+ showDialog(old?'编辑路由':'创建智能路由','明确候选池；会话亲和优先，安全失败后才尝试备用。',`<div class="form-grid">${field('路由 ID','id',r.id,'text','客户端可直接将其作为 model。',`${old?'readonly':''} required placeholder="auto-coding"`)}${field('显示名称','name',r.name,'text','','required')}${selectField('选择策略','strategy',r.strategy,[['priority','优先级（按候选顺序）'],['balanced','本地预算压力均衡']])}</div>${field('路由描述','description',r.description)}${check('启用路由','enabled',r.enabled)}${check('启用会话亲和','affinity',r.affinity)}<div class="form-section"><h3>候选模型</h3><p class="small muted" style="margin:8px 0 14px">选中加入路由，权重参与均衡评分。保存后可在路由画布拖动排序。</p><div class="search-field" style="margin-bottom:12px">${icon('search')}<input id="candidate-search" placeholder="搜索模型、ID、协议或供应商" autocomplete="off" aria-label="搜索候选模型"></div><p class="tiny muted" id="candidate-count"></p>${order.map(m=>{const c=r.candidates.find(x=>x.model_id===m.id);const hay=[m.id,m.name,m.upstream,m.protocol,getProvider(m.provider_id)?.name].filter(Boolean).join(' ').toLowerCase();return `<div class="setting-row candidate-row" style="gap:10px" data-search="${E(hay)}"><label class="checkline" style="flex:1"><input name="candidate" type="checkbox" value="${E(m.id)}" ${c?'checked':''}><span>${E(m.name||m.id)}<small>${E(m.protocol)} · ${E(getProvider(m.provider_id)?.name)}${m.enabled?'':' · 未启用'}</small></span></label><input class="weight-field" type="number" min="1" max="1000" value="${c?.weight||10}" data-weight="${E(m.id)}" style="width:80px" aria-label="候选权重"></div>`}).join('')}</div>`,async f=>{const candidates=$$('input[name=candidate]:checked',f).map(el=>({model_id:el.value,weight:Number($$('[data-weight]',f).find(x=>x.dataset.weight===el.value).value)}));await save('route.save',{id,route:{id:val(f,'id').trim(),name:val(f,'name').trim(),strategy:val(f,'strategy'),description:val(f,'description'),enabled:checked(f,'enabled'),affinity:checked(f,'affinity'),candidates}},f);});
+  bindCandidateSearch();
 
 }
 
