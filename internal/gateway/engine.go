@@ -143,6 +143,8 @@ type selection struct {
 	Score    float64
 	Reason   string
 	Cross    bool
+	// Ignored 是被接受但没有传给上游的请求字段，会在 X-Prism-Ignored 里告知调用方
+	Ignored []string
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
@@ -197,11 +199,24 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		var body Object
 		json.Unmarshal([]byte(raw(o)), &body)
 		cross := p != m.Protocol
+		ignored := []string{}
 		if why == "" && cross {
-			ir, err := decodeCanonical(o, p)
+			src := o
+			// 已经接受丢弃推理内容的模型，请求侧的思考开关也就没有意义了：
+			// 去掉它而不是让整个请求失败。丢弃同样会被告知调用方。
+			if m.DropReasoning && o["thinking"] != nil {
+				src = Object{}
+				for k, v := range o {
+					src[k] = v
+				}
+				delete(src, "thinking")
+				ignored = append(ignored, "thinking")
+			}
+			ir, err := decodeCanonical(src, p)
 			if err != nil {
 				why = err.Error()
 			} else {
+				ignored = append(ignored, ir.Ignored...)
 				body, err = encodeCanonical(ir, m.Protocol, m.Upstream)
 				if err != nil {
 					why = err.Error()
@@ -249,7 +264,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			if !cross {
 				score += 2
 			}
-			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f", route.Strategy, !cross, pinned == m.ID, pressure), cross})
+			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f", route.Strategy, !cross, pinned == m.ID, pressure), cross, ignored})
 		}
 		reasons = append(reasons, Object{"model_id": m.ID, "eligible": why == "", "reason": why, "native": !cross})
 	}
@@ -452,14 +467,28 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 	session := "ses_" + digest(key.ID + ":" + rawSession)[:32]
 	w.Header().Set("X-Prism-Session", rawSession)
 	w.Header().Set("X-Prism-Config-Version", fmt.Sprint(c.Version))
-	selections, _, err := e.selections(c, o, p, session)
+	selections, whys, err := e.selections(c, o, p, session)
 	if err != nil {
 		status, code, msg := errorParts(err)
 		protocolError(w, p, status, code, msg, id)
 		return
 	}
 	if len(selections) == 0 {
-		protocolError(w, p, 400, "NO_COMPATIBLE_MODEL", "没有兼容此请求的候选模型；检查协议、工具、图像与高级字段。可在路由模拟器查看原因。", id)
+		// 每个候选为什么被排除是算出来了的，不告诉调用方等于让人去猜
+		detail := ""
+		for _, v := range whys {
+			e := obj(v)
+			if r := str(e, "reason"); r != "" {
+				if detail != "" {
+					detail += "；"
+				}
+				detail += str(e, "model_id") + ": " + r
+			}
+		}
+		if detail == "" {
+			detail = "候选池为空或全部被禁用"
+		}
+		protocolError(w, p, 400, "NO_COMPATIBLE_MODEL", "没有兼容此请求的候选模型（"+detail+"）", id)
 		return
 	}
 	// Requests with server-managed state or built-in tools must never be replayed.
@@ -491,6 +520,10 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				mode = "converted"
 			}
 			w.Header().Set("X-Prism-Protocol-Mode", mode)
+			if len(s.Ignored) > 0 {
+				// 这些请求字段被接受但没有传给上游。忽略可以，不说不行。
+				w.Header().Set("X-Prism-Ignored", strings.Join(s.Ignored, ","))
+			}
 			if s.Provider.Kind == "mock" {
 				w.Header().Set("X-Prism-Demo", "true")
 				co := demoCompletion(o, p)

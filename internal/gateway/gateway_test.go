@@ -2124,3 +2124,84 @@ func TestDropReasoningAnnouncedOnConvertedStream(t *testing.T) {
 		t.Fatalf("未开启时应以错误帧结束: %s", w.Body.String())
 	}
 }
+
+// Claude Code 真实发出的请求里带着 metadata、context_management、output_config、
+// thinking 这些字段。前三个不影响生成语义，第四个影响。
+// 整个请求因此被拒绝，而错误只说「没有兼容此请求的候选模型」，
+// 连是哪个字段都不讲——这是这条测试要挡住的两件事。
+func TestClaudeCodeShapedRequestIsAcceptedAndDisclosed(t *testing.T) {
+	body := func() Object {
+		return Object{
+			"model": "m_cc", "max_tokens": 256,
+			"system": []any{Object{"type": "text", "text": "You are helpful",
+				"cache_control": Object{"type": "ephemeral"}}},
+			"messages":           []any{Object{"role": "user", "content": "hi"}},
+			"metadata":           Object{"user_id": "device-abc"},
+			"context_management": Object{"edits": []any{Object{"type": "clear_thinking_20251015"}}},
+			"output_config":      Object{"effort": "high"},
+			"thinking":           Object{"type": "adaptive"},
+		}
+	}
+	setup := func(t *testing.T, drop bool) *harness {
+		t.Helper()
+		h := newHarness(t)
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			payload, _ := io.ReadAll(r.Body)
+			var got Object
+			json.Unmarshal(payload, &got)
+			// 被忽略的字段绝不能泄漏到上游请求里
+			for _, k := range []string{"metadata", "context_management", "output_config", "thinking"} {
+				if got[k] != nil {
+					t.Errorf("字段 %s 不应转发给上游", k)
+				}
+			}
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"id":"x","choices":[{"index":0,"finish_reason":"stop",
+			 "message":{"role":"assistant","content":"OK"}}],"usage":{"prompt_tokens":3,"completion_tokens":2}}`)
+		}))
+		t.Cleanup(upstream.Close)
+		h.change(t, func(c *Config) {
+			c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+				BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+			m := modelFixture("m_cc", "chat")
+			m.DropReasoning = drop
+			c.Models = append(c.Models, m)
+		})
+		return h
+	}
+	call := func(h *harness) *httptest.ResponseRecorder {
+		key := h.createKey(t)
+		r := httptest.NewRequest("POST", "http://localhost/anthropic/v1/messages", strings.NewReader(raw(body())))
+		r.Header.Set("x-api-key", key)
+		r.Header.Set("anthropic-version", "2023-06-01")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.a.ServeHTTP(w, r)
+		return w
+	}
+
+	// 开启 drop_reasoning：请求应当被接受，且必须列清楚忽略了什么
+	w := call(setup(t, true))
+	if w.Code != 200 {
+		t.Fatalf("Claude Code 形状的请求应当可用: %d %s", w.Code, w.Body)
+	}
+	ignored := w.Header().Get("X-Prism-Ignored")
+	for _, want := range []string{"thinking", "metadata", "context_management", "output_config"} {
+		if !strings.Contains(ignored, want) {
+			t.Fatalf("X-Prism-Ignored 应包含 %s，实得 %q", want, ignored)
+		}
+	}
+
+	// 未开启时 thinking 会改变行为，必须拒绝；而且要说清楚是哪个字段
+	w = call(setup(t, false))
+	if w.Code == 200 {
+		t.Fatal("未开启 drop_reasoning 时 thinking 不应被悄悄忽略")
+	}
+	msg := w.Body.String()
+	if !strings.Contains(msg, "thinking") {
+		t.Fatalf("错误必须点名是哪个字段导致不兼容: %s", msg)
+	}
+	if !strings.Contains(msg, "m_cc") {
+		t.Fatalf("错误应指出是哪个候选模型被排除: %s", msg)
+	}
+}
