@@ -44,6 +44,20 @@ func writeAdminToken(dbPath, token string) (string, error) {
 	return path, nil
 }
 
+// announceAdminToken 把新令牌交给运维：终端直接显示，
+// 输出被收集时落到 0600 文件，避免明文进入 journald 或容器日志。
+func announceAdminToken(dbPath, token string) {
+	if stdoutIsTerminal() {
+		fmt.Printf("\n  首次/新管理员令牌（只显示一次，请妥善保存）：\n\n  %s\n\n", token)
+		return
+	}
+	path, err := writeAdminToken(dbPath, token)
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("\n  管理员令牌已写入 %s\n  仅属主可读，与数据库和主密钥同等保护；它不会出现在日志里。\n\n", path)
+}
+
 func fatal(v any) {
 	slog.Error("startup failed", "err", v)
 	os.Exit(1)
@@ -102,6 +116,14 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	if *reset {
+		// 一次性维护操作：轮换完就退出。
+		// 若继续进入服务循环，「停服务 → 轮换 → 启动」会卡在中间那一步，
+		// 留下不受 systemd 管理、且占着数据库锁的游离进程。
+		announceAdminToken(*db, token)
+		fmt.Println("  管理令牌已轮换，全部管理会话已注销。现在可以启动服务。")
+		return
+	}
 	// 监听地址来自数据库；--listen 只是本次启动的临时覆盖，不写回配置
 	addr := s.Config().Settings.Listen
 	if addr == "" {
@@ -126,16 +148,7 @@ func main() {
 	}
 	fmt.Printf("\n  PRISM GATEWAY  v%s\n  %s://%s\n  管理入口: POST /api.json\n  数据库: %s\n", gateway.Version, scheme, addr, *db)
 	if token != "" {
-		if stdoutIsTerminal() {
-			fmt.Printf("\n  首次/新管理员令牌（只显示一次，请妥善保存）：\n\n  %s\n\n", token)
-		} else {
-			// 输出正在被收集（systemd / 容器日志），令牌改为落盘
-			path, err := writeAdminToken(*db, token)
-			if err != nil {
-				fatal(err)
-			}
-			fmt.Printf("\n  管理员令牌已写入 %s（仅属主可读）\n  读取后请删除该文件；它不会出现在日志里。\n\n", path)
-		}
+		announceAdminToken(*db, token)
 	} else {
 		fmt.Println("  使用已保存的管理员令牌登录；遗失时停止服务再运行 --reset-admin")
 	}

@@ -6,9 +6,11 @@ import (
 	"flag"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCheckTLS(t *testing.T) {
@@ -88,5 +90,56 @@ func TestWriteAdminTokenIsOwnerOnly(t *testing.T) {
 	}
 	if strings.TrimSpace(string(data)) != token {
 		t.Fatalf("内容不符: %q", string(data))
+	}
+}
+
+// --reset-admin 曾经在轮换之后继续进入服务循环，于是
+// 「停服务 → 轮换 → 启动」这套标准操作会卡在中间那一步：
+// 轮换命令不退出，systemctl start 永远等不到执行，
+// 留下一个不受管理、还占着数据库锁的游离进程。
+func TestResetAdminExitsInsteadOfServing(t *testing.T) {
+	dir := t.TempDir()
+	db := filepath.Join(dir, "gateway.db")
+	bin := filepath.Join(dir, "prism-gateway")
+	build := exec.Command("go", "build", "-o", bin, "prism-gateway/cmd/gateway")
+	build.Env = append(os.Environ(), "CGO_ENABLED=1")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Skipf("构建失败，跳过: %v %s", err, out)
+	}
+
+	// 先建库，拿到初始令牌
+	first := exec.Command(bin, "--db", db, "--reset-admin")
+	out, err := first.CombinedOutput()
+	if err != nil {
+		t.Fatalf("首次轮换应当正常退出: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "管理员令牌已写入") {
+		t.Fatalf("应当告知令牌去向: %s", out)
+	}
+	tokenPath := db + ".admin-token"
+	before, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 再轮换一次：必须换出新令牌，并且同样自行退出
+	done := make(chan error, 1)
+	second := exec.Command(bin, "--db", db, "--reset-admin")
+	go func() { _, e := second.CombinedOutput(); done <- e }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("二次轮换应当正常退出: %v", err)
+		}
+	case <-time.After(20 * time.Second):
+		second.Process.Kill()
+		t.Fatal("--reset-admin 没有退出，说明它又进了服务循环")
+	}
+	after, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) == string(after) {
+		t.Fatal("轮换后令牌应当变化")
 	}
 }

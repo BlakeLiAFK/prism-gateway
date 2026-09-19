@@ -177,7 +177,7 @@ curl -s http://127.0.0.1:8080/api.json \
   -d '{"action":"config.export","params":{}}' > prism-config.json
 ```
 
-丢失管理员令牌：停止旧进程后运行 `./prism-gateway --reset-admin`。它轮换管理令牌、注销管理会话，不删除配置或上游凭证。
+丢失管理员令牌：停止旧进程后运行 `./prism-gateway --reset-admin`。它轮换管理令牌、注销管理会话，不删除配置或上游凭证，**轮换完即退出**，需要自己再把服务启动起来。终端里直接显示新令牌；输出被 systemd 或容器收集时改为写入 `<数据库路径>.admin-token`（0600），避免明文进入日志。
 
 ## 7. 常用命令
 

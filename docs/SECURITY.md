@@ -64,12 +64,24 @@
 
 - **终端运行**：令牌直接显示在横幅里。
 - **systemd / 容器等 stdout 被收集的场合**：令牌写入 `<数据库路径>.admin-token`
-  （0600，仅属主可读），stdout 只给路径。读取后请删除该文件。
+  （0600，仅属主可读），stdout 只给路径。该文件与数据库、主密钥同等保护，
+也是日后查询令牌的唯一入口。
 
 这样区分是因为 systemd 会把 stdout 收进 journald：如果直接打印，
 任何能读 journal 的人都能拿到等同于完整管理权限的令牌。
 
-令牌在数据库里只有 SHA-256，无法反推。遗失时停止服务并用 `--reset-admin` 轮换。
+令牌在数据库里只有 SHA-256，无法反推。遗失时：
+
+```bash
+systemctl stop prism-gateway
+sudo -u prism /usr/local/bin/prism-gateway --db /var/lib/prism/gateway.db --reset-admin
+systemctl start prism-gateway
+cat /var/lib/prism/gateway.db.admin-token
+```
+
+`--reset-admin` 轮换完即退出，不会顺带把服务拉起来——所以上面三步缺一不可。
+轮换会注销全部管理会话，但不动配置与上游凭证。若有定时备份之类的自动化在用旧令牌
+（本项目的 `/etc/prism/backup.env`），记得一并更新。
 
 ## 反向代理部署
 
