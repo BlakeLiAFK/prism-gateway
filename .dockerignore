@@ -1,0 +1,6 @@
+.git
+bin
+data
+prism-gateway
+*.db*
+*.log

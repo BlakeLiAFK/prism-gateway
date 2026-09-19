@@ -1,0 +1,12 @@
+/bin/
+/data/
+/prism-gateway
+*.db
+*.db-wal
+*.db-shm
+*.db.key
+*.db.lock
+.DS_Store
+__pycache__/
+*.log
+/plans/
