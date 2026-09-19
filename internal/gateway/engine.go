@@ -193,13 +193,20 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		if len(arr(o["tools"])) > 0 && !m.Tools {
 			why = "tools_unsupported"
 		}
-		if containsImage(o) && !m.Vision {
+		// state 是调用方自定义的 JSON，可能恰好含 image_url 这类键；
+		// System One 只吃文本，不该被图像检测误伤。
+		if m.Protocol != "systemone" && containsImage(o) && !m.Vision {
 			why = "vision_unsupported"
 		}
 		var body Object
 		json.Unmarshal([]byte(raw(o)), &body)
 		cross := p != m.Protocol
 		ignored := []string{}
+		// System One 返回类型化决策，对话协议返回消息序列，两边没有共同语义。
+		// 允许转换只能靠编造文本或字符串化 JSON，都会静默改变调用方拿到的东西。
+		if why == "" && cross && (p == "systemone" || m.Protocol == "systemone") {
+			why = "System One 与对话协议之间没有等价语义，不能转换；请直接调用该协议的模型"
+		}
 		if why == "" && cross {
 			src := o
 			// 已经接受丢弃推理内容的模型，请求侧的思考开关也就没有意义了：
@@ -225,7 +232,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		} else {
 			body["model"] = m.Upstream
 		}
-		if why == "" {
+		if why == "" && m.Protocol != "systemone" {
 			field := "max_tokens"
 			if m.Protocol == "responses" {
 				field = "max_output_tokens"
@@ -392,12 +399,22 @@ func (e *Engine) cooldown(id, retry string) {
 	e.state(id).Cooldown = now() + int64(min(d, 24*time.Hour)/time.Millisecond)
 	e.mu.Unlock()
 }
+
+// retryable 是「上游暂时忙，换个候选重试是安全的」这一类状态码。
+// 529 是 TypeSafe 的过载码，语义与 503 相同。502 不在其中：
+// 它往往代表上游真的坏了或者返回了我们读不懂的东西，重放解决不了。
+func retryable(status int) bool {
+	return status == 429 || status == 503 || status == 529
+}
+
 func pathFor(p string) string {
 	switch p {
 	case "chat":
 		return "/chat/completions"
 	case "responses":
 		return "/responses"
+	case "systemone":
+		return "/systemone"
 	default:
 		return "/messages"
 	}
@@ -467,6 +484,12 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 	session := "ses_" + digest(key.ID + ":" + rawSession)[:32]
 	w.Header().Set("X-Prism-Session", rawSession)
 	w.Header().Set("X-Prism-Config-Version", fmt.Sprint(c.Version))
+	if p == "systemone" {
+		if er := validateSystemOne(o); er != nil {
+			protocolError(w, p, 400, "INVALID_REQUEST", er.Error(), id)
+			return
+		}
+	}
 	selections, whys, err := e.selections(c, o, p, session)
 	if err != nil {
 		status, code, msg := errorParts(err)
@@ -523,6 +546,14 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			if len(s.Ignored) > 0 {
 				// 这些请求字段被接受但没有传给上游。忽略可以，不说不行。
 				w.Header().Set("X-Prism-Ignored", strings.Join(s.Ignored, ","))
+			}
+			if s.Provider.Kind == "mock" && p == "systemone" {
+				w.Header().Set("X-Prism-Demo", "true")
+				res := demoSystemOne(o, s.Model.Upstream)
+				extractUsage(obj(res["usage"]), "systemone", &u)
+				w.Header().Set("Content-Type", "application/json")
+				runErr = json.NewEncoder(w).Encode(res)
+				return
 			}
 			if s.Provider.Kind == "mock" {
 				w.Header().Set("X-Prism-Demo", "true")
@@ -587,7 +618,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			if status < 200 || status >= 300 {
 				io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 				runErr = fmt.Errorf("upstream status %d", status)
-				if status == 429 || status == 503 {
+				if retryable(status) {
 					e.cooldown(s.Model.ID, res.Header.Get("Retry-After"))
 				}
 				return
@@ -678,7 +709,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		if boolean(o, "stream") && w.Header().Get("Content-Type") == "text/event-stream" {
 			return
 		}
-		if (status == 429 || status == 503) && safeFallback {
+		if retryable(status) && safeFallback {
 			lastErr = fail("UPSTREAM_RATE_LIMIT", "上游拒绝请求，已尝试可用候选", 429)
 			continue
 		}
@@ -798,6 +829,11 @@ func (e *Engine) Models(w http.ResponseWriter, r *http.Request, p string, key Pr
 	c := e.store.Config()
 	ids := []string{}
 	for _, m := range c.Models {
+		// System One 模型不是对话模型，列在这里只会让客户端拿去发对话请求，
+		// 然后收到一个本可以避免的 NO_COMPATIBLE_MODEL。
+		if m.Protocol == "systemone" {
+			continue
+		}
 		pr, _ := c.provider(m.ProviderID)
 		if m.Enabled && pr.Enabled && key.allows(m.ID) {
 			ids = append(ids, m.ID)

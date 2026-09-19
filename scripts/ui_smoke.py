@@ -143,6 +143,32 @@ def run_ui_checks(page, base, token, results):
     page.wait_for_timeout(200)
     results.append('route candidate search')
 
+    # 调试台的 System One 面板：载荷形状和对话协议完全不同，必须单独验证
+    page.click('.nav-item[data-nav="playground"]')
+    page.wait_for_timeout(300)
+    page.click('[data-action="play-protocol"][data-value="systemone"]')
+    page.wait_for_timeout(350)
+    if page.locator('#play-state').count() == 0:
+        fail('System One 面板缺少 state 输入')
+    if page.locator('#play-prompt').count() != 0:
+        fail('切到 System One 后不应再显示对话协议的 Prompt 框')
+    before = page.locator('.question-card').count()
+    page.click('[data-action="add-question"]')
+    page.wait_for_timeout(300)
+    if page.locator('.question-card').count() != before + 1:
+        fail('添加问题没有生效')
+    # noul 是是非题，没有选项可填，选项框应当消失
+    criteria_before = page.locator('[name="q-criteria"]').count()
+    page.locator('[name="q-type"]').last.select_option('noul')
+    page.wait_for_timeout(300)
+    if page.locator('[name="q-criteria"]').count() != criteria_before - 1:
+        fail('题型切到 noul 后选项框应当隐藏')
+    page.click('[data-action="remove-question"]')
+    page.wait_for_timeout(300)
+    if page.locator('.question-card').count() != before:
+        fail('删除问题没有生效')
+    results.append('systemone playground editor')
+
 
     # 设置页往返：确认表单取值与提交链路完整
     page.click('.nav-item[data-nav="settings"]')

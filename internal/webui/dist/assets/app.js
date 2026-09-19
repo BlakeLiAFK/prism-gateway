@@ -3,7 +3,7 @@ import {rpc,setCSRF} from './api.js';
 import {$,$$,E,json,ms,pages,state} from './core.js';
 import {icon} from './icons.js';
 import {avatar,badge,btn,checked,closeDialog,confirm,copy,empty,field,footer,getModel,nval,pillStatus,report,save,showDialog,tag,toast,val} from './ui.js';
-import {aliasEditor,connectionGuide,jobs,keyEditor,keys,modelEditor,models,moveCandidate,overview,playground,preservePlayground,providerEditor,providers,requests,routeEditor,routes,sessions,settings,usage} from './views.js';
+import {aliasEditor,buildQuestions,connectionGuide,defaultQuestions,jobs,keyEditor,keys,modelEditor,models,moveCandidate,overview,playground,preservePlayground,providerEditor,providers,requests,routeEditor,routes,sessions,settings,usage} from './views.js';
 
 export function login(){
 
@@ -125,6 +125,8 @@ export function bindPage(){
  $('#model-search')?.addEventListener('input',ev=>{const pos=ev.target.selectionStart;state.modelQ=ev.target.value;renderPage(false);const x=$('#model-search');x.focus();x.setSelectionRange(pos,pos);});
 
  $('#model-protocol')?.addEventListener('change',ev=>{state.modelProtocol=ev.target.value;renderPage(false);});
+ // 题型决定要不要显示选项框，换了就得重绘；先把正在编辑的内容读回去
+ $$('[name=q-type]').forEach(el=>el.addEventListener('change',()=>{preservePlayground();renderPage(false);}));
 
  $('#model-provider')?.addEventListener('change',ev=>{state.providerFilter=ev.target.value;renderPage(false);});
 
@@ -136,7 +138,10 @@ export function bindPage(){
 
  $('#settings-form')?.addEventListener('submit',async ev=>{ev.preventDefault();const f=ev.currentTarget,b=$('button[type=submit]',f);b.disabled=true;try{await save('settings.update',{settings:{app_name:val(f,'app_name'),default_route:val(f,'default_route'),retention_days:nval(f,'retention_days'),max_body_mb:nval(f,'max_body_mb'),global_concurrency:nval(f,'global_concurrency'),session_ttl_hours:nval(f,'session_ttl_hours'),allow_estimated_count:checked(f,'allow_estimated_count'),listen:val(f,'listen'),metrics_enabled:checked(f,'metrics_enabled'),log_level:val(f,'log_level'),log_format:val(f,'log_format')}},f);}catch(e){report(e);b.disabled=false;}});
 
- $('#playground-form')?.addEventListener('submit',async ev=>{ev.preventDefault();preservePlayground();state.playBusy=true;renderPage(false);try{state.playResult=await rpc('playground.run',{protocol:state.playProtocol,model:state.lastPlayModel,prompt:state.lastPrompt,session:state.playSession});}catch(e){report(e);}finally{state.playBusy=false;if(state.page==='playground')renderPage(false);}});
+ $('#playground-form')?.addEventListener('submit',async ev=>{ev.preventDefault();preservePlayground();state.playBusy=true;renderPage(false);try{const args={protocol:state.playProtocol,model:state.lastPlayModel,session:state.playSession};
+  if(state.playProtocol==='systemone'){args.state=state.playState;args.questions=buildQuestions(state.playQuestions||defaultQuestions());}
+  else args.prompt=state.lastPrompt;
+  state.playResult=await rpc('playground.run',args);}catch(e){report(e);}finally{state.playBusy=false;if(state.page==='playground')renderPage(false);}});
 
  let from=-1;
   $$('[data-drag-index]').forEach(el=>{el.addEventListener('dragstart',ev=>{from=Number(el.dataset.dragIndex);ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(from));el.classList.add('dragging');});el.addEventListener('dragend',()=>el.classList.remove('dragging'));el.addEventListener('dragover',ev=>{ev.preventDefault();ev.dataTransfer.dropEffect='move';});el.addEventListener('drop',ev=>{ev.preventDefault();moveCandidate(from,Number(el.dataset.dragIndex));});});
@@ -342,6 +347,16 @@ export async function handleAction(el){
  case 'play-protocol':preservePlayground();
     state.playProtocol=el.dataset.value;
     state.playResult=null;
+    renderPage(false);
+    break;
+
+ case 'add-question':preservePlayground();
+    state.playQuestions=[...(state.playQuestions||defaultQuestions()),{key:'',type:'choice',instructions:'',criteria:''}];
+    renderPage(false);
+    break;
+
+ case 'remove-question':preservePlayground();
+    state.playQuestions=(state.playQuestions||[]).filter((_,i)=>i!==Number(el.dataset.index));
     renderPage(false);
     break;
 

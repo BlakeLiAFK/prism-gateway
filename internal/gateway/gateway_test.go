@@ -2370,3 +2370,172 @@ func TestRouteOrderFollowsSortField(t *testing.T) {
 		t.Fatalf("路由顺序错误: %v，期望 %v", got, want)
 	}
 }
+
+func systemOneFixture(model string) Object {
+	return Object{"model": model, "state": "客户说账单扣了两次钱", "questions": Object{
+		"department": Object{"type": "choice", "instructions": "这条工单该给哪个部门",
+			"criteria": Object{"billing": "账单与付款", "technical": "功能故障"}},
+		"urgent": Object{"type": "noul", "instructions": "是否需要立即处理"},
+		"severity": Object{"type": "score", "instructions": "严重程度",
+			"criteria": []any{"可忽略", "一般", "严重"}},
+	}}
+}
+
+// System One 的请求校验必须在发往上游之前完成：上游同样会拒绝，
+// 但那时候配额已经预留、请求记录也写下了，而且它的错误正文我们不转发。
+func TestSystemOneRequestValidation(t *testing.T) {
+	h := newHarness(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("不合法的请求不应该到达上游")
+	}))
+	defer up.Close()
+	h.configure(t, up.URL, modelFixture("jev", "systemone"))
+	for _, tc := range []struct {
+		name string
+		body Object
+		want string
+	}{
+		{"缺 state", Object{"model": "jev", "questions": Object{"a": Object{"type": "noul", "instructions": "x"}}}, "state"},
+		{"缺 questions", Object{"model": "jev", "state": "x"}, "questions"},
+		{"题型未知", Object{"model": "jev", "state": "x", "questions": Object{"a": Object{"type": "guess", "instructions": "x"}}}, "noul / choice / score"},
+		{"缺 instructions", Object{"model": "jev", "state": "x", "questions": Object{"a": Object{"type": "noul"}}}, "instructions"},
+		{"choice 选项不足", Object{"model": "jev", "state": "x", "questions": Object{"a": Object{"type": "choice", "instructions": "x", "criteria": Object{"only": "一个"}}}}, "至少要有 2 个选项"},
+		{"score 分级不足", Object{"model": "jev", "state": "x", "questions": Object{"a": Object{"type": "score", "instructions": "x", "criteria": []any{"一级"}}}}, "至少要有 2 个分级"},
+		{"流式不支持", Object{"model": "jev", "state": "x", "stream": true, "questions": Object{"a": Object{"type": "noul", "instructions": "x"}}}, "不支持流式"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := h.generate(t, "systemone", tc.body)
+			requireStatus(t, w, 400)
+			if !strings.Contains(w.Body.String(), tc.want) {
+				t.Fatalf("错误信息应说明原因 %q，实得 %s", tc.want, w.Body.String())
+			}
+		})
+	}
+}
+
+// System One 与三种对话协议之间不得互相转换。能转换就意味着要么编造文本，
+// 要么把类型化答案字符串化，两种都会静默改变调用方拿到的东西。
+func TestSystemOneNeverConvertsAcrossProtocols(t *testing.T) {
+	h := newHarness(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("跨协议请求不应该到达上游: %s", r.URL.Path)
+	}))
+	defer up.Close()
+	h.configure(t, up.URL, modelFixture("jev", "systemone"), modelFixture("talker", "chat"))
+
+	// 对话协议打 System One 模型
+	for _, p := range []string{"chat", "messages", "responses"} {
+		w := h.generate(t, p, requestFixture(p, "jev"))
+		requireStatus(t, w, 400)
+		if !strings.Contains(w.Body.String(), "没有等价语义") {
+			t.Fatalf("%s → systemone 应说明不可转换，实得 %s", p, w.Body.String())
+		}
+	}
+	// System One 打对话模型
+	w := h.generate(t, "systemone", systemOneFixture("talker"))
+	requireStatus(t, w, 400)
+	if !strings.Contains(w.Body.String(), "没有等价语义") {
+		t.Fatalf("systemone → chat 应说明不可转换，实得 %s", w.Body.String())
+	}
+	// System One 模型不应出现在对话协议的模型列表里
+	r := httptest.NewRequest("GET", "/openai/v1/models", nil)
+	mw := httptest.NewRecorder()
+	h.a.Engine.Models(mw, r, "chat", Principal{ID: "test-key"})
+	if strings.Contains(mw.Body.String(), `"jev"`) {
+		t.Fatalf("System One 模型不该列在对话模型目录里: %s", mw.Body.String())
+	}
+	if !strings.Contains(mw.Body.String(), "talker") {
+		t.Fatal("对话模型应当仍在目录里")
+	}
+}
+
+// 正常往返：请求原样转发、响应原样返回、用量与配额照常记账。
+func TestSystemOnePassthroughAndUsage(t *testing.T) {
+	h := newHarness(t)
+	var got Object
+	var gotAuth, gotPath string
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &got)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"jev-1.13.0","answers":{"department":{"type":"choice","choice":"billing","probabilities":{"billing":0.91,"technical":0.09},"confidence":0.88}},"usage":{"input_tokens":312,"output_tokens":48}}`))
+	}))
+	defer up.Close()
+	m := modelFixture("jev", "systemone")
+	m.Upstream = "jev-latest"
+	m.PricingSet, m.InputPrice, m.OutputPrice = true, 1, 2
+	h.configure(t, up.URL, m)
+
+	w := h.generate(t, "systemone", systemOneFixture("jev"))
+	requireStatus(t, w, 200)
+	if gotPath != "/systemone" {
+		t.Fatalf("上游路径应为 /systemone，实得 %s", gotPath)
+	}
+	if gotAuth != "Bearer upstream-secret" {
+		t.Fatalf("鉴权头错误: %s", gotAuth)
+	}
+	// 请求体除 model 换成上游名外原样转发，不注入 max_tokens 之类的对话字段
+	if str(got, "model") != "jev-latest" {
+		t.Fatalf("model 应换成上游名，实得 %v", got["model"])
+	}
+	if got["max_tokens"] != nil || got["max_output_tokens"] != nil {
+		t.Fatalf("不应注入对话协议的输出上限字段: %v", got)
+	}
+	if len(obj(got["questions"])) != 3 {
+		t.Fatalf("questions 应原样转发，实得 %v", got["questions"])
+	}
+	// 响应原样返回，类型化答案不被改写
+	var res Object
+	json.Unmarshal(w.Body.Bytes(), &res)
+	ans := obj(obj(res["answers"])["department"])
+	if str(ans, "choice") != "billing" || num(obj(ans["probabilities"]), "billing") != 0.91 {
+		t.Fatalf("类型化答案被改写了: %s", w.Body.String())
+	}
+	if w.Header().Get("X-Prism-Protocol-Mode") != "native" {
+		t.Fatalf("应标记为原生调用，实得 %s", w.Header().Get("X-Prism-Protocol-Mode"))
+	}
+	// 用量按 input_tokens / output_tokens 记账
+	rows, _ := h.a.Store.DB.Query("SELECT input_tokens,output_tokens,cost_known FROM requests WHERE model_id='jev' AND status='success'")
+	if len(rows) != 1 || rows[0].Int("input_tokens") != 312 || rows[0].Int("output_tokens") != 48 {
+		t.Fatalf("用量未正确记账: %v", rows)
+	}
+}
+
+// 529 是 TypeSafe 的过载码，语义等同 503，应当切换到下一个候选。
+func TestSystemOne529FallsOverLike503(t *testing.T) {
+	h := newHarness(t)
+	var hits int
+	busy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(529)
+		w.Write([]byte(`{"error":"overloaded"}`))
+	}))
+	defer busy.Close()
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"jev-1.13.0","answers":{"urgent":{"type":"noul","noul":0.3}},"usage":{"input_tokens":10,"output_tokens":4}}`))
+	}))
+	defer ok.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = []Provider{
+			{ID: "p_busy", Name: "busy", Kind: "custom", BaseURL: busy.URL, Auth: "auto", Secret: "s", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_ok", Name: "ok", Kind: "custom", BaseURL: ok.URL, Auth: "auto", Secret: "s", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+		}
+		first := modelFixture("jev-busy", "systemone")
+		first.ProviderID = "p_busy"
+		second := modelFixture("jev-ok", "systemone")
+		second.ProviderID = "p_ok"
+		c.Models = []Model{first, second}
+		c.Routes = []Route{{ID: "jev", Name: "jev", Strategy: "priority", Enabled: true,
+			Candidates: []Candidate{{"jev-busy", 20}, {"jev-ok", 10}}}}
+	})
+	w := h.generate(t, "systemone", systemOneFixture("jev"))
+	requireStatus(t, w, 200)
+	if hits != 1 {
+		t.Fatalf("过载的候选应当只试一次，实得 %d", hits)
+	}
+	if w.Header().Get("X-Prism-Model") != "jev-ok" {
+		t.Fatalf("应当切到可用候选，实得 %s", w.Header().Get("X-Prism-Model"))
+	}
+}

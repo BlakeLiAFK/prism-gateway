@@ -59,7 +59,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/anthropic/v1/") {
 		p = "messages"
 	}
-	if strings.HasPrefix(r.URL.Path, "/openai/") || strings.HasPrefix(r.URL.Path, "/anthropic/") {
+	if strings.HasPrefix(r.URL.Path, "/typesafe/") {
+		p = "systemone"
+	}
+	if strings.HasPrefix(r.URL.Path, "/openai/") || strings.HasPrefix(r.URL.Path, "/anthropic/") || strings.HasPrefix(r.URL.Path, "/typesafe/") {
 		key, err := a.Engine.Authenticate(r)
 		if err != nil {
 			status, code, msg := errorParts(err)
@@ -77,6 +80,8 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			a.Engine.Handle(w, r, "messages", key)
 		case r.Method == "POST" && r.URL.Path == "/anthropic/v1/messages/count_tokens":
 			a.Engine.CountTokens(w, r, key)
+		case r.Method == "POST" && r.URL.Path == "/typesafe/v1/systemone":
+			a.Engine.Handle(w, r, "systemone", key)
 		default:
 			protocolError(w, p, 404, "ENDPOINT_NOT_SUPPORTED", "此端点不在本版本兼容范围内", randomID("req_"))
 		}
@@ -598,20 +603,34 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		return a.Store.DB.Query("SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 200")
 	case "playground.run":
 		protocol := str(p, "protocol")
-		if protocol != "chat" && protocol != "messages" && protocol != "responses" {
+		if protocol != "chat" && protocol != "messages" && protocol != "responses" && protocol != "systemone" {
 			return nil, fail("INVALID_PARAMS", "protocol 无效", 400)
 		}
-		prompt := str(p, "prompt")
-		if len(prompt) > 64000 || prompt == "" {
-			return nil, fail("INVALID_PARAMS", "请输入不超过 64KB 的提示词", 400)
-		}
-		body := Object{"model": str(p, "model"), "stream": false}
-		if protocol == "responses" {
-			body["input"] = prompt
-			body["max_output_tokens"] = 512
+		body := Object{"model": str(p, "model")}
+		if protocol == "systemone" {
+			// System One 的载荷是状态加问题，没有 prompt 也没有流式开关
+			st := str(p, "state")
+			if len(st) > 64000 || st == "" {
+				return nil, fail("INVALID_PARAMS", "请输入不超过 64KB 的状态内容", 400)
+			}
+			body["state"] = st
+			body["questions"] = obj(p["questions"])
+			if er := validateSystemOne(body); er != nil {
+				return nil, fail("INVALID_PARAMS", er.Error(), 400)
+			}
 		} else {
-			body["messages"] = []any{Object{"role": "user", "content": prompt}}
-			body["max_tokens"] = 512
+			prompt := str(p, "prompt")
+			if len(prompt) > 64000 || prompt == "" {
+				return nil, fail("INVALID_PARAMS", "请输入不超过 64KB 的提示词", 400)
+			}
+			body["stream"] = false
+			if protocol == "responses" {
+				body["input"] = prompt
+				body["max_output_tokens"] = 512
+			} else {
+				body["messages"] = []any{Object{"role": "user", "content": prompt}}
+				body["max_tokens"] = 512
+			}
 		}
 		req, _ := http.NewRequestWithContext(ctx, "POST", "http://internal"+pathFor(protocol), bytes.NewBufferString(raw(body)))
 		req.Header.Set("X-Prism-Session", str(p, "session"))

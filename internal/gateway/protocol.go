@@ -620,7 +620,7 @@ func extractUsage(o Object, protocol string, u *Usage) {
 			u.Cache = int64(num(obj(o["prompt_tokens_details"]), "cached_tokens"))
 			u.Known = true
 		}
-	case "responses":
+	case "responses", "systemone":
 		if _, ok := o["input_tokens"]; ok {
 			u.Input = int64(num(o, "input_tokens"))
 			u.Output = int64(num(o, "output_tokens"))

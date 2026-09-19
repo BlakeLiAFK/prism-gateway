@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.8.1"
+const Version = "1.9.0"
 
 type Object = map[string]any
 
@@ -206,8 +206,8 @@ func (c Config) Validate() error {
 		if _, ok := c.provider(m.ProviderID); !ok {
 			return fmt.Errorf("模型 %s 的 Provider 不存在", m.ID)
 		}
-		if m.Protocol != "chat" && m.Protocol != "messages" && m.Protocol != "responses" {
-			return errors.New("protocol 必须是 chat / messages / responses")
+		if m.Protocol != "chat" && m.Protocol != "messages" && m.Protocol != "responses" && m.Protocol != "systemone" {
+			return errors.New("protocol 必须是 chat / messages / responses / systemone")
 		}
 		if m.Concurrency < 1 || m.Concurrency > 128 || m.RPM < 0 || m.RPM > 100000 {
 			return errors.New("模型并发数 / RPM 不合法")

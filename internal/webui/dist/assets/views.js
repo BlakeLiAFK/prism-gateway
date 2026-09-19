@@ -36,7 +36,7 @@ export function providers(){
 
 export function models(){
   let models=state.config.models.filter(m=>(!state.modelQ||(m.id+' '+m.name+' '+m.upstream).toLowerCase().includes(state.modelQ.toLowerCase()))&&(!state.modelProtocol||m.protocol===state.modelProtocol)&&(!state.providerFilter||m.provider_id===state.providerFilter));
-  return head('MODEL LIBRARY','每个模型，各司其职。','按模型指定上游协议、能力、价格和限额；新同步模型默认禁用，确认后再投入使用。',btn('添加模型','add-model','plus','','primary'))+`<div class="toolbar"><div class="search-field">${icon('search')}<input id="model-search" placeholder="搜索模型、ID 或上游名称" value="${E(state.modelQ)}" aria-label="搜索模型"></div><select id="model-protocol" aria-label="协议过滤"><option value="">全部协议</option>${['chat','messages','responses'].map(v=>`<option value="${v}" ${v===state.modelProtocol?'selected':''}>${v}</option>`).join('')}</select><select id="model-provider" aria-label="供应商过滤"><option value="">全部供应商</option>${state.config.providers.map(p=>`<option value="${E(p.id)}" ${p.id===state.providerFilter?'selected':''}>${E(p.name)}</option>`).join('')}</select><span class="small muted" style="margin-left:auto">${models.length} 个模型</span></div><section class="card">${models.length?`<div class="table-scroll"><table><thead><tr><th>模型 / 上游 ID</th><th>供应商</th><th>原生协议</th><th>能力</th><th>Input / Output · $/M</th><th>并发</th><th>启用</th><th></th></tr></thead><tbody>${models.map(m=>`<tr><td><div class="cell-title">${E(m.name||m.id)}</div><div class="cell-sub mono">${E(m.upstream)}</div></td><td class="small">${E(getProvider(m.provider_id)?.name||m.provider_id)}</td><td>${badge(m.protocol)}</td><td><div class="flex" style="gap:4px">${m.tools?badge('TOOLS'):''}${m.vision?badge('VISION'):''}${badge(compact(m.context_window))}</div></td><td class="mono">${m.pricing_set?`${money(m.input_price)} / ${money(m.output_price)}`:'未确认价格'}</td><td class="mono">${m.concurrency}${m.rpm?` <span class="tiny muted">/ ${m.rpm} RPM</span>`:''}</td><td><button class="switch ${m.enabled?'on':''}" role="switch" aria-checked="${m.enabled}" aria-label="启用 ${E(m.name)}" data-action="toggle-model" data-id="${E(m.id)}"></button></td><td><div class="table-actions"><button class="icon-btn" data-action="edit-model" data-id="${E(m.id)}" aria-label="编辑模型">${icon('edit')}</button><button class="icon-btn" data-action="delete-model" data-id="${E(m.id)}" aria-label="删除模型">${icon('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('让模型库准备就绪','先添加供应商，再同步或手动添加模型。供应商模型列表不会自动确认协议能力与计价。','add-model','添加第一个模型')}</section>`;
+  return head('MODEL LIBRARY','每个模型，各司其职。','按模型指定上游协议、能力、价格和限额；新同步模型默认禁用，确认后再投入使用。',btn('添加模型','add-model','plus','','primary'))+`<div class="toolbar"><div class="search-field">${icon('search')}<input id="model-search" placeholder="搜索模型、ID 或上游名称" value="${E(state.modelQ)}" aria-label="搜索模型"></div><select id="model-protocol" aria-label="协议过滤"><option value="">全部协议</option>${['chat','messages','responses','systemone'].map(v=>`<option value="${v}" ${v===state.modelProtocol?'selected':''}>${v}</option>`).join('')}</select><select id="model-provider" aria-label="供应商过滤"><option value="">全部供应商</option>${state.config.providers.map(p=>`<option value="${E(p.id)}" ${p.id===state.providerFilter?'selected':''}>${E(p.name)}</option>`).join('')}</select><span class="small muted" style="margin-left:auto">${models.length} 个模型</span></div><section class="card">${models.length?`<div class="table-scroll"><table><thead><tr><th>模型 / 上游 ID</th><th>供应商</th><th>原生协议</th><th>能力</th><th>Input / Output · $/M</th><th>并发</th><th>启用</th><th></th></tr></thead><tbody>${models.map(m=>`<tr><td><div class="cell-title">${E(m.name||m.id)}</div><div class="cell-sub mono">${E(m.upstream)}</div></td><td class="small">${E(getProvider(m.provider_id)?.name||m.provider_id)}</td><td>${badge(m.protocol)}</td><td><div class="flex" style="gap:4px">${m.tools?badge('TOOLS'):''}${m.vision?badge('VISION'):''}${badge(compact(m.context_window))}</div></td><td class="mono">${m.pricing_set?`${money(m.input_price)} / ${money(m.output_price)}`:'未确认价格'}</td><td class="mono">${m.concurrency}${m.rpm?` <span class="tiny muted">/ ${m.rpm} RPM</span>`:''}</td><td><button class="switch ${m.enabled?'on':''}" role="switch" aria-checked="${m.enabled}" aria-label="启用 ${E(m.name)}" data-action="toggle-model" data-id="${E(m.id)}"></button></td><td><div class="table-actions"><button class="icon-btn" data-action="edit-model" data-id="${E(m.id)}" aria-label="编辑模型">${icon('edit')}</button><button class="icon-btn" data-action="delete-model" data-id="${E(m.id)}" aria-label="删除模型">${icon('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('让模型库准备就绪','先添加供应商，再同步或手动添加模型。供应商模型列表不会自动确认协议能力与计价。','add-model','添加第一个模型')}</section>`;
 
 }
 
@@ -91,15 +91,112 @@ x-api-key: prism_sk_…
 anthropic-version: 2023-06-01
 
 POST /v1/messages
-POST /v1/messages/count_tokens</pre><p>token counting 没有原生接口时会明确标注 estimated；可以在系统设置中禁止本地估算。</p></section></div>`;
+POST /v1/messages/count_tokens</pre><p>token counting 没有原生接口时会明确标注 estimated；可以在系统设置中禁止本地估算。</p></section><section class="card guide"><div class="between"><h3>TypeSafe System One</h3>${badge('DATA PLANE')}</div><pre>Base URL: ${E(base)}/typesafe/v1
+Authorization: Bearer prism_sk_…
+
+POST /systemone</pre><p>返回类型化决策与概率，不产生文本，也没有流式。它与三种对话协议之间不做转换：两边没有等价语义，转换只能靠编造内容。</p></section></div>`;
 
 }
 
 export function playground(){
   const options=[...state.config.routes.filter(r=>r.enabled).map(r=>[r.id,r.name||r.id]),...state.config.models.filter(m=>m.enabled).map(m=>[m.id,m.name||m.id]),...state.config.aliases.filter(a=>a.enabled).map(a=>[a.id,a.id])];
   const result=state.playResult;
-  return head('PROTOCOL PLAYGROUND','从这里，发出第一条请求。','统一 /api.json 发起非流式诊断；标准模型入口另支持实时 SSE。真实供应商请求可能产生费用。',btn('接入指南','guide','code'))+`<div class="playground-grid"><section class="card"><div class="card-head"><div><h2>请求编辑器</h2><p class="card-sub">选择客户端协议，验证路由与最终响应。</p></div>${badge('LIVE REQUEST')}</div><form id="playground-form" class="playground-form"><div class="protocol-tabs">${[['chat','Chat Completions'],['messages','Anthropic'],['responses','Responses']].map(([v,l])=>`<button type="button" class="${state.playProtocol===v?'active':''}" data-action="play-protocol" data-value="${v}">${l}</button>`).join('')}</div>${selectField('模型 / 路由','model',state.lastPlayModel||options.find(x=>x[0]===state.config.settings.default_route)?.[0]||options[0]?.[0],options,'只展示启用项；实际能力仍由所选模型决定。')}<div class="field"><label for="play-prompt">Prompt</label><textarea id="play-prompt" name="prompt" placeholder="例如：用 Go 写一个带超时的 HTTP 请求示例。" required>${E(state.lastPrompt||'请用 Go 写一个并发安全的计数器，并给出单元测试。')}</textarea></div><div class="between"><span class="tiny muted">单次请求 · 输出上限 512 tokens</span><button type="submit" class="btn primary" ${state.playBusy||!options.length?'disabled':''}>${icon('play')}${state.playBusy?'正在请求…':'发送测试请求'}</button></div></form></section><section class="card"><div class="card-head"><div><h2>响应与诊断</h2><p class="card-sub">请求走真实网关核心，不是界面模拟。</p></div>${result?tag('HTTP '+result.status,result.status>=400?'error':''):badge('READY')}</div><div class="playground-result">${state.playBusy?'<div class="progress-indicator"><i></i><i></i><i></i><span style="margin-left:9px">等待网关与供应商返回…</span></div>':result?renderPlayResult(result):empty('等待你的第一条请求','可以先启用本地 Sandbox。演示回复会明确标注，不冒充真实模型输出。','','','terminal')}</div></section></div>${connectionGuide()}`;
+  return head('PROTOCOL PLAYGROUND','从这里，发出第一条请求。','统一 /api.json 发起非流式诊断；标准模型入口另支持实时 SSE。真实供应商请求可能产生费用。',btn('接入指南','guide','code'))+`<div class="playground-grid"><section class="card"><div class="card-head"><div><h2>请求编辑器</h2><p class="card-sub">选择客户端协议，验证路由与最终响应。</p></div>${badge('LIVE REQUEST')}</div><form id="playground-form" class="playground-form"><div class="protocol-tabs">${[['chat','Chat Completions'],['messages','Anthropic'],['responses','Responses'],['systemone','System One']].map(([v,l])=>`<button type="button" class="${state.playProtocol===v?'active':''}" data-action="play-protocol" data-value="${v}">${l}</button>`).join('')}</div>${selectField('模型 / 路由','model',state.lastPlayModel||options.find(x=>x[0]===state.config.settings.default_route)?.[0]||options[0]?.[0],options,'只展示启用项；实际能力仍由所选模型决定。')}${state.playProtocol==='systemone'?systemOneEditor():`<div class="field"><label for="play-prompt">Prompt</label><textarea id="play-prompt" name="prompt" placeholder="例如：用 Go 写一个带超时的 HTTP 请求示例。" required>${E(state.lastPrompt||'请用 Go 写一个并发安全的计数器，并给出单元测试。')}</textarea></div>`}<div class="between"><span class="tiny muted">${state.playProtocol==='systemone'?'单次请求 · 返回类型化决策，不产生文本':'单次请求 · 输出上限 512 tokens'}</span><button type="submit" class="btn primary" ${state.playBusy||!options.length?'disabled':''}>${icon('play')}${state.playBusy?'正在请求…':'发送测试请求'}</button></div></form></section><section class="card"><div class="card-head"><div><h2>响应与诊断</h2><p class="card-sub">请求走真实网关核心，不是界面模拟。</p></div>${result?tag('HTTP '+result.status,result.status>=400?'error':''):badge('READY')}</div><div class="playground-result">${state.playBusy?'<div class="progress-indicator"><i></i><i></i><i></i><span style="margin-left:9px">等待网关与供应商返回…</span></div>':result?renderPlayResult(result):empty('等待你的第一条请求','可以先启用本地 Sandbox。演示回复会明确标注，不冒充真实模型输出。','','','terminal')}</div></section></div>${connectionGuide()}`;
 
+}
+
+// System One 的载荷是状态加一组带类型的问题，和对话协议完全不同，
+// 所以调试台给它一套单独的编辑器：手拼这种 JSON 太容易出错。
+const QUESTION_TYPES=[['choice','Choice · 选一个'],['score','Score · 分级打分'],['noul','Noul · 是非概率']];
+
+export function defaultQuestions(){
+  return [{key:'department',type:'choice',instructions:'这条工单应该交给哪个部门处理',
+    criteria:'billing = 账单、扣款与退款\ntechnical = 功能故障与报错\nsales = 询价与合作'}];
+}
+
+// 把编辑器里的文本形态转成上游要的 criteria 结构。
+// choice 每行 `键 = 描述`；score 每行一个分级，顺序即从低到高；noul 不需要。
+function parseCriteria(q){
+  const lines=(q.criteria||'').split('\n').map(x=>x.trim()).filter(Boolean);
+  if(q.type==='choice'){
+    const out={};
+    lines.forEach(line=>{
+      const i=line.indexOf('=');
+      if(i>0)out[line.slice(0,i).trim()]=line.slice(i+1).trim();
+      else out[line]=line;
+    });
+    return out;
+  }
+  if(q.type==='score')return lines;
+  return null;
+}
+
+export function buildQuestions(list){
+  const out={};
+  list.forEach((q,i)=>{
+    const key=(q.key||'').trim()||('q'+(i+1));
+    const item={type:q.type,instructions:q.instructions||''};
+    const c=parseCriteria(q);
+    if(c&&(Array.isArray(c)?c.length:Object.keys(c).length))item.criteria=c;
+    out[key]=item;
+  });
+  return out;
+}
+
+function questionCard(q,i){
+  const hint=q.type==='choice'?'每行一个选项，格式 `键 = 描述`'
+    :q.type==='score'?'每行一个分级，从低到高排列':'是非题不需要选项';
+  return `<div class="question-card" data-question="${i}">
+    <div class="question-head">
+      <input class="question-key mono" name="q-key" value="${E(q.key||'')}" placeholder="答案键名" aria-label="答案键名">
+      <select name="q-type" aria-label="题型">${QUESTION_TYPES.map(([v,l])=>`<option value="${v}" ${q.type===v?'selected':''}>${l}</option>`).join('')}</select>
+      <button type="button" class="icon-btn" data-action="remove-question" data-index="${i}" aria-label="删除这道题">${icon('trash')}</button>
+    </div>
+    <input name="q-instructions" value="${E(q.instructions||'')}" placeholder="要模型判断什么" aria-label="问题说明">
+    ${q.type==='noul'?'':`<textarea name="q-criteria" rows="3" placeholder="${E(hint)}" aria-label="选项或分级">${E(q.criteria||'')}</textarea><small class="tiny muted">${E(hint)}</small>`}
+  </div>`;
+}
+
+// 概率分布画成条，比一串小数好读；最高的一项用强调色。
+function probBars(probs,picked){
+  const entries=Object.entries(probs||{}).sort((a,b)=>b[1]-a[1]);
+  if(!entries.length)return '';
+  return `<div class="prob-list">${entries.map(([k,v])=>`<div class="prob-row ${k===String(picked)?'picked':''}">
+    <span class="prob-name ellipsis">${E(k)}</span>
+    <span class="prob-track"><i style="width:${Math.max(1,Math.round(v*100))}%"></i></span>
+    <span class="prob-value mono">${(v*100).toFixed(1)}%</span></div>`).join('')}</div>`;
+}
+
+function answerCard(key,a){
+  let body='';
+  if(a.type==='noul'){
+    const pct=Math.round((a.noul||0)*100);
+    body=`<div class="answer-headline"><strong class="mono">${pct}%</strong><span class="tiny muted">判定为「是」的概率</span></div>
+      <span class="prob-track"><i style="width:${Math.max(1,pct)}%"></i></span>`;
+  }else if(a.type==='choice'){
+    body=`<div class="answer-headline"><strong>${E(a.choice)}</strong>${a.confidence!=null?badge('置信度 '+(a.confidence*100).toFixed(0)+'%'):''}</div>${probBars(a.probabilities,a.choice)}`;
+  }else if(a.type==='score'){
+    const legend=a.legend||[];
+    const label=legend[a.score-1];
+    body=`<div class="answer-headline"><strong>${E(a.score)}${legend.length?` / ${legend.length}`:''}</strong>${label?`<span>${E(label)}</span>`:''}${a.confidence!=null?badge('置信度 '+(a.confidence*100).toFixed(0)+'%'):''}</div>${probBars(a.probabilities,a.score)}`;
+  }else{
+    body=`<pre>${E(json(a))}</pre>`;
+  }
+  return `<div class="answer-card"><div class="answer-key"><span class="mono">${E(key)}</span>${badge(a.type||'?')}</div>${body}</div>`;
+}
+
+export function renderAnswers(o){
+  const answers=o.answers||{};
+  const keys=Object.keys(answers);
+  if(!keys.length)return '';
+  return `<div class="answer-list">${keys.map(k=>answerCard(k,answers[k]||{})).join('')}</div>`;
+}
+
+function systemOneEditor(){
+  const list=state.playQuestions||defaultQuestions();
+  return `<div class="field"><label for="play-state">状态（state）</label><textarea id="play-state" name="state" rows="4" placeholder="要评估的内容。可以是一段话、一条工单、一段日志。" required>${E(state.playState||'用户反馈：本月账单被扣了两次款，希望尽快退回多扣的金额。')}</textarea><small>System One 评估这段内容，然后回答下面每一道题。</small></div>
+  <div class="question-section"><div class="between" style="margin-bottom:12px"><strong class="small">问题（questions）</strong>${btn('添加问题','add-question','plus','','small')}</div>
+  ${list.length?list.map(questionCard).join(''):'<p class="small muted">至少要有一道题。</p>'}</div>`;
 }
 
 export function renderPlayResult(r){
@@ -110,7 +207,8 @@ export function renderPlayResult(r){
   if(o.choices)text=o.choices[0]?.message?.content||'';
   else if(o.content)text=o.content.map(x=>x.text||'').join('');
   else if(o.output)text=o.output.map(x=>(x.content||[]).map(x=>x.text||'').join('')).join('\n');
-  return `<div class="response-meta">${badge(ms(r.duration_ms))}${badge(headerValue(r.headers,'X-Prism-Model')||'—')}${badge(headerValue(r.headers,'X-Prism-Protocol-Mode')||'—')}${headerValue(r.headers,'X-Prism-Demo')?tag('本地演示','warning'):''}</div>${text?`<div class="playground-text">${E(text)}</div>`:''}<details ${r.status>=400?'open':''}><summary class="small muted" style="cursor:pointer;margin:16px 0">原始协议响应与诊断</summary><pre>${E(json(r))}</pre></details>`;
+  const answers=o.answers?renderAnswers(o):'';
+  return `<div class="response-meta">${badge(ms(r.duration_ms))}${badge(headerValue(r.headers,'X-Prism-Model')||'—')}${badge(headerValue(r.headers,'X-Prism-Protocol-Mode')||'—')}${headerValue(r.headers,'X-Prism-Demo')?tag('本地演示','warning'):''}</div>${answers}${text?`<div class="playground-text">${E(text)}</div>`:''}<details ${r.status>=400?'open':''}><summary class="small muted" style="cursor:pointer;margin:16px 0">原始协议响应与诊断</summary><pre>${E(json(r))}</pre></details>`;
 
 }
 
@@ -153,7 +251,7 @@ export function modelEditor(id=''){
     id:'',name:'',provider_id:state.config.providers[0].id,upstream:'',protocol:'chat',enabled:true,tools:true,vision:false,native_count:false,drop_reasoning:false,context_window:128000,max_output_tokens:4096,concurrency:2,rpm:0,pricing_set:false,input_price:0,output_price:0,cache_price:0,write_price:0,limit_5h:0,limit_7d:0,limit_30d:0
   };
 
- showDialog(old?'编辑模型':'添加模型','配置真实能力；不把同一家供应商的所有模型假定为相同协议。',`<div class="form-section"><h3>身份与协议</h3><div class="form-grid">${field('客户端模型 ID','id',m.id,'text','由你指定，客户端请求 model 使用此值。',`${old?'readonly':''} required placeholder="my-coding-model"`)}${field('显示名称','name',m.name,'text','','required')}${selectField('供应商','provider_id',m.provider_id,state.config.providers.map(p=>[p.id,p.name]))}${selectField('上游原生协议','protocol',m.protocol,[['chat','OpenAI Chat Completions'],['messages','Anthropic Messages'],['responses','OpenAI Responses']])}</div>${field('上游模型 ID','upstream',m.upstream,'text','与供应商接受的 model 字段完全一致。','required')}<div class="form-grid">${field('上下文窗口','context_window',m.context_window,'number','能力元数据，不是精确 tokenizer 验证。','min="128" required')}${field('最大输出 Tokens','max_output_tokens',m.max_output_tokens,'number','','min="1" required')}</div>${check('启用模型','enabled',m.enabled)}${check('支持工具调用','tools',m.tools)}${check('支持图像输入','vision',m.vision)}${check('有原生 Messages Token Count 接口','native_count',m.native_count,'只适用于消息协议且上游确实提供 /messages/count_tokens。')}${check('跨协议时丢弃推理内容','drop_reasoning',m.drop_reasoning,'仅当上游返回 reasoning 且你需要跨协议调用时开启。丢弃会在响应头 X-Prism-Dropped 标注；关闭时这类响应被明确拒绝，而不是悄悄截断。')}</div><div class="form-section"><h3>速率与并发</h3><div class="form-grid">${field('最大并发','concurrency',m.concurrency,'number','网关本地限制，不代表上游允许并发。','min="1" max="128" required')}${field('每分钟请求数 RPM','rpm',m.rpm,'number','0 = 不额外限制；仍受上游限制。','min="0" required')}</div></div><div class="form-section"><h3>计价 · USD / 百万 Tokens</h3><div class="dialog-note">费用仅按你填写的单价与上游 usage 计算，不代表订阅实付。价格未确认时不显示为真实已知费用。</div>${check('我已确认以下计价','pricing_set',m.pricing_set)}<div class="form-grid">${[['普通输入','input_price'],['输出','output_price'],['缓存读取','cache_price'],['缓存写入','write_price']].map(([label,k])=>field(label,k,m[k],'number','','min="0" max="1000000" step="any" required')).join('')}</div></div><div class="form-section"><h3>本地滚动预算 · USD</h3><p class="small muted" style="margin-bottom:14px">不是供应商的账期额度。0 = 不额外限制；启用金额限制必须先确认计价。</p><div class="form-grid">${[['过去 5 小时','limit_5h'],['过去 7 天','limit_7d'],['过去 30 天','limit_30d']].map(([label,k])=>field(label,k,m[k],'number','','min="0" step="any" required')).join('')}</div></div>`,async f=>{const v={};for(const k of ['id','name','provider_id','upstream','protocol'])v[k]=val(f,k).trim();for(const k of ['enabled','tools','vision','native_count','drop_reasoning','pricing_set'])v[k]=checked(f,k);for(const k of ['context_window','max_output_tokens','concurrency','rpm','input_price','output_price','cache_price','write_price','limit_5h','limit_7d','limit_30d'])v[k]=nval(f,k);await save('model.save',{id,model:v},f);},'保存模型',true);
+ showDialog(old?'编辑模型':'添加模型','配置真实能力；不把同一家供应商的所有模型假定为相同协议。',`<div class="form-section"><h3>身份与协议</h3><div class="form-grid">${field('客户端模型 ID','id',m.id,'text','由你指定，客户端请求 model 使用此值。',`${old?'readonly':''} required placeholder="my-coding-model"`)}${field('显示名称','name',m.name,'text','','required')}${selectField('供应商','provider_id',m.provider_id,state.config.providers.map(p=>[p.id,p.name]))}${selectField('上游原生协议','protocol',m.protocol,[['chat','OpenAI Chat Completions'],['messages','Anthropic Messages'],['responses','OpenAI Responses'],['systemone','TypeSafe System One']])}</div>${field('上游模型 ID','upstream',m.upstream,'text','与供应商接受的 model 字段完全一致。','required')}<div class="form-grid">${field('上下文窗口','context_window',m.context_window,'number','能力元数据，不是精确 tokenizer 验证。','min="128" required')}${field('最大输出 Tokens','max_output_tokens',m.max_output_tokens,'number','','min="1" required')}</div>${check('启用模型','enabled',m.enabled)}${check('支持工具调用','tools',m.tools)}${check('支持图像输入','vision',m.vision)}${check('有原生 Messages Token Count 接口','native_count',m.native_count,'只适用于消息协议且上游确实提供 /messages/count_tokens。')}${check('跨协议时丢弃推理内容','drop_reasoning',m.drop_reasoning,'仅当上游返回 reasoning 且你需要跨协议调用时开启。丢弃会在响应头 X-Prism-Dropped 标注；关闭时这类响应被明确拒绝，而不是悄悄截断。')}</div><div class="form-section"><h3>速率与并发</h3><div class="form-grid">${field('最大并发','concurrency',m.concurrency,'number','网关本地限制，不代表上游允许并发。','min="1" max="128" required')}${field('每分钟请求数 RPM','rpm',m.rpm,'number','0 = 不额外限制；仍受上游限制。','min="0" required')}</div></div><div class="form-section"><h3>计价 · USD / 百万 Tokens</h3><div class="dialog-note">费用仅按你填写的单价与上游 usage 计算，不代表订阅实付。价格未确认时不显示为真实已知费用。</div>${check('我已确认以下计价','pricing_set',m.pricing_set)}<div class="form-grid">${[['普通输入','input_price'],['输出','output_price'],['缓存读取','cache_price'],['缓存写入','write_price']].map(([label,k])=>field(label,k,m[k],'number','','min="0" max="1000000" step="any" required')).join('')}</div></div><div class="form-section"><h3>本地滚动预算 · USD</h3><p class="small muted" style="margin-bottom:14px">不是供应商的账期额度。0 = 不额外限制；启用金额限制必须先确认计价。</p><div class="form-grid">${[['过去 5 小时','limit_5h'],['过去 7 天','limit_7d'],['过去 30 天','limit_30d']].map(([label,k])=>field(label,k,m[k],'number','','min="0" step="any" required')).join('')}</div></div>`,async f=>{const v={};for(const k of ['id','name','provider_id','upstream','protocol'])v[k]=val(f,k).trim();for(const k of ['enabled','tools','vision','native_count','drop_reasoning','pricing_set'])v[k]=checked(f,k);for(const k of ['context_window','max_output_tokens','concurrency','rpm','input_price','output_price','cache_price','write_price','limit_5h','limit_7d','limit_30d'])v[k]=nval(f,k);await save('model.save',{id,model:v},f);},'保存模型',true);
 
 }
 
@@ -198,7 +296,7 @@ export function routeEditor(id=''){
 
  const order=[...r.candidates.map(x=>getModel(x.model_id)).filter(Boolean),...state.config.models.filter(m=>!r.candidates.some(c=>c.model_id===m.id))];
 
- showDialog(old?'编辑路由':'创建智能路由','明确候选池；会话亲和优先，安全失败后才尝试备用。',`<div class="form-grid">${field('路由 ID','id',r.id,'text','客户端可直接将其作为 model。',`${old?'readonly':''} required placeholder="auto-coding"`)}${field('显示名称','name',r.name,'text','','required')}${selectField('选择策略','strategy',r.strategy,[['priority','优先级（按候选顺序）'],['balanced','本地预算压力均衡']])}${field('列表排序','sort',r.sort??0,'number','数字小的排在前面；相同时按 ID 字母序。','min="-999" max="999" step="10"')}</div>${field('路由描述','description',r.description)}${check('启用路由','enabled',r.enabled)}${check('启用会话亲和','affinity',r.affinity)}<div class="form-section"><h3>候选模型</h3><p class="small muted" style="margin:8px 0 14px">选中加入路由，权重参与均衡评分。保存后可在路由画布拖动排序。</p><div class="search-field" style="margin-bottom:12px">${icon('search')}<input id="candidate-search" placeholder="搜索模型、ID、协议或供应商" autocomplete="off" aria-label="搜索候选模型"></div><p class="tiny muted" id="candidate-count"></p>${order.map(m=>{const c=r.candidates.find(x=>x.model_id===m.id);const hay=[m.id,m.name,m.upstream,m.protocol,getProvider(m.provider_id)?.name].filter(Boolean).join(' ').toLowerCase();return `<div class="setting-row candidate-row" style="gap:10px" data-search="${E(hay)}"><label class="checkline" style="flex:1"><input name="candidate" type="checkbox" value="${E(m.id)}" ${c?'checked':''}><span>${E(m.name||m.id)}<small>${E(m.protocol)} · ${E(getProvider(m.provider_id)?.name)}${m.enabled?'':' · 未启用'}</small></span></label><input class="weight-field" type="number" min="1" max="1000" value="${c?.weight||10}" data-weight="${E(m.id)}" style="width:80px" aria-label="候选权重"></div>`}).join('')}</div>`,async f=>{const candidates=$$('input[name=candidate]:checked',f).map(el=>({model_id:el.value,weight:Number($$('[data-weight]',f).find(x=>x.dataset.weight===el.value).value)}));await save('route.save',{id,route:{id:val(f,'id').trim(),name:val(f,'name').trim(),strategy:val(f,'strategy'),description:val(f,'description'),enabled:checked(f,'enabled'),affinity:checked(f,'affinity'),sort:Number(val(f,'sort'))||0,candidates}},f);});
+ showDialog(old?'编辑路由':'创建智能路由','明确候选池；会话亲和优先，安全失败后才尝试备用。',`<div class="form-grid">${field('路由 ID','id',r.id,'text','客户端可直接将其作为 model。',`${old?'readonly':''} required placeholder="auto-coding"`)}${field('显示名称','name',r.name,'text','','required')}${selectField('选择策略','strategy',r.strategy,[['priority','优先级（按候选顺序）'],['balanced','本地预算压力均衡']])}${field('列表排序','sort',r.sort??0,'number','数字小的排在前面；相同时按 ID 字母序。','min="-999" max="999" step="10"')}</div>${field('路由描述','description',r.description)}${check('启用路由','enabled',r.enabled)}${check('启用会话亲和','affinity',r.affinity)}<div class="form-section"><h3>候选模型</h3><p class="small muted" style="margin:8px 0 14px">选中加入路由，权重参与均衡评分。保存后可在路由画布拖动排序。</p><div class="search-field" style="margin-bottom:12px">${icon('search')}<input id="candidate-search" placeholder="搜索模型、ID、协议或供应商" autocomplete="off" aria-label="搜索候选模型"></div><p class="tiny muted" id="candidate-count"></p><div class="candidate-list">${order.map(m=>{const c=r.candidates.find(x=>x.model_id===m.id);const hay=[m.id,m.name,m.upstream,m.protocol,getProvider(m.provider_id)?.name].filter(Boolean).join(' ').toLowerCase();return `<div class="candidate-row" data-search="${E(hay)}"><label class="checkline" style="flex:1"><input name="candidate" type="checkbox" value="${E(m.id)}" ${c?'checked':''}><span>${E(m.name||m.id)}<small>${E(m.protocol)} · ${E(getProvider(m.provider_id)?.name)}${m.enabled?'':' · 未启用'}</small></span></label><input class="weight-field" type="number" min="1" max="1000" value="${c?.weight||10}" data-weight="${E(m.id)}" style="width:80px" aria-label="候选权重"></div>`}).join('')}</div></div>`,async f=>{const candidates=$$('input[name=candidate]:checked',f).map(el=>({model_id:el.value,weight:Number($$('[data-weight]',f).find(x=>x.dataset.weight===el.value).value)}));await save('route.save',{id,route:{id:val(f,'id').trim(),name:val(f,'name').trim(),strategy:val(f,'strategy'),description:val(f,'description'),enabled:checked(f,'enabled'),affinity:checked(f,'affinity'),sort:Number(val(f,'sort'))||0,candidates}},f);});
   bindCandidateSearch();
 
 }
@@ -235,9 +333,18 @@ export function moveCandidate(from,to){
 
 export function preservePlayground(){
   const f=$('#playground-form');
-  if(f){
+  if(!f)return;
+  state.lastPlayModel=val(f,'model');
+  if(state.playProtocol==='systemone'){
+    state.playState=val(f,'state');
+    // 每次重绘前把编辑器里的题目读回 state，否则改完题型就丢了正在写的内容
+    state.playQuestions=$$('.question-card',f).map(card=>({
+      key:$('[name=q-key]',card)?.value||'',
+      type:$('[name=q-type]',card)?.value||'choice',
+      instructions:$('[name=q-instructions]',card)?.value||'',
+      criteria:$('[name=q-criteria]',card)?.value||''
+    }));
+  }else{
     state.lastPrompt=val(f,'prompt');
-    state.lastPlayModel=val(f,'model');
-
   }
 }
