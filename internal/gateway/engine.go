@@ -610,8 +610,13 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			if s.Cross {
 				co, er := decodeCompletion(ro, s.Model.Protocol)
 				if er != nil {
+					// 上游是通的，也确实返回了内容；问题出在响应里有跨协议表达不了的
+					// 部分（典型是带签名的推理）。必须如实说明，否则调用方只会去
+					// 排查根本没出问题的上游。
 					status = 502
-					runErr = er
+					runErr = fail("UPSTREAM_INCOMPATIBLE",
+						"上游响应包含无法跨协议转换的内容（"+er.Error()+"）；请对该模型改用其原生协议调用",
+						502)
 					return
 				}
 				data = []byte(raw(completionObject(co, p, s.Model.ID, id)))
@@ -638,6 +643,13 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		outStatus := status
 		if outStatus < 400 || outStatus >= 500 {
 			outStatus = 502
+		}
+		// 网关自己构造的错误带着准确的原因，不要被笼统的「上游请求失败」盖掉。
+		// 上游返回的错误正文仍然不转发。
+		var detailed *APIError
+		if errors.As(runErr, &detailed) {
+			protocolError(w, p, detailed.Status, detailed.Code, detailed.Message, id)
+			return
 		}
 		protocolError(w, p, outStatus, "UPSTREAM_ERROR", fmt.Sprintf("上游请求失败（HTTP %d）；请求未被自动重放。", status), id)
 		return

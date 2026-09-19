@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.5.1 · 2026-09-19
+
+- 跨协议转换失败不再报成「上游请求失败（HTTP 502）」。真实上游（OpenRouter 上的
+  DeepSeek、Nemotron 等）会在 OpenAI 响应里附带 reasoning 与 reasoning_details，
+  转成 Anthropic 格式需要 thinking 签名，凭空构造等于伪造推理，因此必须拒绝——
+  但原先的错误信息把人引向排查上游，而上游根本没出问题（记录里 input_tokens、
+  output_tokens、duration_ms 俱全）。现在返回 UPSTREAM_INCOMPATIBLE，
+  说明是响应内容无法跨协议转换，并提示改用该模型的原生协议。
+- 网关自己构造的错误不再被笼统的「上游请求失败」覆盖；上游错误正文仍不转发。
+
 ## 1.5.0 · 2026-09-19
 
 - 前端拆分为 core / ui / views / app 四个 ES Module，仍然没有构建步骤。

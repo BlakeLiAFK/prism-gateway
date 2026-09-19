@@ -54,3 +54,16 @@ Responses 仅提供创建响应 POST；**不提供** GET/DELETE response、cance
 - Anthropic Streaming：https://platform.claude.com/docs/en/build-with-claude/streaming
 - Anthropic Token Count：https://platform.claude.com/docs/en/api/messages/count_tokens
 - OpenAI Responses Streaming：https://developers.openai.com/api/docs/guides/streaming-responses
+
+
+## 上游附带推理内容时的跨协议行为
+
+部分上游会在 OpenAI 格式响应里附带 `reasoning` / `reasoning_details`（实测：
+OpenRouter 上的 DeepSeek、Nemotron 等）。
+
+- **原生协议调用**：响应原样透传，厂商字段完整保留，不受影响。
+- **跨协议调用**：返回 `UPSTREAM_INCOMPATIBLE`（HTTP 502）。Anthropic 的 thinking
+  块需要签名，网关无法凭空构造；静默丢弃推理内容同样不可接受。
+
+遇到这个错误时上游是正常的——请求记录里有完整的 token 用量。解决办法是对该模型
+使用它的原生协议，或改用不返回推理内容的模型。

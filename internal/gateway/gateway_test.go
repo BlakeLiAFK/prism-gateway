@@ -1814,3 +1814,71 @@ func TestUnsupportedFeaturesRejectedNotSilentlyDropped(t *testing.T) {
 		t.Fatal("unsupported 应产生错误")
 	}
 }
+
+// 真实上游（OpenRouter 上的 DeepSeek / Nemotron 等）会在 OpenAI 响应里附带
+// reasoning 与 reasoning_details。跨协议转换必须拒绝——Anthropic 的 thinking
+// 需要签名，凭空造一个就是伪造推理。但拒绝的理由必须说清楚，
+// 不能报成「上游请求失败」让人去查上游。
+func TestReasoningBearingResponseIsRejectedWithClearReason(t *testing.T) {
+	upstreamBody := `{"id":"gen-1","object":"chat.completion","model":"deepseek/deepseek-v4-flash-0731:free",
+	 "choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Hello!",
+	 "refusal":null,"reasoning":"We need answer. User says hi.",
+	 "reasoning_details":[{"type":"reasoning.text","text":"We need answer."}]}}],
+	 "usage":{"prompt_tokens":9,"completion_tokens":20}}`
+
+	var ro Object
+	if err := json.Unmarshal([]byte(upstreamBody), &ro); err != nil {
+		t.Fatal(err)
+	}
+	// 规范结构表达不了 reasoning，所以解码一定失败。
+	// 原生路径不走这里（响应原样透传），只有跨协议才会碰到。
+	if _, err := decodeCompletion(ro, "chat"); err == nil {
+		t.Fatal("含 reasoning 的响应不应被解码成规范结构")
+	}
+
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, upstreamBody)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+		c.Models = append(c.Models, modelFixture("m_reason", "chat"))
+	})
+	key := h.createKey(t)
+
+	// OpenAI 客户端调 chat 模型：原生路径，必须成功
+	r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions",
+		strings.NewReader(raw(Object{"model": "m_reason", "messages": []any{Object{"role": "user", "content": "hi"}}})))
+	r.Header.Set("Authorization", "Bearer "+key)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.a.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("原生协议应当成功: %d %s", w.Code, w.Body)
+	}
+
+	// Anthropic 客户端调同一个 chat 模型：跨协议，必须被拒绝且理由明确
+	r = httptest.NewRequest("POST", "http://localhost/anthropic/v1/messages",
+		strings.NewReader(raw(Object{"model": "m_reason", "max_tokens": 64,
+			"messages": []any{Object{"role": "user", "content": "hi"}}})))
+	r.Header.Set("x-api-key", key)
+	r.Header.Set("anthropic-version", "2023-06-01")
+	r.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	h.a.ServeHTTP(w, r)
+	if w.Code == 200 {
+		t.Fatal("跨协议不得静默丢弃 reasoning")
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "上游请求失败") {
+		t.Fatalf("错误把转换问题说成上游故障，会把人引向错误的排查方向: %s", body)
+	}
+	for _, want := range []string{"reasoning", "原生协议"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("错误信息应说明原因与出路，缺少 %q: %s", want, body)
+		}
+	}
+}
