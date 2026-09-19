@@ -173,6 +173,7 @@ curl http://127.0.0.1:8080/api.json \
 | `session_ttl_hours` | 1–720 | 会话亲和映射保留时长 |
 | `allow_estimated_count` | 布尔 | 原生计数不可用时是否返回本地估算 |
 | `listen` | `host:port` | 监听地址，保存后立即切换 |
+| `metrics_enabled` | 布尔 | 是否开放 `/metrics`，默认关闭 |
 | `log_level` | `debug` / `info` / `warn` / `error` | 默认 `info` |
 | `log_format` | `text` / `json` | 默认 `text`；接采集器时用 `json` |
 
@@ -221,6 +222,32 @@ curl http://127.0.0.1:8080/api.json \
 - 整体走一次事务与 `Validate`；任一项不合法则全部不生效。
 
 这是配置迁移与版本化手段，不是数据库备份。完整备份仍是停进程后复制整个 `data` 目录（含 `.key`）。
+
+## 备份
+
+`backup.create` 用 SQLite 的 `VACUUM INTO` 生成一致性快照，不需要停服务：
+
+```json
+{"ok":true,"data":{"path":"/data/backups/gateway-20260919-104414-257.db","bytes":122880,
+ "note":"快照不含 .key 主密钥；恢复上游凭证必须配套原主密钥"}}
+```
+
+路径由服务端决定（数据库同目录的 `backups/`），不接受客户端指定，避免路径穿越。同名文件不会被覆盖。`backup.list` 列出已有快照。
+
+快照里的上游凭证仍是密文。把它交给新实例时必须同时提供原来的 `.key`，否则启动会因无法解密而失败——这是设计行为，不是故障。
+
+## 指标
+
+```http
+GET /metrics
+Authorization: Bearer <管理员令牌>
+```
+
+Prometheus 文本格式。**默认关闭**，需在「系统设置」里开启（关闭时返回 404，不暴露端点存在）。开启后仍要求管理员令牌：指标含模型名、调用量与费用估算，属于内部经营信息。
+
+导出的指标：`prism_build_info`、`prism_uptime_seconds`、`prism_config_version`、`prism_active_requests`、`prism_requests_total`、`prism_request_duration_ms_total`、`prism_tokens_total`、`prism_cost_nano_total`。后四项按 `model` / `protocol` / `status` 分标签，统计窗口为近 30 天。
+
+不含 prompt、回答、密钥或会话内容。`prism_cost_nano_total` 是本地估算，不是供应商账单。
 
 ## 健康检查
 

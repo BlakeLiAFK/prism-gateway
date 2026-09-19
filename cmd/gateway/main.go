@@ -32,9 +32,9 @@ func fatal(v any) {
 }
 
 // flagGiven 区分「用户显式指定」与「仅仅是默认值」。
-func flagGiven(name string) bool {
+func flagGiven(fs *flag.FlagSet, name string) bool {
 	given := false
-	flag.Visit(func(f *flag.Flag) {
+	fs.Visit(func(f *flag.Flag) {
 		if f.Name == name {
 			given = true
 		}
@@ -89,7 +89,7 @@ func main() {
 	if addr == "" {
 		addr = "127.0.0.1:8080"
 	}
-	if flagGiven("listen") {
+	if flagGiven(flag.CommandLine, "listen") {
 		addr = *listen
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

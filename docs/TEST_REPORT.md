@@ -1,4 +1,4 @@
-# 实测报告 · v1.3.0
+# 实测报告 · v1.4.0
 
 此报告描述交付时实际执行的验证，不代表所有供应商、操作系统或客户端已经验证。
 
@@ -125,10 +125,59 @@ python3 scripts/smoke.py --binary ./bin/prism-gateway
   （`checkListen` 逻辑迁入 `internal/gateway` 并在那里获得更完整的测试，
   cmd 层比例因此下降，但被测逻辑总量增加）。
 
+## 4.4 v1.4.0 增量验证
+
+**Docker（本轮首次实机验证，此前列为未验证）**
+
+```bash
+docker build -t prism-gateway:test .      # 构建阶段内含 GOPROXY=off go test ./...
+docker run -d -p <port>:8080 prism-gateway:test
+```
+
+镜像在 Linux 容器内完成完整 Go 测试后构建成功。运行验证：`/healthz` 返回 200、
+Chat / Responses / Messages 三协议各返回 200、Anthropic SSE 收到 `message_stop` 终止帧、
+`docker restart` 后配置与模型清单经数据卷完整保留。
+
+**模糊测试**
+
+3 个目标各跑约 160 万次执行，未发现 panic 或死循环：
+
+| 目标 | 覆盖面 |
+| --- | --- |
+| `FuzzDecodeCanonical` | 三协议请求解码 + 交叉编码回三协议 |
+| `FuzzDecodeCompletion` | 三协议响应解码 + 用量提取（断言不出现负数用量） |
+| `FuzzReadSSE` | SSE 帧解析（断言帧数据必来自原始文本、帧数不异常） |
+
+**并发压力**
+
+`-race` 下 40 路并发打同一模型，验证同时在飞的上游请求不超过全局上限、
+全局与模型级并发计数在结束后完全归零（不归零会让网关逐渐「假满」直到重启）；
+另有 30 路并发验证 RPM 限制既不放过也不全拒。
+
+**覆盖率**
+
+| 包 | v1.3.0 | v1.4.0 |
+| --- | --- | --- |
+| `internal/gateway` | 67.1% | **80.0%** |
+| `internal/sqlite` | 63.2% | **77.8%** |
+| `internal/webui` | 0% | **63.6%** |
+| `cmd/gateway` | 13.1% | **19.0%** |
+| 总计 | — | **77.8%** |
+
+测试与模糊测试函数共 53 个。`scripts/cover.sh` 作为门禁纳入 `make check`，
+低于阈值即失败。
+
+**本轮修复的缺陷**
+
+会话亲和的 upsert 语句误用了另一张表名（`requests.requests`），整条语句编译失败，
+`sessions` 表自 v1.0.0 起一条记录都没写入过，亲和从未生效；错误被 `Exec` 丢弃因此无人察觉。
+已修复并补回归测试（首次写入、冲突分支计数累加、不同会话独立成条），
+同时给会话、审计、保留清理、Key 使用时间等后台写入补上错误日志。
+
 ## 5. 尚未验证 / 不在交付承诺内
 
-- 原生 Windows 构建；Windows 使用 WSL2 路线。(macOS arm64 已于 v1.1.0 验证)
-- Docker 镜像构建和运行；当前环境未提供 Docker。
+- 原生 Windows 构建；Windows 使用 WSL2 路线。
+  (macOS arm64 已于 v1.1.0 验证；Docker/Linux 已于 v1.4.0 验证)
 - 真实 OpenCode Go / OpenAI / Anthropic 凭证与付费云端调用。
 - 最新 Codex / Claude Code 全部功能的实机端到端验证，特别是签名推理、压缩、WebSocket、服务端工具或响应检索工作流。
 - 高并发生产压测、长时间稳定性、独立安全审计、所有第三方 SDK 版本。

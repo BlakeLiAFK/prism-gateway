@@ -13,8 +13,11 @@ import (
 	"os"
 	"path/filepath"
 	"prism-gateway/internal/sqlite"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Secrets and SQLite configuration intentionally have different trust boundaries.
@@ -217,6 +220,62 @@ func (s *Store) load() error {
 	applyLogSettings(c.Settings)
 	return nil
 }
+
+// Backup 用 SQLite 的 VACUUM INTO 生成一致性快照，不需要停进程，
+// 也不会漏掉 WAL 里尚未合并的内容。
+// 快照里的上游凭证仍是密文：恢复时必须配套原来的 .key，否则无法解密。
+func (s *Store) Backup() (string, int64, error) {
+	dbPath := strings.TrimSuffix(s.KeyPath, ".key")
+	dir := filepath.Join(filepath.Dir(dbPath), "backups")
+	if e := os.MkdirAll(dir, 0700); e != nil {
+		return "", 0, e
+	}
+	// 带毫秒，避免同一秒内连续备份撞名
+	stamp := strings.Replace(time.Now().Format("20060102-150405.000"), ".", "-", 1)
+	target := filepath.Join(dir, "gateway-"+stamp+".db")
+	if _, e := os.Stat(target); e == nil {
+		return "", 0, fail("BACKUP_EXISTS", "同名备份已存在，请稍后重试", 409)
+	}
+	// VACUUM INTO 拒绝写入已存在的文件，不会静默覆盖既有备份
+	if e := s.DB.Exec("VACUUM INTO ?", target); e != nil {
+		return "", 0, e
+	}
+	os.Chmod(target, 0600)
+	fi, e := os.Stat(target)
+	if e != nil {
+		return "", 0, e
+	}
+	return target, fi.Size(), nil
+}
+
+// Backups 列出已有快照，按时间倒序。
+func (s *Store) Backups() ([]any, error) {
+	dir := filepath.Join(filepath.Dir(strings.TrimSuffix(s.KeyPath, ".key")), "backups")
+	entries, e := os.ReadDir(dir)
+	if e != nil {
+		if os.IsNotExist(e) {
+			return []any{}, nil
+		}
+		return nil, e
+	}
+	out := []any{}
+	for _, v := range entries {
+		if v.IsDir() || !strings.HasSuffix(v.Name(), ".db") {
+			continue
+		}
+		fi, e := v.Info()
+		if e != nil {
+			continue
+		}
+		out = append(out, Object{"name": v.Name(), "path": filepath.Join(dir, v.Name()),
+			"bytes": fi.Size(), "modified_at": fi.ModTime().UnixMilli()})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return str(obj(out[i]), "name") > str(obj(out[j]), "name")
+	})
+	return out, nil
+}
+
 func (s *Store) Config() Config { return *s.snapshot.Load() }
 func cloneConfig(c Config) Config {
 	out := c

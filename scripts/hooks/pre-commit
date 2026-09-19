@@ -1,0 +1,8 @@
+#!/bin/sh
+# 提交前只做最便宜的检查：格式。完整质量门在 pre-push。
+unformatted=$(gofmt -l ./cmd ./internal 2>/dev/null)
+if [ -n "$unformatted" ]; then
+    echo "以下文件未格式化，运行 gofmt -w 后再提交：" >&2
+    echo "$unformatted" >&2
+    exit 1
+fi

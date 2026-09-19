@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"prism-gateway/internal/sqlite"
 	"runtime"
 	"strings"
@@ -48,6 +49,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/healthz" {
 		a.healthz(w, r)
+		return
+	}
+	if r.URL.Path == "/metrics" {
+		a.metrics(w, r)
 		return
 	}
 	p := "chat"
@@ -87,6 +92,33 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
 	a.UI.ServeHTTP(w, r)
+}
+
+// metrics 导出 Prometheus 文本。默认关闭；开启后仍要求管理员令牌，
+// 因为指标里含模型名、调用量与费用估算。
+func (a *App) metrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		w.Header().Set("Allow", "GET")
+		w.WriteHeader(405)
+		return
+	}
+	if !a.Store.Config().Settings.MetricsEnabled {
+		http.NotFound(w, r)
+		return
+	}
+	if !a.Store.CheckAdmin(bearer(r)) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="prism-metrics"`)
+		w.WriteHeader(401)
+		return
+	}
+	var buf bytes.Buffer
+	if err := a.writeMetrics(&buf); err != nil {
+		slog.Error("metrics export failed", "err", err)
+		w.WriteHeader(500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	w.Write(buf.Bytes())
 }
 
 // healthz 是唯一免鉴权端点，供反向代理与容器编排做存活探测。
@@ -589,6 +621,17 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		var result any
 		json.Unmarshal(rr.Body.Bytes(), &result)
 		return Object{"status": rr.Code, "duration_ms": now() - t, "headers": rr.Header(), "response": result}, nil
+	case "backup.create":
+		path, size, er := a.Store.Backup()
+		if er != nil {
+			return nil, er
+		}
+		a.audit("backup.create", filepath.Base(path))
+		slog.Info("配置备份已生成", "path", path, "bytes", size)
+		return Object{"path": path, "bytes": size,
+			"note": "快照不含 .key 主密钥；恢复上游凭证必须配套原主密钥"}, nil
+	case "backup.list":
+		return a.Store.Backups()
 	case "demo.enable":
 		return a.EnableDemo(version)
 	case "batch.read":
@@ -601,7 +644,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			v := obj(v)
 			act := str(v, "action")
 			switch act {
-			case "config.get", "config.export", "system.info", "dashboard.get", "usage.summary", "quota.list", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list":
+			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "usage.summary", "quota.list", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list":
 				data, er := a.call(ctx, act, obj(v["params"]))
 				if er != nil {
 					_, code, msg := errorParts(er)
@@ -668,7 +711,9 @@ func (a *App) importConfig(version int64, p Object) (any, error) {
 }
 
 func (a *App) audit(action, target string) {
-	a.Store.DB.Exec("INSERT INTO audit_logs VALUES (?,?,?,?,?)", randomID("audit_"), action, target, a.Store.Config().Version, now())
+	if err := a.Store.DB.Exec("INSERT INTO audit_logs VALUES (?,?,?,?,?)", randomID("audit_"), action, target, a.Store.Config().Version, now()); err != nil {
+		slog.Error("audit write failed", "action", action, "target", target, "err", err)
+	}
 }
 func (a *App) EnableDemo(version int64) (Config, error) {
 	return a.Store.Change(version, "demo.enable", "demo", func(c *Config) error {

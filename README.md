@@ -132,7 +132,7 @@ curl --fail-with-body -N http://127.0.0.1:8080/anthropic/v1/messages \
 | 三协议 | 原生转发；常用文本、图片引用、函数工具调用及结果的显式跨协议转换；SSE 转发和转换 |
 | 路由 | 显式模型、路由与别名；优先级 / 本地预算压力均衡；会话亲和；安全的 429/503 备用切换 |
 | 速率与预算 | 全局/模型并发、模型 RPM、冷却；滚动 5h/7d/30d 本地预算；在途预留与未知用量保留 |
-| 运维 | 免鉴权 `GET /healthz` 探活；`config.export` / `config.import` 无凭证配置迁移；slog 结构化日志与监听地址均在后台热调整 |
+| 运维 | 免鉴权 `GET /healthz` 探活；`GET /metrics` Prometheus 导出（默认关闭，需管理员令牌）；`config.export` / `config.import` 无凭证配置迁移；`backup.create` 在线一致性快照；slog 日志与监听地址后台热调整 |
 | 观测 | 元数据日志、协议模式、实际供应商/模型、用量、缓存 token、费用估算、后台同步任务与操作审计 |
 | 本地 Sandbox | 三协议普通响应和 SSE，可离线验证链路，始终标注为演示 |
 
@@ -165,7 +165,9 @@ data/
 
 **数据库不是整库加密。** 加密的是供应商凭证；主密钥旁置，是引导秘密，不是业务配置文件。拥有数据库与配套 `.key` 的人可以恢复上游凭证，因此整个 data 目录都必须保护。
 
-安全备份：停止网关进程，复制整个 data 目录，再启动。不要仅复制运行中的 `.db` 而忽略 WAL。升级前也先备份。主密钥丢失后无法恢复上游密钥，需要重新配置。
+在线备份：管理后台或 `backup.create` 用 SQLite 的 `VACUUM INTO` 生成一致性快照，**不需要停服务**，也不会漏掉 WAL 里尚未合并的内容。快照落在 `data/backups/`，**不含 `.key`**——恢复上游凭证必须配套原主密钥，请把 `.key` 单独备份到另一处。
+
+完整冷备份：停止网关进程，复制整个 data 目录，再启动。不要仅复制运行中的 `.db` 而忽略 WAL。升级前也先备份。主密钥丢失后无法恢复上游密钥，需要重新配置。
 
 另有 `config.export` / `config.import` 用于**配置迁移**：导出的 JSON 含供应商、模型、路由、别名和设置，**不含任何凭证**，可以安全放进配置仓库。导入时按 provider id 保留本机已有的加密凭证，新供应商需重新填写 Key。它替代不了上面的整目录备份——请求记录、用量、客户端 Key 都不在导出范围内。
 
@@ -185,6 +187,10 @@ make test                     # 自动化测试
 make race                     # Go 竞态检测
 make vet                      # Go 静态检查
 make ui                       # WebUI 浏览器冒烟（需 playwright，缺失自动跳过）
+make cover                    # 覆盖率门禁
+make lint                     # staticcheck（未安装则跳过）
+make hooks                    # 安装 pre-commit 与 pre-push 钩子
+make release                  # 可复现构建 + SHA256 校验和
 make hooks                    # 安装 pre-push 质量门（推送前自动跑 make check）
 python3 scripts/smoke.py --binary ./bin/prism-gateway  # 实际进程冒烟；先 make build
 ./prism-gateway --help
@@ -212,5 +218,8 @@ curl -sf http://127.0.0.1:8080/healthz   # 免鉴权存活探测；数据库异�
 - [安全、部署、备份](docs/SECURITY.md)
 - [实测记录与未验证范围](docs/TEST_REPORT.md)
 - [维护者约束](AGENTS.md)
+- [参与开发](CONTRIBUTING.md)
+- [安全策略](SECURITY.md)
+- [部署示例](deploy/README.md)
 
-版本 1.3.0 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。
+版本 1.4.0 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。

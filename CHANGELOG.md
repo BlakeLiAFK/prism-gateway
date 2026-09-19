@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.4.0 · 2026-09-19
+
+修复
+
+- 会话亲和记录从未写入：upsert 的冲突分支误用了另一张表的名字
+  （requests.requests），整条语句编译失败，而 Exec 的错误被丢弃，
+  因此该功能自 1.0.0 起静默失效。同时给会话、审计、保留清理、
+  Key 使用时间等后台写入补上错误日志，杜绝同类静默失败。
+- 保留清理只在 ticker 触发，运行不满一小时就重启的实例永远不会清理。
+  改为启动时先执行一次。
+
+新增
+
+- GET /metrics 导出 Prometheus 文本，默认关闭，开启后仍需管理员令牌。
+  只含聚合计数，不含 prompt、密钥或会话内容。
+- backup.create / backup.list：用 SQLite VACUUM INTO 生成一致性快照，
+  不需要停服务。快照不含 .key，恢复凭证仍需配套主密钥。
+- deploy/ 提供 systemd 单元（含沙箱加固）与 launchd agent 示例。
+- CONTRIBUTING.md 与 SECURITY.md。
+
+测试与工程化
+
+- 测试函数 33 → 53，新增 3 个模糊测试目标（协议解码、补全解码、SSE 解析），
+  各跑 160 万次执行无 crash。
+- 新增并发压力测试：验证全局并发上限、计数器完全释放、RPM 限制。
+- 覆盖率 internal/gateway 67.1% → 80.0%、sqlite 63.2% → 77.8%、
+  webui 0% → 63.6%、cmd 13.1% → 19.0%。
+- scripts/cover.sh 覆盖率门禁，低于阈值即失败，已纳入 make check。
+- staticcheck 接入 make lint（未安装则跳过），修掉它发现的无效赋值。
+- make release 产出可复现构建与 SHA256 校验和。
+- pre-commit 钩子检查 gofmt。
+- Docker 镜像完成实机构建与运行验证：三协议、SSE、重启持久化全部通过。
+
 ## 1.3.0 · 2026-09-19
 
 - 监听地址移入 SQLite，可在管理后台修改并立即生效。切换时先占用新地址，

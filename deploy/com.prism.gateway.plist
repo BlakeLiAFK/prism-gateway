@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd 示例。放到 ~/Library/LaunchAgents/com.prism.gateway.plist
+     加载：launchctl load -w ~/Library/LaunchAgents/com.prism.gateway.plist
+     卸载：launchctl unload -w ~/Library/LaunchAgents/com.prism.gateway.plist
+     把 USERNAME 换成实际用户名。监听地址与日志设置在管理后台改。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.prism.gateway</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/prism-gateway</string>
+        <string>--db</string>
+        <string>/Users/USERNAME/Library/Application Support/prism/gateway.db</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/Library/Application Support/prism</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/Library/Logs/prism-gateway.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/Library/Logs/prism-gateway.log</string>
+    <key>Umask</key>
+    <integer>63</integer>
+</dict>
+</plist>

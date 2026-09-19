@@ -155,7 +155,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		}
 	}
 	route, routeOK := c.route(resolved)
-	candidates := []Candidate{}
+	var candidates []Candidate
 	if routeOK {
 		if !route.Enabled {
 			return nil, nil, fail("MODEL_DISABLED", "路由已禁用", 404)
@@ -359,7 +359,11 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 		slog.Error("request accounting write failed", "request_id", id, "model", s.Model.ID, "err", err)
 	}
 	if session != "" && state == "success" {
-		e.store.DB.Exec(`INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET model_id=excluded.model_id,provider_id=excluded.provider_id,updated_at=excluded.updated_at,requests=requests.requests+1`, session, keyID, s.Model.ID, s.Provider.ID, now())
+		// 冲突分支里的列要用本表限定。曾经误写成 requests.requests（另一张表），
+		// 导致整条语句编译失败、会话亲和记录一条都没写进去，而错误被丢弃因此无人察觉。
+		if e := e.store.DB.Exec(`INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET model_id=excluded.model_id,provider_id=excluded.provider_id,updated_at=excluded.updated_at,requests=sessions.requests+1`, session, keyID, s.Model.ID, s.Provider.ID, now()); e != nil {
+			slog.Error("session affinity write failed", "request_id", id, "err", e)
+		}
 	}
 }
 func (e *Engine) cooldown(id, retry string) {
@@ -728,7 +732,9 @@ func (e *Engine) Authenticate(r *http.Request) (Principal, error) {
 	if err = json.Unmarshal([]byte(rows[0].String("allowed")), &p.Allowed); err != nil {
 		return Principal{}, err
 	}
-	e.store.DB.Exec("UPDATE api_keys SET last_used=? WHERE id=?", now(), p.ID)
+	if err := e.store.DB.Exec("UPDATE api_keys SET last_used=? WHERE id=?", now(), p.ID); err != nil {
+		slog.Error("api key last_used update failed", "key_id", p.ID, "err", err)
+	}
 	return p, nil
 }
 func (e *Engine) Models(w http.ResponseWriter, r *http.Request, p string, key Principal) {
@@ -790,18 +796,34 @@ func (e *Engine) Models(w http.ResponseWriter, r *http.Request, p string, key Pr
 }
 
 // Only metadata is returned; prompts, generated text, and credentials are not stored.
+// Prune 按保留策略清理过期数据。启动时先跑一次：只有 ticker 的话，
+// 运行不满一个周期就重启的实例永远不会清理，积压会一直留着。
 func (e *Engine) Prune(ctx context.Context) {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
+	e.pruneOnce()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			days := e.store.Config().Settings.RetentionDays
-			e.store.DB.Exec("DELETE FROM requests WHERE started_at<?", now()-int64(days)*86400000)
-			e.store.DB.Exec("DELETE FROM admin_sessions WHERE expires_at<?", now())
-			e.store.DB.Exec("DELETE FROM sessions WHERE updated_at<?", now()-int64(e.store.Config().Settings.SessionTTLHours)*3600000)
+			e.pruneOnce()
+		}
+	}
+}
+
+func (e *Engine) pruneOnce() {
+	s := e.store.Config().Settings
+	for _, job := range []struct {
+		name, query string
+		cutoff      int64
+	}{
+		{"requests", "DELETE FROM requests WHERE started_at<?", now() - int64(s.RetentionDays)*86400000},
+		{"admin_sessions", "DELETE FROM admin_sessions WHERE expires_at<?", now()},
+		{"sessions", "DELETE FROM sessions WHERE updated_at<?", now() - int64(s.SessionTTLHours)*3600000},
+	} {
+		if err := e.store.DB.Exec(job.query, job.cutoff); err != nil {
+			slog.Error("retention cleanup failed", "table", job.name, "err", err)
 		}
 	}
 }

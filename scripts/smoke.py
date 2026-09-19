@@ -170,6 +170,26 @@ def main():
             with urllib.request.urlopen(base + '/healthz', timeout=5) as response:
                 assert json.loads(response.read())['ok'] is True
             results.append('listen hot switch + remote guard')
+            status, _, _ = request('/metrics', headers={'Authorization': 'Bearer ' + token})
+            assert status == 404, '指标端点默认必须关闭'
+            rpc('settings.update', {'version': rpc('config.get')['version'], 'settings': {'metrics_enabled': True}})
+            status, _, _ = request('/metrics')
+            assert status == 401, '开启后匿名抓取必须被拒绝'
+            status, headers, body = request('/metrics', headers={'Authorization': 'Bearer ' + token})
+            assert status == 200 and 'text/plain' in headers['Content-Type']
+            text = body.decode()
+            assert 'prism_build_info{version=' in text and 'prism_requests_total{' in text
+            assert token not in text and key not in text
+            results.append('prometheus metrics gate')
+            snapshot = rpc('backup.create')
+            assert snapshot['bytes'] > 0 and os.path.isfile(snapshot['path'])
+            assert len(rpc('backup.list')) == 1
+            with open(snapshot['path'], 'rb') as handle:
+                content = handle.read()
+            # 库里只有前缀（用于界面识别）与 SHA-256，完整密钥不可恢复
+            assert key.encode() not in content, '备份中出现了完整调用密钥'
+            assert token.encode() not in content, '备份中出现了管理员令牌'
+            results.append('online backup snapshot')
             info = rpc('system.info')
             print(json.dumps({'passed': results, 'runtime': info}, ensure_ascii=False, indent=2))
         finally:

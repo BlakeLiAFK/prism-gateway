@@ -19,4 +19,9 @@ This is a Go + SQLite + embedded WebUI gateway. Preserve these invariants:
 12. Startup banner output is terminal UI, not log stream. Never route the admin token through slog.
     Management error details may echo submitted configuration, so keep them at DEBUG level.
 
+13. Every background write must check its error. A silent Exec failure once left session
+    affinity dead for an entire release without anyone noticing.
+14. `make check` is the only quality gate; keep it green and do not lower the coverage
+    thresholds in scripts/cover.sh without saying why in the commit message.
+
 No third-party Go modules are currently required. Target Go >=1.23. Native Windows is not supported; use WSL2. Tests must not require real provider API keys or the Internet.

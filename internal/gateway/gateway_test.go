@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,12 +13,14 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"prism-gateway/internal/sqlite"
 	"prism-gateway/internal/webui"
 )
 
@@ -64,6 +67,15 @@ func (h *harness) change(t *testing.T, fn func(*Config)) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+func (h *harness) createKey(t *testing.T) string {
+	t.Helper()
+	_, o := h.rpc(t, "apikey.create", Object{"name": "test", "allowed": []any{}}, h.token)
+	k := str(obj(o["data"]), "key")
+	if k == "" {
+		t.Fatalf("创建调用 Key 失败: %v", o)
+	}
+	return k
 }
 func modelFixture(id, proto string) Model {
 	return Model{ID: id, ProviderID: "p_test", Upstream: "upstream-" + id, Name: id, Protocol: proto, Enabled: true, Tools: true, Vision: true, Context: 128000, MaxOutput: 4096, Concurrency: 8}
@@ -1069,5 +1081,736 @@ func TestSameListenNormalisesWildcards(t *testing.T) {
 		if sameListen(p[0], p[1]) {
 			t.Fatalf("%q 与 %q 不应视为同一监听点", p[0], p[1])
 		}
+	}
+}
+
+func TestMetricsDisabledByDefaultAndRequiresAdmin(t *testing.T) {
+	h := newHarness(t)
+	get := func(token string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("GET", "http://localhost/metrics", nil)
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		h.a.ServeHTTP(w, r)
+		return w
+	}
+	// 默认关闭：连端点存在这件事都不暴露
+	if w := get(h.token); w.Code != 404 {
+		t.Fatalf("默认应为 404，得到 %d", w.Code)
+	}
+	if _, err := h.s.Change(h.s.Config().Version, "test", "test", func(c *Config) error {
+		c.Settings.MetricsEnabled = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if w := get(""); w.Code != 401 {
+		t.Fatalf("开启后匿名抓取应 401，得到 %d", w.Code)
+	}
+	if w := get("prism_admin_wrong_token_value_padding"); w.Code != 401 {
+		t.Fatalf("错误令牌应 401，得到 %d", w.Code)
+	}
+	w := get(h.token)
+	if w.Code != 200 {
+		t.Fatalf("管理员抓取应 200，得到 %d", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(w.Header().Get("Content-Type"), "text/plain") {
+		t.Fatalf("Content-Type 应为 Prometheus 文本: %s", w.Header().Get("Content-Type"))
+	}
+	for _, want := range []string{
+		"# TYPE prism_build_info gauge",
+		`prism_build_info{version="` + Version + `"} 1`,
+		"# TYPE prism_uptime_seconds gauge",
+		"# TYPE prism_requests_total counter",
+		"prism_config_version",
+		"prism_active_requests",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("指标缺少 %q\n%s", want, body)
+		}
+	}
+	// 每个非注释行必须是 name{labels} value 形式
+	for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !regexp.MustCompile(`^[a-z_]+(\{[^}]*\})? -?\d+$`).MatchString(line) {
+			t.Fatalf("非法指标行: %q", line)
+		}
+	}
+	if strings.Contains(body, h.token) {
+		t.Fatal("指标中不得出现管理员令牌")
+	}
+}
+
+func TestMetricsCountsRealRequests(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":3}}`)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Settings.MetricsEnabled = true
+		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+		c.Models = append(c.Models, modelFixture("m_metric", "chat"))
+	})
+	key := h.createKey(t)
+	r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions",
+		strings.NewReader(raw(Object{"model": "m_metric", "messages": []any{Object{"role": "user", "content": "hi"}}})))
+	r.Header.Set("Authorization", "Bearer "+key)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.a.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("上游调用失败: %d %s", w.Code, w.Body)
+	}
+	mr := httptest.NewRequest("GET", "http://localhost/metrics", nil)
+	mr.Header.Set("Authorization", "Bearer "+h.token)
+	mw := httptest.NewRecorder()
+	h.a.ServeHTTP(mw, mr)
+	body := mw.Body.String()
+	if !strings.Contains(body, `prism_requests_total{model="m_metric",protocol="chat",status="success"} 1`) {
+		t.Fatalf("请求计数缺失:\n%s", body)
+	}
+	if !strings.Contains(body, `kind="input"} 7`) || !strings.Contains(body, `kind="output"} 3`) {
+		t.Fatalf("token 计数缺失:\n%s", body)
+	}
+}
+
+func TestBackupProducesUsableSnapshot(t *testing.T) {
+	h := newHarness(t)
+	const secret = "sk-backup-secret"
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "auto",
+			BaseURL: "https://upstream.example.com/v1", Enabled: true, TimeoutSec: 30, Secret: secret})
+		c.Models = append(c.Models, modelFixture("m_backup", "chat"))
+	})
+	w, o := h.rpc(t, "backup.create", Object{}, h.token)
+	if w.Code != 200 || o["ok"] != true {
+		t.Fatalf("备份失败: %s", w.Body)
+	}
+	data := obj(o["data"])
+	path := str(data, "path")
+	if num(data, "bytes") <= 0 {
+		t.Fatal("备份文件为空")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("备份文件不可读: %v", err)
+	}
+	if strings.Contains(string(raw), secret) {
+		t.Fatal("备份文件中出现了上游凭证明文")
+	}
+
+	// 没有配套 .key 时必须打不开：这正是「快照不含主密钥」的含义
+	if _, err = OpenStore(path); err == nil {
+		t.Fatal("缺少配套 .key 时不应能解密上游凭证")
+	}
+	// 配上原主密钥后，快照就是一个可直接使用的数据库
+	master, err := os.ReadFile(h.s.KeyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(path+".key", master, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := OpenStore(path)
+	if err != nil {
+		t.Fatalf("配套 .key 后仍无法打开备份: %v", err)
+	}
+	defer restored.DB.Close()
+	cfg := restored.Config()
+	if len(cfg.Models) != 1 || cfg.Models[0].ID != "m_backup" {
+		t.Fatalf("备份内容不完整: %+v", cfg.Models)
+	}
+	if p, ok := cfg.provider("p_test"); !ok || p.Secret != secret {
+		t.Fatal("配套主密钥后应能还原上游凭证")
+	}
+
+	_, o = h.rpc(t, "backup.list", Object{}, h.token)
+	list := arr(o["data"])
+	if len(list) != 1 || str(obj(list[0]), "path") != path {
+		t.Fatalf("备份列表不正确: %v", list)
+	}
+}
+
+func TestReadOnlyViewsAcrossWorkspace(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2}}`)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+		m := modelFixture("m_view", "chat")
+		m.PricingSet, m.InputPrice, m.OutputPrice = true, 0.000001, 0.000002
+		m.Limit5h, m.Limit7d, m.Limit30d = 1, 2, 3
+		c.Models = append(c.Models, m)
+	})
+	key := h.createKey(t)
+	r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions",
+		strings.NewReader(raw(Object{"model": "m_view", "messages": []any{Object{"role": "user", "content": "hi"}}})))
+	r.Header.Set("Authorization", "Bearer "+key)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Prism-Session", "view-session")
+	w := httptest.NewRecorder()
+	h.a.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("调用失败: %d %s", w.Code, w.Body)
+	}
+
+	dash := obj(mustData(t, h, "dashboard.get"))
+	summary := obj(dash["summary"])
+	if int64(num(summary, "requests")) != 1 {
+		t.Fatalf("dashboard 请求数不对: %v", summary)
+	}
+	if arr(dash["series"]) == nil && arr(dash["timeseries"]) == nil {
+		t.Fatalf("dashboard 缺少时间序列: %v", dash)
+	}
+
+	_, lo := h.rpc(t, "request.list", Object{}, h.token)
+	list := lo["data"]
+	rows := arr(obj(list)["items"])
+	if rows == nil {
+		rows = arr(list)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("请求记录应有 1 条: %v", list)
+	}
+	id := str(obj(rows[0]), "id")
+	_, o := h.rpc(t, "request.get", Object{"id": id}, h.token)
+	if o["ok"] != true {
+		t.Fatalf("request.get 失败: %v", o)
+	}
+
+	_, qo := h.rpc(t, "quota.list", Object{}, h.token)
+	quotas := arr(qo["data"])
+	if len(quotas) != 1 || str(obj(quotas[0]), "mode") != "local_rolling_estimate" {
+		t.Fatalf("额度视图不正确: %v", quotas)
+	}
+	info := obj(mustData(t, h, "system.info"))
+	if obj(info["runtime"]) == nil {
+		t.Fatalf("system.info 缺少运行时健康数据: %v", info)
+	}
+	_, so := h.rpc(t, "session.list", Object{}, h.token)
+	if len(arr(so["data"])) != 1 {
+		t.Fatal("会话亲和记录缺失")
+	}
+	for _, action := range []string{"audit.list", "job.list", "usage.summary", "usage.timeseries"} {
+		if _, o := h.rpc(t, action, Object{}, h.token); o["ok"] != true {
+			t.Fatalf("%s 失败: %v", action, o)
+		}
+	}
+}
+
+func TestProviderTestAndModelSync(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/models") {
+			w.WriteHeader(404)
+			return
+		}
+		io.WriteString(w, `{"data":[{"id":"minimax-m3"},{"id":"grok-4.6"},{"id":"plain-model"}]}`)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_sync", Name: "Sync", Kind: "opencode", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+	})
+	if _, o := h.rpc(t, "provider.test", Object{"id": "p_sync"}, h.token); o["ok"] != true {
+		t.Fatalf("连接测试失败: %v", o)
+	}
+	_, o := h.rpc(t, "provider.sync_models", Object{"id": "p_sync"}, h.token)
+	if o["ok"] != true {
+		t.Fatalf("同步任务创建失败: %v", o)
+	}
+	jobID := str(obj(o["data"]), "job_id")
+	if jobID == "" {
+		t.Fatalf("未返回任务 id: %v", o)
+	}
+	var done Object
+	for i := 0; i < 200; i++ {
+		_, jo := h.rpc(t, "job.get", Object{"id": jobID}, h.token)
+		done = obj(jo["data"])
+		if st := str(done, "status"); st != "queued" && st != "running" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if str(done, "status") != "succeeded" {
+		t.Fatalf("同步任务未成功: %v", done)
+	}
+	cfg := h.s.Config()
+	if len(cfg.Models) != 3 {
+		t.Fatalf("应同步出 3 个模型: %d", len(cfg.Models))
+	}
+	for _, m := range cfg.Models {
+		if m.Enabled {
+			t.Fatalf("同步的模型 %s 必须默认禁用", m.ID)
+		}
+		if m.PricingSet {
+			t.Fatalf("同步不得擅自认定 %s 的计价", m.ID)
+		}
+	}
+	byUpstream := map[string]string{}
+	for _, m := range cfg.Models {
+		byUpstream[m.Upstream] = m.Protocol
+	}
+	if byUpstream["minimax-m3"] != "messages" {
+		t.Fatalf("内置映射应把 minimax-m3 识别为 messages: %v", byUpstream)
+	}
+	if byUpstream["grok-4.6"] != "responses" {
+		t.Fatalf("内置映射应把 grok-4.6 识别为 responses: %v", byUpstream)
+	}
+	if byUpstream["plain-model"] != "chat" {
+		t.Fatalf("未知型号应落到 chat: %v", byUpstream)
+	}
+}
+
+func TestSmallHelpersAndEmbeddedUI(t *testing.T) {
+	if clamp(5, 1, 3) != 3 || clamp(0, 1, 3) != 1 || clamp(2, 1, 3) != 2 {
+		t.Fatal("clamp 边界不正确")
+	}
+	err := fail("X", "boom", 400)
+	if err.Error() != "boom" {
+		t.Fatalf("APIError.Error 应返回消息: %q", err.Error())
+	}
+	if !Loopback("127.0.0.1:1") || Loopback("8.8.8.8:1") {
+		t.Fatal("Loopback 判定不正确")
+	}
+	if sqlite.Version() == "" {
+		t.Fatal("SQLite 版本不应为空")
+	}
+	row := sqlite.Row{"a": int64(3), "b": 1.5}
+	if row.Float("a") != 3 || row.Float("b") != 1.5 || row.Float("missing") != 0 {
+		t.Fatal("Row.Float 转换不正确")
+	}
+	w := httptest.NewRecorder()
+	webui.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://localhost/assets/app.js", nil))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "function settings") {
+		t.Fatalf("内嵌前端资源不可用: %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	webui.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://localhost/no-such-asset.js", nil))
+	if w.Code == 200 {
+		t.Fatal("不存在的资源不应返回 200")
+	}
+}
+
+// 会话亲和曾因 upsert 语句里写错表名而整条失败，且错误被丢弃，
+// 结果 sessions 表一条记录都没有、亲和从未生效。这个测试锁住该路径。
+func TestSessionAffinityActuallyPersists(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+		c.Models = append(c.Models, modelFixture("m_aff", "chat"))
+	})
+	key := h.createKey(t)
+	call := func() {
+		t.Helper()
+		r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions",
+			strings.NewReader(raw(Object{"model": "m_aff", "messages": []any{Object{"role": "user", "content": "hi"}}})))
+		r.Header.Set("Authorization", "Bearer "+key)
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("X-Prism-Session", "same-conversation")
+		w := httptest.NewRecorder()
+		h.a.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("调用失败: %d %s", w.Code, w.Body)
+		}
+	}
+	call()
+	rows, err := h.s.DB.Query("SELECT id,model_id,requests FROM sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("第一次调用后应有 1 条会话记录，实得 %d", len(rows))
+	}
+	if rows[0].String("model_id") != "m_aff" || rows[0].Int("requests") != 1 {
+		t.Fatalf("会话记录内容不对: %v", rows[0])
+	}
+	// 同一会话再调一次，走 ON CONFLICT 分支
+	call()
+	rows, _ = h.s.DB.Query("SELECT id,requests FROM sessions")
+	if len(rows) != 1 {
+		t.Fatalf("同一会话不应新增记录，实得 %d 条", len(rows))
+	}
+	if rows[0].Int("requests") != 2 {
+		t.Fatalf("冲突分支应把计数累加到 2，实得 %d", rows[0].Int("requests"))
+	}
+	// 不同会话独立成条
+	r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions",
+		strings.NewReader(raw(Object{"model": "m_aff", "messages": []any{Object{"role": "user", "content": "hi"}}})))
+	r.Header.Set("Authorization", "Bearer "+key)
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("X-Prism-Session", "other-conversation")
+	h.a.ServeHTTP(httptest.NewRecorder(), r)
+	rows, _ = h.s.DB.Query("SELECT id FROM sessions")
+	if len(rows) != 2 {
+		t.Fatalf("不同会话应各自成条，实得 %d", len(rows))
+	}
+}
+
+func TestConcurrencyCeilingAndCounterRelease(t *testing.T) {
+	h := newHarness(t)
+	var inflight, peak int64
+	var mu sync.Mutex
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cur := atomic.AddInt64(&inflight, 1)
+		mu.Lock()
+		if cur > peak {
+			peak = cur
+		}
+		mu.Unlock()
+		time.Sleep(15 * time.Millisecond)
+		atomic.AddInt64(&inflight, -1)
+		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	const limit = 4
+	h.change(t, func(c *Config) {
+		c.Settings.GlobalConcurrency = limit
+		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+		m := modelFixture("m_conc", "chat")
+		m.Concurrency = 128
+		c.Models = append(c.Models, m)
+	})
+	key := h.createKey(t)
+
+	const callers = 40
+	var ok, limited, other int64
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions",
+				strings.NewReader(raw(Object{"model": "m_conc", "messages": []any{Object{"role": "user", "content": "hi"}}})))
+			r.Header.Set("Authorization", "Bearer "+key)
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.a.ServeHTTP(w, r)
+			switch {
+			case w.Code == 200:
+				atomic.AddInt64(&ok, 1)
+			case w.Code == 429:
+				atomic.AddInt64(&limited, 1)
+			default:
+				atomic.AddInt64(&other, 1)
+			}
+		}()
+	}
+	wg.Wait()
+
+	if other != 0 {
+		t.Fatalf("并发下出现了非预期状态码，%d 次", other)
+	}
+	if ok+limited != callers {
+		t.Fatalf("请求总数对不上: %d + %d != %d", ok, limited, callers)
+	}
+	if ok == 0 {
+		t.Fatal("不应全部被限流")
+	}
+	mu.Lock()
+	gotPeak := peak
+	mu.Unlock()
+	if gotPeak > limit {
+		t.Fatalf("同时在飞的上游请求 %d 超过全局上限 %d", gotPeak, limit)
+	}
+	// 计数器必须完全释放，否则网关会逐渐「假满」直到重启
+	health := h.a.Engine.Health()
+	if active, _ := health["active"].(int); active != 0 {
+		t.Fatalf("全局并发计数未归零: %v", health["active"])
+	}
+	models := obj(health["models"])
+	if m := obj(models["m_conc"]); m != nil {
+		if active, _ := m["active"].(int); active != 0 {
+			t.Fatalf("模型并发计数未归零: %v", m["active"])
+		}
+	}
+}
+
+func TestRPMLimitUnderConcurrency(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	const rpm = 5
+	h.change(t, func(c *Config) {
+		c.Settings.GlobalConcurrency = 64
+		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+		m := modelFixture("m_rpm", "chat")
+		m.RPM, m.Concurrency = rpm, 64
+		c.Models = append(c.Models, m)
+	})
+	key := h.createKey(t)
+	var ok int64
+	var wg sync.WaitGroup
+	for i := 0; i < 30; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions",
+				strings.NewReader(raw(Object{"model": "m_rpm", "messages": []any{Object{"role": "user", "content": "hi"}}})))
+			r.Header.Set("Authorization", "Bearer "+key)
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			h.a.ServeHTTP(w, r)
+			if w.Code == 200 {
+				atomic.AddInt64(&ok, 1)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok > rpm {
+		t.Fatalf("放行 %d 次，超过 RPM 上限 %d", ok, rpm)
+	}
+	if ok == 0 {
+		t.Fatal("RPM 限制不应把所有请求都挡掉")
+	}
+}
+
+func TestManagementMutationsAndDependencyGuards(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	ver := func() int64 { return h.s.Config().Version }
+	call := func(action string, p Object) Object {
+		t.Helper()
+		p["version"] = ver()
+		w, o := h.rpc(t, action, p, h.token)
+		if w.Code != 200 || o["ok"] != true {
+			t.Fatalf("%s 失败: %s", action, w.Body)
+		}
+		return obj(o["data"])
+	}
+	reject := func(action string, p Object, wantCode string) {
+		t.Helper()
+		p["version"] = ver()
+		_, o := h.rpc(t, action, p, h.token)
+		if o["ok"] != false {
+			t.Fatalf("%s 应被拒绝: %v", action, o)
+		}
+		if got := str(obj(o["error"]), "code"); wantCode != "" && got != wantCode {
+			t.Fatalf("%s 错误码为 %s，期望 %s", action, got, wantCode)
+		}
+	}
+
+	call("provider.save", Object{"provider": Object{"name": "Up", "kind": "custom", "auth": "none",
+		"base_url": upstream.URL, "allow_private": true, "enabled": true, "timeout_sec": 30, "api_key": "sk-x"}})
+	pid := h.s.Config().Providers[0].ID
+	call("model.save", Object{"model": Object{"id": "m_one", "provider_id": pid, "upstream": "up-one",
+		"name": "One", "protocol": "chat", "enabled": true, "context_window": 128000,
+		"max_output_tokens": 4096, "concurrency": 4}})
+	call("model.save", Object{"model": Object{"id": "m_two", "provider_id": pid, "upstream": "up-two",
+		"name": "Two", "protocol": "chat", "enabled": true, "context_window": 128000,
+		"max_output_tokens": 4096, "concurrency": 4}})
+	call("route.save", Object{"route": Object{"id": "r_auto", "name": "Auto", "strategy": "priority",
+		"enabled": true, "affinity": true, "candidates": []any{
+			Object{"model_id": "m_one", "weight": 10}, Object{"model_id": "m_two", "weight": 5}}}})
+	call("alias.save", Object{"alias": Object{"id": "a_auto", "target": "r_auto", "enabled": true}})
+
+	// 静态模拟选择不产生真实调用
+	sim := call("route.test", Object{"id": "r_auto"})
+	if sim == nil {
+		t.Fatal("route.test 应返回模拟结果")
+	}
+	// 连接测试走真实 HTTP，但不消耗模型额度
+	call("provider.test", Object{"id": pid})
+
+	// 依赖仍在时不允许删除，避免留下悬空引用
+	reject("provider.delete", Object{"id": pid}, "")
+	reject("model.delete", Object{"id": "m_one"}, "")
+	reject("alias.save", Object{"alias": Object{"id": "a_bad", "target": "nowhere", "enabled": true}}, "INVALID_CONFIG")
+	reject("route.save", Object{"route": Object{"id": "r_bad", "name": "B", "strategy": "priority",
+		"enabled": true, "candidates": []any{Object{"model_id": "ghost", "weight": 1}}}}, "INVALID_CONFIG")
+	reject("model.save", Object{"model": Object{"id": "m_bad", "provider_id": "ghost", "upstream": "x",
+		"protocol": "chat", "context_window": 1000, "max_output_tokens": 100, "concurrency": 1}}, "INVALID_CONFIG")
+
+	// 按依赖顺序拆除
+	call("alias.delete", Object{"id": "a_auto"})
+	call("route.delete", Object{"id": "r_auto"})
+	call("model.delete", Object{"id": "m_one"})
+	call("model.delete", Object{"id": "m_two"})
+	call("provider.delete", Object{"id": pid})
+	cfg := h.s.Config()
+	if len(cfg.Providers)+len(cfg.Models)+len(cfg.Routes)+len(cfg.Aliases) != 0 {
+		t.Fatalf("对象未清空: %+v", cfg)
+	}
+
+	// 未知 action 与不存在的对象
+	reject("no.such.action", Object{}, "UNKNOWN_ACTION")
+	reject("model.delete", Object{"id": "ghost"}, "")
+	reject("job.get", Object{"id": "ghost"}, "NOT_FOUND")
+	reject("provider.test", Object{"id": "ghost"}, "NOT_FOUND")
+}
+
+func TestPlaygroundAndDemoLifecycle(t *testing.T) {
+	h := newHarness(t)
+	w, o := h.rpc(t, "demo.enable", Object{"version": h.s.Config().Version}, h.token)
+	if w.Code != 200 || o["ok"] != true {
+		t.Fatalf("启用演示失败: %s", w.Body)
+	}
+	if len(h.s.Config().Models) != 3 {
+		t.Fatalf("演示应带来 3 个模型: %d", len(h.s.Config().Models))
+	}
+	// 重复启用是幂等的
+	h.rpc(t, "demo.enable", Object{"version": h.s.Config().Version}, h.token)
+	if len(h.s.Config().Models) != 3 {
+		t.Fatal("重复启用演示不应重复添加模型")
+	}
+	for _, proto := range []string{"chat", "messages", "responses"} {
+		_, o := h.rpc(t, "playground.run", Object{
+			"model": "demo-" + proto, "protocol": proto, "prompt": "hello", "stream": false,
+		}, h.token)
+		if o["ok"] != true {
+			t.Fatalf("调试台 %s 失败: %v", proto, o)
+		}
+		body := raw(o["data"])
+		if !strings.Contains(body, "本地演示") && !strings.Contains(body, "DEMO") && !strings.Contains(body, "demo") {
+			t.Fatalf("调试台结果未标注演示来源: %s", body)
+		}
+	}
+	// 演示 Provider 不支持同步模型
+	_, o = h.rpc(t, "provider.sync_models", Object{"id": "local-demo"}, h.token)
+	if str(obj(o["error"]), "code") != "NOT_SUPPORTED" {
+		t.Fatalf("演示供应商不应允许同步: %v", o)
+	}
+	// 解绑会话是幂等操作：重复调用或对不存在的 id 调用都不报错
+	_, o = h.rpc(t, "session.delete", Object{"id": "ses_nonexistent"}, h.token)
+	if o["ok"] != true {
+		t.Fatalf("解绑会话应幂等: %v", o)
+	}
+}
+
+func TestPruneRemovesExpiredRows(t *testing.T) {
+	h := newHarness(t)
+	old := now() - 400*86400000
+	if err := h.s.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,reason) VALUES ('r_old','p','k','m','m','p','chat','chat','s','success',?,'')`, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.Exec(`INSERT INTO admin_sessions VALUES ('dead','csrf',?)`, now()-1000); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.s.DB.Exec(`INSERT INTO sessions VALUES ('ses_old','k','m','p',?,1)`, old); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go h.a.Engine.Prune(ctx)
+	defer cancel()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		req, _ := h.s.DB.Query("SELECT COUNT(*) n FROM requests")
+		adm, _ := h.s.DB.Query("SELECT COUNT(*) n FROM admin_sessions")
+		ses, _ := h.s.DB.Query("SELECT COUNT(*) n FROM sessions")
+		if req[0].Int("n") == 0 && adm[0].Int("n") == 0 && ses[0].Int("n") == 0 {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("过期记录未在预期时间内清理")
+}
+
+func TestImageAndBlockConversionAcrossProtocols(t *testing.T) {
+	const png = "data:image/png;base64,iVBORw0KGgo="
+	// 三种协议各自的图片表达，解码后应落到同一套规范结构
+	cases := []struct{ protocol, body string }{
+		{"chat", raw(Object{"model": "m", "messages": []any{Object{"role": "user", "content": []any{
+			Object{"type": "text", "text": "看图"},
+			Object{"type": "image_url", "image_url": Object{"url": png}}}}}})},
+		{"messages", raw(Object{"model": "m", "max_tokens": 16, "messages": []any{Object{"role": "user", "content": []any{
+			Object{"type": "text", "text": "看图"},
+			Object{"type": "image", "source": Object{"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="}}}}}})},
+		{"responses", raw(Object{"model": "m", "max_output_tokens": 16, "input": []any{Object{"role": "user", "content": []any{
+			Object{"type": "input_text", "text": "看图"},
+			Object{"type": "input_image", "image_url": png}}}}})},
+	}
+	for _, c := range cases {
+		var o Object
+		if err := json.Unmarshal([]byte(c.body), &o); err != nil {
+			t.Fatal(err)
+		}
+		canon, err := decodeCanonical(o, c.protocol)
+		if err != nil {
+			t.Fatalf("%s 图片请求解码失败: %v", c.protocol, err)
+		}
+		// 转换到另外两种协议都必须保留文本与图片两个块
+		for _, target := range []string{"chat", "messages", "responses"} {
+			out, err := encodeCanonical(canon, target, "m")
+			if err != nil {
+				t.Fatalf("%s -> %s 转换失败: %v", c.protocol, target, err)
+			}
+			s := raw(out)
+			if !strings.Contains(s, "看图") {
+				t.Fatalf("%s -> %s 丢失文本: %s", c.protocol, target, s)
+			}
+			if !strings.Contains(s, "iVBORw0KGgo=") {
+				t.Fatalf("%s -> %s 丢失图片数据: %s", c.protocol, target, s)
+			}
+		}
+	}
+	// 远程图片 URL 在 Anthropic 侧是 url 源，不应被伪造成 base64
+	if src, err := imageSource("https://example.com/a.png"); err != nil {
+		t.Fatalf("远程图片应被接受: %v", err)
+	} else if str(src, "type") != "url" {
+		t.Fatalf("远程图片应保持 url 源: %v", src)
+	}
+	if src, err := imageSource(png); err != nil {
+		t.Fatalf("data URL 应被接受: %v", err)
+	} else if str(src, "type") != "base64" || str(src, "media_type") != "image/png" {
+		t.Fatalf("data URL 应解析出 base64 与媒体类型: %v", src)
+	}
+	for _, bad := range []string{"", "ftp://x/a.png", "data:image/png,notbase64", "javascript:alert(1)"} {
+		if _, err := imageSource(bad); err == nil {
+			t.Fatalf("非法图片来源 %q 应被拒绝", bad)
+		}
+	}
+}
+
+func TestUnsupportedFeaturesRejectedNotSilentlyDropped(t *testing.T) {
+	// 跨协议不支持的能力必须显式报错，不能悄悄丢掉语义
+	cases := []struct{ protocol, body string }{
+		{"chat", raw(Object{"model": "m", "messages": []any{Object{"role": "user", "content": "hi"}}, "n": 3})},
+		{"chat", raw(Object{"model": "m", "messages": []any{Object{"role": "user", "content": []any{
+			Object{"type": "input_audio", "input_audio": Object{"data": "AA", "format": "wav"}}}}}})},
+		{"messages", raw(Object{"model": "m", "max_tokens": 8, "messages": []any{Object{"role": "user", "content": []any{
+			Object{"type": "document", "source": Object{"type": "base64", "media_type": "application/pdf", "data": "AA"}}}}}})},
+		{"responses", raw(Object{"model": "m", "input": "hi", "background": true})},
+	}
+	rejected := 0
+	for _, c := range cases {
+		var o Object
+		if err := json.Unmarshal([]byte(c.body), &o); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := decodeCanonical(o, c.protocol); err != nil {
+			rejected++
+			var ae *APIError
+			if !errors.As(err, &ae) || ae.Code != "UNSUPPORTED_FEATURE" {
+				continue // 其它明确错误也算拒绝
+			}
+		}
+	}
+	if rejected == 0 {
+		t.Fatal("至少应有一类不支持的能力被显式拒绝")
+	}
+	if err := unsupported("测试"); err == nil {
+		t.Fatal("unsupported 应产生错误")
 	}
 }

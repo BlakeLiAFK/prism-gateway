@@ -3,6 +3,8 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"path/filepath"
 	"testing"
 )
@@ -37,4 +39,25 @@ func TestLockDatabaseRejectsSecondProcess(t *testing.T) {
 		t.Fatalf("释放后应可重新加锁: %v", err)
 	}
 	unlock2()
+}
+
+func TestFlagGivenDistinguishesDefaults(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.String("listen", "127.0.0.1:8080", "")
+	fs.String("db", "./data/gateway.db", "")
+	if err := fs.Parse([]string{"--db", "./other.db"}); err != nil {
+		t.Fatal(err)
+	}
+	// 只有显式写在命令行上的参数才算「给了」；默认值不算，
+	// 否则数据库里的监听地址永远会被默认值盖掉
+	if flagGiven(fs, "listen") {
+		t.Fatal("未指定的参数不应判为已给出")
+	}
+	if !flagGiven(fs, "db") {
+		t.Fatal("显式指定的参数应判为已给出")
+	}
+	if flagGiven(fs, "no-such-flag") {
+		t.Fatal("不存在的参数不应判为已给出")
+	}
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.3.0"
+const Version = "1.4.0"
 
 type Object = map[string]any
 
@@ -76,6 +76,7 @@ type Settings struct {
 	SessionTTLHours     int    `json:"session_ttl_hours"`
 	AllowEstimatedCount bool   `json:"allow_estimated_count"`
 	Listen              string `json:"listen"`
+	MetricsEnabled      bool   `json:"metrics_enabled"`
 	LogLevel            string `json:"log_level"`
 	LogFormat           string `json:"log_format"`
 }

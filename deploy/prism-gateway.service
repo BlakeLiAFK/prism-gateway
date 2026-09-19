@@ -1,0 +1,52 @@
+# systemd 单元示例。放到 /etc/systemd/system/prism-gateway.service
+# 安装后：systemctl daemon-reload && systemctl enable --now prism-gateway
+#
+# 监听地址、日志级别等运行设置都在管理后台改，不要写进这里。
+# 这里只保留启动期的安全边界参数。
+
+[Unit]
+Description=Prism Gateway
+Documentation=https://github.com/BlakeLiAFK/prism-gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=prism
+Group=prism
+WorkingDirectory=/var/lib/prism
+ExecStart=/usr/local/bin/prism-gateway --db /var/lib/prism/gateway.db
+Restart=on-failure
+RestartSec=5s
+
+# 数据目录含主密钥，权限收紧
+UMask=0077
+StateDirectory=prism
+StateDirectoryMode=0700
+
+# 仅在确实需要对外监听时追加 --allow-remote 与 TLS 参数：
+# ExecStart=/usr/local/bin/prism-gateway --db /var/lib/prism/gateway.db \
+#   --allow-remote --tls-cert /etc/prism/server.crt --tls-key /etc/prism/server.key
+
+# 加固：这些限制不影响正常功能
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+
+# 日志走 journald；日志级别在管理后台调，不需要重启
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
