@@ -200,6 +200,7 @@ func (s *Store) load() error {
 			}
 		}
 	}
+	sortRoutes(&c)
 	r, e = s.DB.Query("SELECT key,value FROM settings")
 	if e != nil {
 		return e
@@ -288,6 +289,13 @@ func cloneConfig(c Config) Config {
 	out.Aliases = append([]Alias{}, c.Aliases...)
 	return out
 }
+
+// sortRoutes 按 Sort 升序排列路由，Sort 相同的维持原有的 ID 字母序。
+// 加载与写入两条路径都要调用：只排加载那一条，界面在重启前看到的仍是旧顺序。
+func sortRoutes(c *Config) {
+	sort.SliceStable(c.Routes, func(i, j int) bool { return c.Routes[i].Sort < c.Routes[j].Sort })
+}
+
 func (s *Store) Change(version int64, action, target string, fn func(*Config) error) (Config, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -301,6 +309,7 @@ func (s *Store) Change(version int64, action, target string, fn func(*Config) er
 	if e := c.Validate(); e != nil {
 		return c, fail("INVALID_CONFIG", e.Error(), 400)
 	}
+	sortRoutes(&c)
 	c.Version++
 	e := s.DB.Transaction(func(t *sqlite.Tx) error {
 		for _, table := range []string{"route_models", "aliases", "routes", "models", "providers", "settings"} {

@@ -2335,3 +2335,38 @@ func TestSyncedIDFallsBackOnCollision(t *testing.T) {
 		t.Fatal("重名的上游模型仍应被同步进来，只是换个 ID")
 	}
 }
+
+// 路由列表顺序：按 Sort 升序，Sort 相同时退回 ID 字母序。
+// 光按 ID 排，lite / auto / pro / max 会变成 auto / lite / max / pro。
+func TestRouteOrderFollowsSortField(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.db")
+	s, e := OpenStore(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	_, e = s.Change(1, "test", "", func(c *Config) error {
+		c.Routes = append(c.Routes,
+			Route{ID: "max", Strategy: "priority", Sort: 40}, Route{ID: "auto", Strategy: "priority", Sort: 20},
+			Route{ID: "pro", Strategy: "priority", Sort: 30}, Route{ID: "lite", Strategy: "priority", Sort: 10},
+			Route{ID: "zeta", Strategy: "priority"}, Route{ID: "alpha", Strategy: "priority"})
+		return nil
+	})
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.DB.Close()
+	s, e = OpenStore(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.DB.Close()
+	var got []string
+	for _, r := range s.Config().Routes {
+		got = append(got, r.ID)
+	}
+	// Sort=0 的两条排在最前，它们之间维持字母序
+	want := []string{"alpha", "zeta", "lite", "auto", "pro", "max"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("路由顺序错误: %v，期望 %v", got, want)
+	}
+}

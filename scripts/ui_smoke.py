@@ -130,17 +130,19 @@ def run_ui_checks(page, base, token, results):
     page.locator('.candidate-row input[name="candidate"]').first.check()
     page.fill('#candidate-search', 'zzz-no-such-model-zzz')
     page.wait_for_timeout(250)
-    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>!r.hidden).length")
+    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>r.offsetParent!==null).length")
     if visible != 1:
-        fail(f'搜索无匹配时应只剩已勾选的 1 行，实得 {visible}')
+        dbg = page.evaluate("[...document.querySelectorAll('.candidate-row')].map(r=>[r.dataset.search,r.hidden,r.offsetParent!==null,r.querySelector('input[name=candidate]').checked])")
+        fail(f'搜索无匹配时应只剩已勾选的 1 行，实得 {visible} :: {dbg}')
     page.fill('#candidate-search', '')
     page.wait_for_timeout(250)
-    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>!r.hidden).length")
+    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>r.offsetParent!==null).length")
     if visible != total:
         fail(f'清空搜索应恢复全部 {total} 行，实得 {visible}')
     page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
     page.wait_for_timeout(200)
     results.append('route candidate search')
+
 
     # 设置页往返：确认表单取值与提交链路完整
     page.click('.nav-item[data-nav="settings"]')

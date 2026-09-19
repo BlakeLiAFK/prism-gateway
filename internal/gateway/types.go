@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.8.0"
+const Version = "1.8.1"
 
 type Object = map[string]any
 
@@ -64,6 +64,9 @@ type Route struct {
 	Affinity    bool        `json:"affinity"`
 	Candidates  []Candidate `json:"candidates"`
 	Description string      `json:"description"`
+	// Sort 决定路由在管理界面里的先后。按 ID 排出来的是字母序，
+	// 与 lite / auto / pro / max 这种能力梯度无关，只能显式存。
+	Sort int `json:"sort"`
 }
 type Alias struct {
 	ID      string `json:"id"`
