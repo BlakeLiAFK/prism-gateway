@@ -23,6 +23,12 @@ make ui             # WebUI 冒烟（需 playwright，缺失则跳过）
 python3 scripts/smoke.py --binary ./bin/prism-gateway   # 真实进程冒烟
 ```
 
+改动并发、限流或请求生命周期相关代码后，跑一轮压测确认计数器仍会完全释放：
+
+```bash
+python3 scripts/loadtest.py --binary ./bin/prism-gateway --concurrency 64 --duration 300
+```
+
 覆盖率阈值写在 `scripts/cover.sh`。降低阈值需要在提交信息里说明理由。
 
 ## 模糊测试

@@ -140,6 +140,21 @@ def run_ui_checks(page, base, token, results):
     results.append('zero console errors')
 
 
+
+def read_admin_token(directory, logpath):
+    """令牌优先从 <db>.admin-token 读取。
+
+    stdout 被收集时（这里就是重定向到文件）网关不再打印令牌，改为落盘，
+    所以先看文件；老版本二进制仍然只打印，因此保留日志回退。
+    """
+    token_file = Path(directory) / 'gateway.db.admin-token'
+    if token_file.exists():
+        return token_file.read_text().strip()
+    found = re.search(r'prism_admin_[A-Za-z0-9_-]+', Path(logpath).read_text())
+    if not found:
+        raise RuntimeError('既没有令牌文件也没有在输出里找到令牌')
+    return found.group()
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='./bin/prism-gateway')
@@ -168,7 +183,7 @@ def main():
             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         try:
             wait_ready(base, process, logpath)
-            token = re.search(r'prism_admin_[A-Za-z0-9_-]+', logpath.read_text()).group()
+            token = read_admin_token(directory, logpath)
             enable_demo(base, token)
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=not args.headed)

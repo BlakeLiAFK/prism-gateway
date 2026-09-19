@@ -192,7 +192,8 @@ make lint                     # staticcheck（未安装则跳过）
 make hooks                    # 安装 pre-commit 与 pre-push 钩子
 make release                  # 可复现构建 + SHA256 校验和
 make hooks                    # 安装 pre-push 质量门（推送前自动跑 make check）
-python3 scripts/smoke.py --binary ./bin/prism-gateway  # 实际进程冒烟；先 make build
+python3 scripts/smoke.py --binary ./bin/prism-gateway     # 实际进程冒烟；先 make build
+python3 scripts/loadtest.py --binary ./bin/prism-gateway # 并发与长稳压测
 ./prism-gateway --help
 ./prism-gateway --db ./data/work.db
 ./prism-gateway --listen 127.0.0.1:9090   # 救援覆盖：仅本次启动生效，不写入配置

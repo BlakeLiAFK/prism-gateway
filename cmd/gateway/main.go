@@ -26,6 +26,24 @@ func checkTLS(cert, key string) error {
 	return nil
 }
 
+// stdoutIsTerminal 判断标准输出是不是终端。
+// 不是终端就意味着有东西在收集它——systemd 会把它送进 journald，
+// 容器运行时会把它送进日志驱动。管理员令牌不该出现在那些地方。
+func stdoutIsTerminal() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// writeAdminToken 把令牌写到数据库旁边的 0600 文件，返回其路径。
+// 终端里直接显示就够了；被收集的场合必须落到文件，否则日志系统里就留下了明文。
+func writeAdminToken(dbPath, token string) (string, error) {
+	path := dbPath + ".admin-token"
+	if err := os.WriteFile(path, []byte(token+"\n"), 0600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 func fatal(v any) {
 	slog.Error("startup failed", "err", v)
 	os.Exit(1)
@@ -108,7 +126,16 @@ func main() {
 	}
 	fmt.Printf("\n  PRISM GATEWAY  v%s\n  %s://%s\n  管理入口: POST /api.json\n  数据库: %s\n", gateway.Version, scheme, addr, *db)
 	if token != "" {
-		fmt.Printf("\n  首次/新管理员令牌（只显示一次，请妥善保存）：\n\n  %s\n\n", token)
+		if stdoutIsTerminal() {
+			fmt.Printf("\n  首次/新管理员令牌（只显示一次，请妥善保存）：\n\n  %s\n\n", token)
+		} else {
+			// 输出正在被收集（systemd / 容器日志），令牌改为落盘
+			path, err := writeAdminToken(*db, token)
+			if err != nil {
+				fatal(err)
+			}
+			fmt.Printf("\n  管理员令牌已写入 %s（仅属主可读）\n  读取后请删除该文件；它不会出现在日志里。\n\n", path)
+		}
 	} else {
 		fmt.Println("  使用已保存的管理员令牌登录；遗失时停止服务再运行 --reset-admin")
 	}

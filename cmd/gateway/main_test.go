@@ -5,7 +5,9 @@ package main
 import (
 	"flag"
 	"io"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -59,5 +61,32 @@ func TestFlagGivenDistinguishesDefaults(t *testing.T) {
 	}
 	if flagGiven(fs, "no-such-flag") {
 		t.Fatal("不存在的参数不应判为已给出")
+	}
+}
+
+func TestWriteAdminTokenIsOwnerOnly(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "gateway.db")
+	const token = "prism_admin_example_value_for_test"
+	path, err := writeAdminToken(db, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != db+".admin-token" {
+		t.Fatalf("路径应挨着数据库: %s", path)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 令牌等同于完整管理权限，同组或其他用户都不该读到
+	if perm := fi.Mode().Perm(); perm != 0600 {
+		t.Fatalf("权限应为 0600，实得 %04o", perm)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(data)) != token {
+		t.Fatalf("内容不符: %q", string(data))
 	}
 }
