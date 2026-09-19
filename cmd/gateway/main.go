@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,20 +17,6 @@ import (
 	"syscall"
 	"time"
 )
-
-// checkListen 判定监听地址是否为回环，并拦截未显式授权的对外监听。
-func checkListen(listen string, allowRemote bool) (bool, error) {
-	host, _, err := net.SplitHostPort(listen)
-	if err != nil {
-		return false, err
-	}
-	ip := net.ParseIP(host)
-	local := host == "localhost" || (ip != nil && ip.IsLoopback())
-	if !local && !allowRemote {
-		return false, errors.New("非 loopback 监听需要显式 --allow-remote；请启用 TLS 或置于可信 HTTPS 反向代理后")
-	}
-	return local, nil
-}
 
 // checkTLS 要求证书与私钥成对出现，避免只配一半就以明文启动。
 func checkTLS(cert, key string) error {
@@ -45,13 +31,23 @@ func fatal(v any) {
 	os.Exit(1)
 }
 
+// flagGiven 区分「用户显式指定」与「仅仅是默认值」。
+func flagGiven(name string) bool {
+	given := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			given = true
+		}
+	})
+	return given
+}
+
 func main() {
 	db := flag.String("db", "./data/gateway.db", "SQLite 数据库路径；同目录 .key 为凭证加密主密钥")
-	listen := flag.String("listen", "127.0.0.1:8080", "监听地址")
-	demo := flag.Bool("demo", false, "添加明确标记的本地演示 Provider（不调用云端）")
+	listen := flag.String("listen", "", "临时覆盖监听地址，用于救援；常规修改请在管理后台进行")
 	reset := flag.Bool("reset-admin", false, "轮换管理员令牌并注销全部管理会话")
 	version := flag.Bool("version", false, "显示版本")
-	allowRemote := flag.Bool("allow-remote", false, "确认允许非 loopback 监听；公网必须使用 TLS")
+	allowRemote := flag.Bool("allow-remote", false, "允许把监听地址设为非 loopback；公网必须使用 TLS")
 	cert := flag.String("tls-cert", "", "TLS 证书文件（可选）")
 	tlsKey := flag.String("tls-key", "", "TLS 私钥文件（可选）")
 	flag.Parse()
@@ -60,14 +56,18 @@ func main() {
 		fmt.Println("Prism Gateway " + gateway.Version)
 		return
 	}
-	local, err := checkListen(*listen, *allowRemote)
-	if err != nil {
+	if err := checkTLS(*cert, *tlsKey); err != nil {
 		fatal(err)
 	}
-	if err = checkTLS(*cert, *tlsKey); err != nil {
-		fatal(err)
+	var tlsConfig *tls.Config
+	if *cert != "" {
+		pair, err := tls.LoadX509KeyPair(*cert, *tlsKey)
+		if err != nil {
+			fatal(err)
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS12}
 	}
-	if err = os.MkdirAll(filepath.Dir(*db), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(*db), 0700); err != nil {
 		fatal(err)
 	}
 	unlock, err := lockDatabase(*db + ".lock")
@@ -84,48 +84,39 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	// 监听地址来自数据库；--listen 只是本次启动的临时覆盖，不写回配置
+	addr := s.Config().Settings.Listen
+	if addr == "" {
+		addr = "127.0.0.1:8080"
+	}
+	if flagGiven("listen") {
+		addr = *listen
+	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	app := gateway.NewApp(ctx, s, webui.Handler())
-	if *demo {
-		if _, err = app.EnableDemo(s.Config().Version); err != nil {
-			fatal(err)
-		}
+	server := &http.Server{Handler: app, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
+	app.Listen = gateway.NewListener(server, *allowRemote, tlsConfig)
+	ln, err := app.Listen.Bind(addr)
+	if err != nil {
+		fatal(err)
 	}
-	server := &http.Server{Addr: *listen, Handler: app, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 64 << 10}
+	app.Listen.Adopt(ln)
 	scheme := "http"
-	if *cert != "" {
+	if tlsConfig != nil {
 		scheme = "https"
 	}
-	fmt.Printf("\n  PRISM GATEWAY  v%s\n  %s://%s\n  管理入口: POST /api.json\n  数据库: %s\n", gateway.Version, scheme, *listen, *db)
+	fmt.Printf("\n  PRISM GATEWAY  v%s\n  %s://%s\n  管理入口: POST /api.json\n  数据库: %s\n", gateway.Version, scheme, addr, *db)
 	if token != "" {
 		fmt.Printf("\n  首次/新管理员令牌（只显示一次，请妥善保存）：\n\n  %s\n\n", token)
 	} else {
 		fmt.Println("  使用已保存的管理员令牌登录；遗失时停止服务再运行 --reset-admin")
 	}
-	if !local && *cert == "" {
+	if !gateway.Loopback(addr) && tlsConfig == nil {
 		fmt.Println("  警告：当前监听未启用 TLS。只在可信网络或 HTTPS 代理后使用；不要直接公开。")
 	}
-	if *demo {
-		fmt.Println("  本地演示已启用：不是真实 AI，不产生云端费用。")
-	}
-	fmt.Println("  不需要 YAML / npm / 独立前端服务。按 Ctrl+C 停止。\n" + strings.Repeat("─", 62))
-	done := make(chan error, 1)
-	go func() {
-		if *cert != "" {
-			done <- server.ListenAndServeTLS(*cert, *tlsKey)
-		} else {
-			done <- server.ListenAndServe()
-		}
-	}()
-	select {
-	case <-ctx.Done():
-	case err := <-done:
-		if err != http.ErrServerClosed {
-			slog.Error("server stopped", "err", err)
-		}
-		cancel()
-	}
+	fmt.Println("  监听地址、日志与其余运行设置都可在管理后台修改。按 Ctrl+C 停止。\n" + strings.Repeat("─", 62))
+	<-ctx.Done()
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer shutCancel()
 	if err = server.Shutdown(shutCtx); err != nil {

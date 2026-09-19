@@ -1,4 +1,5 @@
 const paths={
+
  prism:'<path d="M3 20 12 3l9 17H3Z"/><path d="m8 20 4-8 4 8"/>',
  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
  provider:'<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/>',
@@ -40,5 +41,10 @@ const paths={
  terminal:'<path d="m5 6 5 6-5 6m8 0h7"/>',
  pause:'<path d="M8 5v14M16 5v14"/>',
  link:'<path d="m9 15 6-6M7 13l-2 2a4 4 0 0 0 6 6l4-4a4 4 0 0 0 0-6m2 2 2-2a4 4 0 0 0-6-6L9 7a4 4 0 0 0 0 6"/>',
+
 };
-export function icon(name,cls=''){return `<svg class="icon ${cls}" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.grid}</svg>`;}
+
+export function icon(name,cls=''){
+  return `<svg class="icon ${cls}" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||paths.grid}</svg>`;
+
+}

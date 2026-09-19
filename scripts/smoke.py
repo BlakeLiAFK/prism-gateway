@@ -32,7 +32,7 @@ def main():
         directory = Path(directory)
         logpath = directory / 'server.log'
         log = logpath.open('w')
-        command = [str(binary), '--db', str(directory / 'gateway.db'), '--listen', f'127.0.0.1:{port}', '--demo']
+        command = [str(binary), '--db', str(directory / 'gateway.db'), '--listen', f'127.0.0.1:{port}']
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
 
         def request(path, data=None, headers=None):
@@ -71,6 +71,7 @@ def main():
                 assert status == 200 and obj['ok'], (action, status, obj)
                 return obj['data']
 
+            rpc('demo.enable', {'version': rpc('config.get')['version']})
             status, headers, body = request('/')
             assert status == 200 and b'assets/app.js' in body and headers['X-Frame-Options'] == 'DENY'
             status, _, body = request('/assets/app.js')
@@ -151,6 +152,24 @@ def main():
             assert status == 400 and not json.loads(body)['ok']
             rpc('settings.update', {'version': rpc('config.get')['version'], 'settings': {'log_level': 'info', 'log_format': 'text'}})
             results.append('runtime log level switching')
+            with socket.socket() as probe:
+                probe.bind(('127.0.0.1', 0))
+                new_port = probe.getsockname()[1]
+            rpc('settings.update', {'version': rpc('config.get')['version'], 'settings': {'listen': f'127.0.0.1:{new_port}'}})
+            moved = f'http://127.0.0.1:{new_port}'
+            with urllib.request.urlopen(moved + '/healthz', timeout=10) as response:
+                assert json.loads(response.read())['ok'] is True
+            try:
+                urllib.request.urlopen(base + '/healthz', timeout=3)
+                raise AssertionError('旧监听地址应已关闭')
+            except (urllib.error.URLError, OSError):
+                pass
+            base = moved
+            status, _, body = request('/api.json', {'action': 'settings.update', 'params': {'version': rpc('config.get')['version'], 'settings': {'listen': '0.0.0.0:9'}}}, {'Authorization': 'Bearer ' + token})
+            assert status == 400 and json.loads(body)['error']['code'] == 'REMOTE_NOT_ALLOWED'
+            with urllib.request.urlopen(base + '/healthz', timeout=5) as response:
+                assert json.loads(response.read())['ok'] is True
+            results.append('listen hot switch + remote guard')
             info = rpc('system.info')
             print(json.dumps({'passed': results, 'runtime': info}, ensure_ascii=False, indent=2))
         finally:

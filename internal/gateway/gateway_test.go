@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -903,5 +904,170 @@ func TestManagementErrorDetailStaysOutOfDefaultLog(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "management call") {
 		t.Fatalf("业务校验错误不应写入日志: %s", buf.String())
+	}
+}
+
+// freePort 取一个当前空闲的端口号。端口 0 在产品里被拒绝（重启后会漂移），
+// 所以测试必须使用具体端口。
+func freePort(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	ln.Close()
+	return port
+}
+
+func TestListenAddressValidation(t *testing.T) {
+	ok := []string{"127.0.0.1:8080", "localhost:80", "0.0.0.0:8443", "[::1]:8080", ":8080"}
+	for _, a := range ok {
+		if err := validateListenAddr(a); err != nil {
+			t.Fatalf("%q 应合法: %v", a, err)
+		}
+	}
+	bad := []string{"127.0.0.1", "", "example.com:80", "127.0.0.1:0", "127.0.0.1:70000", "127.0.0.1:abc"}
+	for _, a := range bad {
+		if validateListenAddr(a) == nil {
+			t.Fatalf("%q 应被拒绝", a)
+		}
+	}
+	for _, a := range []string{"127.0.0.1:8080", "localhost:8080", "[::1]:8080"} {
+		if !loopbackAddr(a) {
+			t.Fatalf("%q 应判为回环", a)
+		}
+	}
+	for _, a := range []string{"0.0.0.0:8080", "192.168.1.5:8080", ":8080"} {
+		if loopbackAddr(a) {
+			t.Fatalf("%q 不应判为回环", a)
+		}
+	}
+}
+
+func TestListenSwitchRespectsAllowRemote(t *testing.T) {
+	h := newHarness(t)
+	srv := &http.Server{Handler: h.a}
+	h.a.Listen = NewListener(srv, false, nil)
+	ln, err := h.a.Listen.Bind("127.0.0.1:" + freePort(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.a.Listen.Adopt(ln)
+	t.Cleanup(func() { srv.Close() })
+	first := h.a.Listen.Addr()
+
+	// 未带 --allow-remote 时，后台不能把服务暴露到非回环地址
+	_, o := h.rpc(t, "settings.update", Object{
+		"version": h.s.Config().Version, "settings": Object{"listen": "0.0.0.0:" + freePort(t)},
+	}, h.token)
+	if str(obj(o["error"]), "code") != "REMOTE_NOT_ALLOWED" {
+		t.Fatalf("对外监听应被拒绝: %v", o)
+	}
+	if h.a.Listen.Addr() != first {
+		t.Fatal("被拒绝的切换不应影响当前监听")
+	}
+	if strings.HasPrefix(h.s.Config().Settings.Listen, "0.0.0.0:") {
+		t.Fatal("被拒绝的切换不应写入配置")
+	}
+
+	// 地址非法同样是配置与监听都不变
+	_, o = h.rpc(t, "settings.update", Object{
+		"version": h.s.Config().Version, "settings": Object{"listen": "not-an-address"},
+	}, h.token)
+	if o["ok"] != false {
+		t.Fatalf("非法地址应被拒绝: %v", o)
+	}
+	if h.a.Listen.Addr() != first {
+		t.Fatal("非法地址不应影响当前监听")
+	}
+
+	// 合法的回环地址切换成功，且新地址真的在服务
+	_, o = h.rpc(t, "settings.update", Object{
+		"version": h.s.Config().Version, "settings": Object{"listen": "127.0.0.1:" + freePort(t)},
+	}, h.token)
+	if o["ok"] != true {
+		t.Fatalf("回环地址切换应成功: %v", o)
+	}
+	second := h.a.Listen.Addr()
+	if second == first {
+		t.Fatal("监听地址未实际切换")
+	}
+	resp, err := http.Get("http://" + second + "/healthz")
+	if err != nil {
+		t.Fatalf("新监听地址不可用: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("新地址 healthz = %d", resp.StatusCode)
+	}
+	if _, err = net.DialTimeout("tcp", first, time.Second); err == nil {
+		t.Fatal("旧监听地址应已关闭")
+	}
+}
+
+func TestListenSwitchAllowedWithRemoteFlag(t *testing.T) {
+	h := newHarness(t)
+	srv := &http.Server{Handler: h.a}
+	h.a.Listen = NewListener(srv, true, nil)
+	ln, err := h.a.Listen.Bind("127.0.0.1:" + freePort(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.a.Listen.Adopt(ln)
+	t.Cleanup(func() { srv.Close() })
+	_, o := h.rpc(t, "settings.update", Object{
+		"version": h.s.Config().Version, "settings": Object{"listen": "0.0.0.0:" + freePort(t)},
+	}, h.token)
+	if o["ok"] != true {
+		t.Fatalf("带 --allow-remote 时应允许: %v", o)
+	}
+}
+
+func TestSavingOtherSettingsKeepsRescueListener(t *testing.T) {
+	h := newHarness(t)
+	srv := &http.Server{Handler: h.a}
+	h.a.Listen = NewListener(srv, false, nil)
+	ln, err := h.a.Listen.Bind("127.0.0.1:" + freePort(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.a.Listen.Adopt(ln)
+	t.Cleanup(func() { srv.Close() })
+
+	// 配置里写的是默认 127.0.0.1:8080，实际监听在别处：等同 --listen 救援覆盖的状态。
+	// 此时保存其它设置（表单会连同未改动的 listen 一起提交）不得把服务拽回坏地址。
+	before := h.a.Listen.Addr()
+	cfgListen := h.s.Config().Settings.Listen
+	if cfgListen == before {
+		t.Fatal("前置条件失败：配置地址应与实际监听不同")
+	}
+	_, o := h.rpc(t, "settings.update", Object{
+		"version":  h.s.Config().Version,
+		"settings": Object{"app_name": "救援中", "listen": cfgListen},
+	}, h.token)
+	if o["ok"] != true {
+		t.Fatalf("保存其它设置应成功: %v", o)
+	}
+	if h.a.Listen.Addr() != before {
+		t.Fatalf("监听被意外切换: %s -> %s", before, h.a.Listen.Addr())
+	}
+	if h.s.Config().Settings.AppName != "救援中" {
+		t.Fatal("其它设置未生效")
+	}
+}
+
+func TestSameListenNormalisesWildcards(t *testing.T) {
+	same := [][2]string{{":8080", "0.0.0.0:8080"}, {"[::]:8080", ":8080"}, {"127.0.0.1:80", "127.0.0.1:80"}}
+	for _, p := range same {
+		if !sameListen(p[0], p[1]) {
+			t.Fatalf("%q 与 %q 应视为同一监听点", p[0], p[1])
+		}
+	}
+	diff := [][2]string{{":8080", ":8081"}, {"127.0.0.1:80", "192.168.1.1:80"}, {"bad", ":80"}}
+	for _, p := range diff {
+		if sameListen(p[0], p[1]) {
+			t.Fatalf("%q 与 %q 不应视为同一监听点", p[0], p[1])
+		}
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.2.0"
+const Version = "1.3.0"
 
 type Object = map[string]any
 
@@ -75,6 +75,7 @@ type Settings struct {
 	GlobalConcurrency   int    `json:"global_concurrency"`
 	SessionTTLHours     int    `json:"session_ttl_hours"`
 	AllowEstimatedCount bool   `json:"allow_estimated_count"`
+	Listen              string `json:"listen"`
 	LogLevel            string `json:"log_level"`
 	LogFormat           string `json:"log_format"`
 }
@@ -88,7 +89,7 @@ type Config struct {
 }
 
 func defaults() Config {
-	return Config{Version: 1, Providers: []Provider{}, Models: []Model{}, Routes: []Route{}, Aliases: []Alias{}, Settings: Settings{AppName: "Prism Gateway", DefaultRoute: "auto-coding", RetentionDays: 90, MaxBodyMB: 8, GlobalConcurrency: 8, SessionTTLHours: 24, AllowEstimatedCount: true, LogLevel: "info", LogFormat: "text"}}
+	return Config{Version: 1, Providers: []Provider{}, Models: []Model{}, Routes: []Route{}, Aliases: []Alias{}, Settings: Settings{AppName: "Prism Gateway", DefaultRoute: "auto-coding", RetentionDays: 90, MaxBodyMB: 8, GlobalConcurrency: 8, SessionTTLHours: 24, AllowEstimatedCount: true, Listen: "127.0.0.1:8080", LogLevel: "info", LogFormat: "text"}}
 }
 func (c Config) provider(id string) (Provider, bool) {
 	for _, p := range c.Providers {
@@ -251,6 +252,11 @@ func (c Config) Validate() error {
 		return errors.New("设置范围：body 1–32MB，并发 1–512，保留 31–3650 天，会话 1–720 小时")
 	}
 	// 空值表示沿用默认，兼容升级前写入的旧配置
+	if s.Listen != "" {
+		if e := validateListenAddr(s.Listen); e != nil {
+			return e
+		}
+	}
 	switch strings.ToLower(s.LogLevel) {
 	case "", "debug", "info", "warn", "error":
 	default:

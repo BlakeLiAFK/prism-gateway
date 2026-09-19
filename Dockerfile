@@ -19,4 +19,6 @@ WORKDIR /home/prism
 EXPOSE 8080
 VOLUME ["/data"]
 ENTRYPOINT ["prism-gateway"]
+# 容器里用 --listen 覆盖启动是有意为之：镜像需要确定性地绑 0.0.0.0，
+# 不依赖卷里那份配置的内容。
 CMD ["--db","/data/gateway.db","--listen","0.0.0.0:8080","--allow-remote"]

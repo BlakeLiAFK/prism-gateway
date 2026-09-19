@@ -7,33 +7,6 @@ import (
 	"testing"
 )
 
-func TestCheckListen(t *testing.T) {
-	cases := []struct {
-		listen      string
-		allowRemote bool
-		local       bool
-		wantErr     bool
-	}{
-		{"127.0.0.1:8080", false, true, false},
-		{"localhost:8080", false, true, false},
-		{"[::1]:8080", false, true, false},
-		{"0.0.0.0:8080", false, false, true},      // 对外监听必须显式授权
-		{"192.168.1.10:8080", false, false, true}, // 局域网同样要显式授权
-		{"0.0.0.0:8080", true, false, false},
-		{"127.0.0.1", false, false, true}, // 缺端口
-		{"", false, false, true},
-	}
-	for _, c := range cases {
-		local, err := checkListen(c.listen, c.allowRemote)
-		if (err != nil) != c.wantErr {
-			t.Fatalf("checkListen(%q,%v) err=%v，期望出错=%v", c.listen, c.allowRemote, err, c.wantErr)
-		}
-		if err == nil && local != c.local {
-			t.Fatalf("checkListen(%q,%v) local=%v，期望 %v", c.listen, c.allowRemote, local, c.local)
-		}
-	}
-}
-
 func TestCheckTLS(t *testing.T) {
 	if err := checkTLS("", ""); err != nil {
 		t.Fatalf("两者都为空应允许（明文监听）: %v", err)

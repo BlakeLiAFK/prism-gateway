@@ -1,4 +1,4 @@
-# 实测报告 · v1.2.0
+# 实测报告 · v1.3.0
 
 此报告描述交付时实际执行的验证，不代表所有供应商、操作系统或客户端已经验证。
 
@@ -112,6 +112,18 @@ python3 scripts/smoke.py --binary ./bin/prism-gateway
   日志级别与格式运行时切换（含 JSON 行解析与非法值拒绝）、业务校验错误不写日志。
 - WebUI 实测（Playwright，同源 HTTP）：登录、设置页两个新下拉渲染与保存落库、
   版本号由 `auth.status` 下发正确显示、0 console error、无横向溢出。
+
+## 4.3 v1.3.0 增量验证
+
+- 进程冒烟 **12 组**（新增 `listen hot switch + remote guard`：后台切换监听后新地址可服务、
+  旧地址已关闭、非回环被拒且服务不中断）。
+- 新增 **WebUI 浏览器冒烟** `scripts/ui_smoke.py`，**18 项检查**：登录与 shell 渲染、
+  11 个页面逐页渲染、命令面板、主题切换、供应商编辑抽屉、设置保存往返、
+  390px 无横向溢出、零 console 错误。已纳入 `make check`。
+- 前端换行重排后重跑上述 18 项，全部通过，确认重排未改变行为。
+- 覆盖率：`internal/gateway` 67.1%、`internal/sqlite` 63.2%、`cmd/gateway` 13.1%
+  （`checkListen` 逻辑迁入 `internal/gateway` 并在那里获得更完整的测试，
+  cmd 层比例因此下降，但被测逻辑总量增加）。
 
 ## 5. 尚未验证 / 不在交付承诺内
 

@@ -2,7 +2,7 @@
 set -eu
 : "${PRISM_API_KEY:?Set PRISM_API_KEY to a client key created in the WebUI}"
 BASE="${PRISM_URL:-http://127.0.0.1:8080}"
-# These demos require --demo or the Enable Sandbox action.
+# These demos require the Enable Sandbox action in the WebUI overview.
 printf '\n--- Chat Completions ---\n'
 curl --fail-with-body -sS "$BASE/openai/v1/chat/completions" \
   -H "Authorization: Bearer $PRISM_API_KEY" -H 'Content-Type: application/json' \

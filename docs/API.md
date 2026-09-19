@@ -172,6 +172,7 @@ curl http://127.0.0.1:8080/api.json \
 | `retention_days` | 31–3650 | 请求记录保留天数 |
 | `session_ttl_hours` | 1–720 | 会话亲和映射保留时长 |
 | `allow_estimated_count` | 布尔 | 原生计数不可用时是否返回本地估算 |
+| `listen` | `host:port` | 监听地址，保存后立即切换 |
 | `log_level` | `debug` / `info` / `warn` / `error` | 默认 `info` |
 | `log_format` | `text` / `json` | 默认 `text`；接采集器时用 `json` |
 
@@ -182,6 +183,14 @@ curl http://127.0.0.1:8080/api.json \
 `log_level=debug` 会额外输出管理接口的错误详情。**这些详情可能包含管理员刚提交的配置片段**（例如误填到 Base URL 里的 Key），排障结束后请调回 `info`。默认级别只记录 `request_id` 与 `action`。
 
 启动横幅、管理员令牌和 TLS 警告写终端标准输出，不经过 slog，因此不会进入日志采集链路。
+
+### 监听地址切换
+
+修改 `listen` 时服务端先 `bind` 新地址，成功后才写配置并接管；占不住就返回 400，**配置与正在服务的监听都保持原样**，已建立的连接不受影响。
+
+非回环地址要求进程以 `--allow-remote` 启动，否则返回 `REMOTE_NOT_ALLOWED`。这是启动期的安全边界：拿到管理令牌不等于可以把网关暴露到公网。
+
+`--listen` 是救援覆盖，只影响本次启动、不写回配置。救援期间保存其它设置不会把服务拽回配置里那个地址——切换与否以 `listen` 字段本身是否变化为准。
 
 ## 配置导出与导入
 

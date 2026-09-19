@@ -23,6 +23,7 @@ type App struct {
 	Store   *Store
 	Engine  *Engine
 	UI      http.Handler
+	Listen  *Listener
 	Started int64
 	Context context.Context
 	loginMu sync.Mutex
@@ -376,7 +377,29 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		if er := decode(p["settings"], &v); er != nil {
 			return nil, fail("INVALID_PARAMS", er.Error(), 400)
 		}
-		return a.Store.Change(version, action, "settings", func(c *Config) error { c.Settings = v; return nil })
+		// 监听地址改了就先把新地址占下来；占不到就直接失败，配置保持原样，
+		// 服务继续跑在旧地址上，不会因为一次手滑把自己关在门外
+		// 只有管理员真的改动了这一项才切换。基准是配置里的旧值，不是当前实际地址：
+		// --listen 救援覆盖期间保存其它设置，不该把服务拽回数据库里那个坏地址。
+		var pending net.Listener
+		if a.Listen != nil && v.Listen != "" && !sameListen(v.Listen, c.Settings.Listen) && !a.Listen.SameAddr(v.Listen) {
+			ln, er := a.Listen.Bind(v.Listen)
+			if er != nil {
+				return nil, er
+			}
+			pending = ln
+		}
+		cfg, er := a.Store.Change(version, action, "settings", func(c *Config) error { c.Settings = v; return nil })
+		if er != nil {
+			if pending != nil {
+				pending.Close()
+			}
+			return nil, er
+		}
+		if pending != nil {
+			a.Listen.Adopt(pending)
+		}
+		return cfg, nil
 	case "provider.delete", "model.delete", "route.delete", "alias.delete":
 		return a.Store.Change(version, action, id, func(c *Config) error {
 			found := false
