@@ -74,8 +74,14 @@ def main():
             rpc('demo.enable', {'version': rpc('config.get')['version']})
             status, headers, body = request('/')
             assert status == 200 and b'assets/app.js' in body and headers['X-Frame-Options'] == 'DENY'
-            status, _, body = request('/assets/app.js')
-            assert status == 200 and b'providerEditor' in body
+            # 前端是多模块 ES Module：入口能加载但某个被 import 的模块 404，
+            # 页面会静默空白，所以逐个确认可服务
+            for asset, marker in (('app.js', b'export function renderPage'),
+                                  ('core.js', b'export const state'),
+                                  ('ui.js', b'export function btn'),
+                                  ('views.js', b'export function settings')):
+                status, _, body = request('/assets/' + asset)
+                assert status == 200 and marker in body, asset
             status, _, _ = request('/api/v1/providers')
             assert status == 404
             results.append('embedded UI + single management endpoint')

@@ -39,8 +39,13 @@ go test -run=x -fuzz=FuzzReadSSE -fuzztime=60s ./internal/gateway/
 
 ## 改前端
 
-前端是内嵌的 ES Module，Go 编译期检查不到它。直接改 `internal/webui/dist/assets/`，
-重新 `go build`，然后**必须**跑 `make ui`——它会真的启动二进制、用浏览器走完
+前端是内嵌的 ES Module，Go 编译期检查不到它。四个模块：`core.js`（状态与格式化，
+零业务依赖）、`ui.js`（通用构件）、`views.js`（页面与编辑抽屉）、`app.js`（外壳与路由）。
+
+跨模块共享的可变状态一律挂在 `core.js` 的 `state` 对象上——ESM 不允许跨模块给
+顶层 `let` 赋值。
+
+直接改 `internal/webui/dist/assets/`，重新 `go build`，然后**必须**跑 `make ui`——它会真的启动二进制、用浏览器走完
 11 个页面与关键交互，并断言零 console 错误。
 
 ## 不变量

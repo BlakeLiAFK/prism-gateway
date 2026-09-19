@@ -8,9 +8,14 @@ import (
 
 func TestEmbeddedAssetsAreServable(t *testing.T) {
 	h := Handler()
+	// 前端拆成了多个 ES Module，每个都必须可服务：
+	// 入口能加载但某个被 import 的模块 404，页面会静默空白
 	for _, tc := range []struct{ path, contains string }{
 		{"/", "assets/app.js"},
-		{"/assets/app.js", "function settings"},
+		{"/assets/app.js", "export function renderPage"},
+		{"/assets/core.js", "export const state"},
+		{"/assets/ui.js", "export function btn"},
+		{"/assets/views.js", "export function settings"},
 		{"/assets/app.css", ".setting-row"},
 		{"/assets/api.js", "api.json"},
 		{"/assets/icons.js", "svg"},

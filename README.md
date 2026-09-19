@@ -199,7 +199,7 @@ python3 scripts/smoke.py --binary ./bin/prism-gateway  # 实际进程冒烟；�
 curl -sf http://127.0.0.1:8080/healthz   # 免鉴权存活探测；数据库异常时返回 503
 ```
 
-前端直接修改 `internal/webui/dist/assets/` 内源码，再重新 `go build` 即可。这里保存的是可读的 ES Module / CSS 源码，没有缺失的前端构建步骤。网页不从 CDN 加载运行库或字体。改完跑 `make ui`：它会真的启动二进制、用浏览器走完 11 个页面与关键交互，并断言零 console 错误。
+前端直接修改 `internal/webui/dist/assets/` 内源码，再重新 `go build` 即可。这里保存的是可读的 ES Module / CSS 源码，没有缺失的前端构建步骤。模块划分：`core.js` 状态与格式化、`ui.js` 通用构件、`views.js` 页面与编辑抽屉、`app.js` 外壳与路由。网页不从 CDN 加载运行库或字体。改完跑 `make ui`：它会真的启动二进制、用浏览器走完 11 个页面与关键交互，并断言零 console 错误。
 
 **运行参数只剩 `--db` 是日常需要的。** 监听地址、日志级别与格式、并发、预算等全部在管理后台修改，保存即生效。`--listen` 降级为救援覆盖（仅本次启动生效，不写回配置）；`--allow-remote` 与 `--tls-*` 是启动期的安全边界——拿到管理令牌的人不能因此把网关暴露到公网。
 
@@ -222,4 +222,4 @@ curl -sf http://127.0.0.1:8080/healthz   # 免鉴权存活探测；数据库异�
 - [安全策略](SECURITY.md)
 - [部署示例](deploy/README.md)
 
-版本 1.4.0 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。
+版本 1.5.0 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。

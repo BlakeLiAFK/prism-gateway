@@ -53,6 +53,12 @@ def enable_demo(base, token):
 
 def run_ui_checks(page, base, token, results):
     errors = []
+
+    def fail(message):
+        # 断言失败时把已捕获的页面错误一并带出，否则只能看到症状看不到原因
+        detail = ('\n页面错误:\n  ' + '\n  '.join(errors[:8])) if errors else '\n（无 console 错误）'
+        raise AssertionError(message + detail)
+
     page.on('console', lambda m: errors.append(m.text) if m.type == 'error' else None)
     page.on('pageerror', lambda e: errors.append(str(e)))
 
@@ -66,14 +72,14 @@ def run_ui_checks(page, base, token, results):
         page.click(f'.nav-item[data-nav="{name}"]')
         page.wait_for_timeout(250)
         if not page.locator('main').inner_text().strip():
-            raise AssertionError(f'{name} 页渲染为空')
+            fail(f'{name} 页渲染为空')
         results.append(f'page: {name}')
 
     # 命令面板与主题切换是全局交互，容易在模块拆分时漏掉绑定
     page.keyboard.press('Meta+k')
     page.wait_for_timeout(250)
     if page.locator('dialog.palette-dialog').count() == 0:
-        raise AssertionError('命令面板未打开')
+        fail('命令面板未打开')
     page.keyboard.press('Escape')
     page.wait_for_timeout(150)
     results.append('command palette')
@@ -82,7 +88,7 @@ def run_ui_checks(page, base, token, results):
     page.click('[data-action="theme"]')
     page.wait_for_timeout(200)
     if page.evaluate("document.documentElement.dataset.theme || ''") == before:
-        raise AssertionError('主题未切换')
+        fail('主题未切换')
     page.click('[data-action="theme"]')
     results.append('theme toggle')
 
@@ -92,7 +98,7 @@ def run_ui_checks(page, base, token, results):
     page.click('[data-action="add-provider"]')
     page.wait_for_timeout(300)
     if page.locator('dialog.drawer').count() == 0:
-        raise AssertionError('供应商编辑抽屉未打开')
+        fail('供应商编辑抽屉未打开')
     page.click('[data-action="close-dialog"]')
     page.wait_for_timeout(200)
     results.append('provider editor drawer')
@@ -105,7 +111,7 @@ def run_ui_checks(page, base, token, results):
     page.wait_for_timeout(600)
     page.wait_for_timeout(400)
     if page.locator('select[name="log_level"]').input_value() != 'warn':
-        raise AssertionError('设置保存后未回显新值')
+        fail('设置保存后未回显新值')
     results.append('settings save round trip')
 
     # 移动端宽度不得产生横向滚动
@@ -113,7 +119,7 @@ def run_ui_checks(page, base, token, results):
     page.wait_for_timeout(300)
     overflow = page.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
     if overflow > 0:
-        raise AssertionError(f'390px 宽度下横向溢出 {overflow}px')
+        fail(f'390px 宽度下横向溢出 {overflow}px')
     results.append('responsive 390px')
 
     if errors:

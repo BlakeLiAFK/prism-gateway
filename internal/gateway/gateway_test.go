@@ -1392,8 +1392,8 @@ func TestSmallHelpersAndEmbeddedUI(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	webui.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://localhost/assets/app.js", nil))
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "function settings") {
-		t.Fatalf("内嵌前端资源不可用: %d", w.Code)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "export function renderPage") {
+		t.Fatalf("内嵌前端入口不可用: %d", w.Code)
 	}
 	w = httptest.NewRecorder()
 	webui.Handler().ServeHTTP(w, httptest.NewRequest("GET", "http://localhost/no-such-asset.js", nil))
