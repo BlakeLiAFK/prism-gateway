@@ -2063,3 +2063,64 @@ func TestStripReasoningAcrossProtocols(t *testing.T) {
 		t.Fatal("无推理内容时不应报告剥离")
 	}
 }
+
+// 流式没法在发现推理内容之后再补响应头，所以开关开启且跨协议时必须先声明。
+// 这条断言曾经漏掉过：声明被加到了演示模式的分支上，真实上游路径没有。
+func TestDropReasoningAnnouncedOnConvertedStream(t *testing.T) {
+	sse := "data: " + raw(Object{"id": "x", "choices": []any{Object{"index": 0,
+		"delta": Object{"role": "assistant", "reasoning": "thinking"}}}}) + "\n\n" +
+		"data: " + raw(Object{"id": "x", "choices": []any{Object{"index": 0,
+		"delta": Object{"content": "Hello"}}}}) + "\n\n" +
+		"data: " + raw(Object{"id": "x", "choices": []any{Object{"index": 0,
+		"delta": Object{}, "finish_reason": "stop"}}}) + "\n\ndata: [DONE]\n\n"
+
+	run := func(drop bool) *httptest.ResponseRecorder {
+		h := newHarness(t)
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, sse)
+		}))
+		t.Cleanup(upstream.Close)
+		h.change(t, func(c *Config) {
+			c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
+				BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+			m := modelFixture("m_stream_drop", "chat")
+			m.DropReasoning = drop
+			c.Models = append(c.Models, m)
+		})
+		key := h.createKey(t)
+		r := httptest.NewRequest("POST", "http://localhost/anthropic/v1/messages",
+			strings.NewReader(raw(Object{"model": "m_stream_drop", "max_tokens": 64, "stream": true,
+				"messages": []any{Object{"role": "user", "content": "hi"}}})))
+		r.Header.Set("x-api-key", key)
+		r.Header.Set("anthropic-version", "2023-06-01")
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		h.a.ServeHTTP(w, r)
+		return w
+	}
+
+	w := run(true)
+	if got := w.Header().Get("X-Prism-Dropped"); got != "reasoning" {
+		t.Fatalf("跨协议流式开启丢弃时必须先声明，得到 %q", got)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "message_stop") {
+		t.Fatalf("流未正常结束: %s", body)
+	}
+	if strings.Contains(body, "thinking") {
+		t.Fatal("推理内容不应出现在转换后的流里")
+	}
+	if !strings.Contains(body, "Hello") {
+		t.Fatalf("正文内容丢失: %s", body)
+	}
+
+	// 未开启时不声明，并且流会以错误帧结束而不是悄悄少掉内容
+	w = run(false)
+	if got := w.Header().Get("X-Prism-Dropped"); got != "" {
+		t.Fatalf("未开启不应声明，得到 %q", got)
+	}
+	if !strings.Contains(w.Body.String(), "error") {
+		t.Fatalf("未开启时应以错误帧结束: %s", w.Body.String())
+	}
+}

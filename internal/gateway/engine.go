@@ -496,11 +496,6 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				co := demoCompletion(o, p)
 				u = co.Usage
 				if boolean(o, "stream") {
-					if s.Cross && s.Model.DropReasoning {
-						// 流式无法等到发现推理内容再补响应头，所以开关开启时先声明：
-						// 本次跨协议响应会丢弃推理内容（如果上游返回了的话）
-						w.Header().Set("X-Prism-Dropped", "reasoning")
-					}
 					w.Header().Set("Content-Type", "text/event-stream")
 					em := newEmitter(w, p, s.Model.ID, id)
 					em.usage = u
@@ -574,6 +569,11 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 					status = 502
 					runErr = errors.New("expected SSE content type")
 					return
+				}
+				if s.Cross && s.Model.DropReasoning {
+					// 流式没法等到发现推理内容再补响应头，所以开关开启时先声明：
+					// 本次跨协议响应会丢弃推理内容（如果上游返回了的话）
+					w.Header().Set("X-Prism-Dropped", "reasoning")
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache, no-transform")
