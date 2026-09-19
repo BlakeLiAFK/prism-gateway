@@ -49,6 +49,12 @@ def enable_demo(base, token):
         assert payload['ok'], (action, payload)
         return payload['data']
     rpc('demo.enable', {'version': rpc('config.get')['version']})
+    # 拖拽排序至少要两个路由才能验证
+    cfg = rpc('config.get')
+    first = cfg['routes'][0]
+    second = dict(first, id='demo-second', name='Second route', sort=99)
+    rpc('route.save', {'version': cfg['version'], 'id': 'demo-second', 'route': second})
+    return rpc
 
 
 def run_ui_checks(page, base, token, results):
@@ -142,6 +148,29 @@ def run_ui_checks(page, base, token, results):
     page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
     page.wait_for_timeout(200)
     results.append('route candidate search')
+
+    # 顺序由拖拽产生，不该再让人手填数字
+    if page.locator('#f-sort').count() != 0:
+        fail('路由编辑器不应再暴露「列表排序」输入框')
+    page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
+    page.wait_for_timeout(200)
+    order = page.evaluate("[...document.querySelectorAll('.route-select p.mono')].map(e=>e.textContent)")
+    if len(order) < 2:
+        fail(f'需要至少两个路由才能验证拖拽，实得 {order}')
+    page.locator('.route-list button').nth(1).drag_to(page.locator('.route-list button').nth(0))
+    page.wait_for_timeout(900)
+    after = page.evaluate("[...document.querySelectorAll('.route-select p.mono')].map(e=>e.textContent)")
+    if after[0] != order[1]:
+        fail(f'拖拽后第一位应变成 {order[1]}，实得 {after}')
+    # 真正落库了才算数：重新加载页面，顺序是从服务端重新拉回来的
+    page.reload()
+    page.wait_for_timeout(1200)
+    page.click('.nav-item[data-nav="routes"]')
+    page.wait_for_timeout(500)
+    reloaded = page.evaluate("[...document.querySelectorAll('.route-select p.mono')].map(e=>e.textContent)")
+    if reloaded != after:
+        fail(f'拖拽结果没有落库: 拖后 {after}，重载后 {reloaded}')
+    results.append('route drag reorder')
 
     # 调试台的 System One 面板：载荷形状和对话协议完全不同，必须单独验证
     page.click('.nav-item[data-nav="playground"]')

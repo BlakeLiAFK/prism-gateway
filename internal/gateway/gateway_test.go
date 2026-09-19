@@ -2539,3 +2539,48 @@ func TestSystemOne529FallsOverLike503(t *testing.T) {
 		t.Fatalf("应当切到可用候选，实得 %s", w.Header().Get("X-Prism-Model"))
 	}
 }
+
+// 拖拽排序一次写完整份顺序。逐个保存会在中途失败时留下比原来更错的顺序。
+func TestRouteReorderWritesWholeOrderAtOnce(t *testing.T) {
+	h := newHarness(t)
+	h.change(t, func(c *Config) {
+		c.Routes = []Route{
+			{ID: "auto", Strategy: "priority", Sort: 10},
+			{ID: "lite", Strategy: "priority", Sort: 20},
+			{ID: "max", Strategy: "priority", Sort: 30},
+		}
+	})
+	_, out := h.rpc(t, "route.reorder", Object{
+		"version": h.a.Store.Config().Version,
+		"ids":     []any{"lite", "auto", "max"},
+	}, h.token)
+	if obj(out["data"]) == nil {
+		t.Fatalf("重排失败: %v", out)
+	}
+	var got []string
+	for _, r := range h.a.Store.Config().Routes {
+		got = append(got, r.ID)
+	}
+	if strings.Join(got, ",") != "lite,auto,max" {
+		t.Fatalf("顺序未按请求写入: %v", got)
+	}
+	// 空列表要明确拒绝，而不是把所有 sort 清零
+	w, _ := h.rpc(t, "route.reorder", Object{"version": h.a.Store.Config().Version, "ids": []any{}}, h.token)
+	if w.Code != 400 {
+		t.Fatalf("空 ids 应被拒绝，实得 %d", w.Code)
+	}
+	// 重启后顺序必须还在：sort 是存下来的，不是界面上临时排的
+	h.a.Store.DB.Close()
+	s, e := OpenStore(strings.TrimSuffix(h.s.KeyPath, ".key"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.DB.Close()
+	got = nil
+	for _, r := range s.Config().Routes {
+		got = append(got, r.ID)
+	}
+	if strings.Join(got, ",") != "lite,auto,max" {
+		t.Fatalf("重启后顺序丢失: %v", got)
+	}
+}

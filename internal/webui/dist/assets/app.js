@@ -143,8 +143,26 @@ export function bindPage(){
   else args.prompt=state.lastPrompt;
   state.playResult=await rpc('playground.run',args);}catch(e){report(e);}finally{state.playBusy=false;if(state.page==='playground')renderPage(false);}});
 
+// 拖完立刻落库：这里没有「应用排序」按钮，改完不存等于没改。
+async function reorderRoutes(from,to){
+  const ids=state.config.routes.map(r=>r.id);
+  if(from===to||from<0||to<0||from>=ids.length||to>=ids.length)return;
+  const [moved]=ids.splice(from,1);
+  ids.splice(to,0,moved);
+  try{await save('route.reorder',{ids});}catch(e){report(e);}
+}
+
  let from=-1;
-  $$('[data-drag-index]').forEach(el=>{el.addEventListener('dragstart',ev=>{from=Number(el.dataset.dragIndex);ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(from));el.classList.add('dragging');});el.addEventListener('dragend',()=>el.classList.remove('dragging'));el.addEventListener('dragover',ev=>{ev.preventDefault();ev.dataTransfer.dropEffect='move';});el.addEventListener('drop',ev=>{ev.preventDefault();moveCandidate(from,Number(el.dataset.dragIndex));});});
+
+ let fromKind="";
+  $$('[data-drag-index]').forEach(el=>{el.addEventListener('dragstart',ev=>{from=Number(el.dataset.dragIndex);fromKind=el.dataset.dragKind;ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(from));el.classList.add('dragging');});el.addEventListener('dragend',()=>el.classList.remove('dragging'));el.addEventListener('dragover',ev=>{if(el.dataset.dragKind!==fromKind)return;ev.preventDefault();ev.dataTransfer.dropEffect='move';});el.addEventListener('drop',async ev=>{
+    // 路由和候选是两份列表，跨着拖没有意义，直接忽略
+    if(el.dataset.dragKind!==fromKind)return;
+    ev.preventDefault();
+    const to=Number(el.dataset.dragIndex);
+    if(fromKind==='route')await reorderRoutes(from,to);
+    else moveCandidate(from,to);
+  });});
 
 }
 

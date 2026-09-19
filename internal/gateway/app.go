@@ -394,6 +394,25 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			c.Routes = append(c.Routes, v)
 			return nil
 		})
+	case "route.reorder":
+		// 顺序是一个整体，一次写完。逐个保存会在中途失败时留下一个
+		// 比原来更错的顺序，而且每次保存都要递增配置版本。
+		ids := arr(p["ids"])
+		if len(ids) == 0 {
+			return nil, fail("INVALID_PARAMS", "ids 不能为空", 400)
+		}
+		rank := map[string]int{}
+		for i, v := range ids {
+			rank[fmt.Sprint(v)] = (i + 1) * 10
+		}
+		return a.Store.Change(version, action, "", func(c *Config) error {
+			for i := range c.Routes {
+				if n, ok := rank[c.Routes[i].ID]; ok {
+					c.Routes[i].Sort = n
+				}
+			}
+			return nil
+		})
 	case "alias.save":
 		v := Alias{Enabled: true}
 		if er := decode(p["alias"], &v); er != nil {
