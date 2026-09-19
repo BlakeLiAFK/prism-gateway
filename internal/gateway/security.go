@@ -62,6 +62,26 @@ func clientFor(p Provider) *http.Client {
 	}
 	return &http.Client{Transport: tr, Timeout: time.Duration(p.TimeoutSec) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 }
+
+// requestIsSecure 判断客户端到网关这一段是不是 HTTPS。
+// 网关通常部署在反向代理之后，此时 r.TLS 为 nil，仅凭它判断会让
+// HTTPS 部署下的会话 Cookie 丢掉 Secure 标志。
+// 只有请求来自回环地址时才采信 X-Forwarded-Proto：公网直连的客户端
+// 可以随意伪造这个头，不能作数。
+func requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
+}
+
 func sameOrigin(r *http.Request) bool {
 	if strings.EqualFold(r.Header.Get("Sec-Fetch-Site"), "cross-site") {
 		return false

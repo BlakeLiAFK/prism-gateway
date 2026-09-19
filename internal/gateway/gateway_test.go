@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1882,3 +1883,57 @@ func TestReasoningBearingResponseIsRejectedWithClearReason(t *testing.T) {
 		}
 	}
 }
+
+// 网关几乎总是跑在反向代理后面，TLS 在代理侧终止。若只看 r.TLS，
+// HTTPS 部署下的会话 Cookie 反而会丢掉 Secure 标志。
+func TestSessionCookieSecureBehindProxy(t *testing.T) {
+	h := newHarness(t)
+	login := func(remote, proto string, tls bool) *http.Cookie {
+		t.Helper()
+		r := httptest.NewRequest("POST", "http://localhost/api.json",
+			strings.NewReader(raw(Object{"action": "auth.login", "params": Object{"token": h.token}})))
+		r.Header.Set("Content-Type", "application/json")
+		r.RemoteAddr = remote
+		if proto != "" {
+			r.Header.Set("X-Forwarded-Proto", proto)
+		}
+		if tls {
+			r.TLS = &tlsConnectionState
+		}
+		w := httptest.NewRecorder()
+		h.a.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("登录失败: %d %s", w.Code, w.Body)
+		}
+		for _, c := range w.Result().Cookies() {
+			if c.Name == "prism_session" {
+				return c
+			}
+		}
+		t.Fatal("未返回会话 Cookie")
+		return nil
+	}
+
+	if c := login("127.0.0.1:5555", "https", false); !c.Secure {
+		t.Fatal("回环代理转发的 HTTPS 请求，Cookie 必须带 Secure")
+	}
+	if c := login("[::1]:5555", "https", false); !c.Secure {
+		t.Fatal("IPv6 回环同样应被信任")
+	}
+	if c := login("127.0.0.1:5555", "", false); c.Secure {
+		t.Fatal("没有 X-Forwarded-Proto 时不应假定 HTTPS")
+	}
+	if c := login("127.0.0.1:5555", "http", false); c.Secure {
+		t.Fatal("明文转发不应带 Secure")
+	}
+	// 公网客户端可以随意伪造这个头，不能作数
+	if c := login("203.0.113.9:5555", "https", false); c.Secure {
+		t.Fatal("非回环来源的 X-Forwarded-Proto 不得被信任")
+	}
+	// 网关自己终止 TLS 时无需该头
+	if c := login("203.0.113.9:5555", "", true); !c.Secure {
+		t.Fatal("直连 TLS 时 Cookie 必须带 Secure")
+	}
+}
+
+var tlsConnectionState = tls.ConnectionState{HandshakeComplete: true}

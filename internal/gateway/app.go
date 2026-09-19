@@ -248,7 +248,7 @@ func (a *App) management(w http.ResponseWriter, r *http.Request) {
 			send(nil, err)
 			return
 		}
-		http.SetCookie(w, &http.Cookie{Name: "prism_session", Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, MaxAge: 43200})
+		http.SetCookie(w, &http.Cookie{Name: "prism_session", Value: token, Path: "/", HttpOnly: true, Secure: requestIsSecure(r), SameSite: http.SameSiteStrictMode, MaxAge: 43200})
 		send(Object{"authenticated": true, "csrf": csrf}, nil)
 		return
 	}
