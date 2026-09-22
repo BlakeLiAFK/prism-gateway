@@ -2724,6 +2724,15 @@ func TestProviderUsageQuery(t *testing.T) {
 			io.WriteString(w, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}`)
 		case "/usage":
 			io.WriteString(w, `{"balance":12.5,"plan":"go"}`)
+		case "/alpha/billing/credits":
+			io.WriteString(w, `{"credits":{"planId":"individual-goat","monthlyCredits":41.5,"purchasedCredits":8,"freeCredits":0.5,
+				"windowLimits":{"limited":true,"fiveHour":{"used":3.2,"cap":14},"weekly":{"used":9.75,"cap":35}}}}`)
+		case "/api/monitor/usage/quota/limit":
+			if r.Header.Get("Authorization") != "zai-raw-token" {
+				io.WriteString(w, `{"code":1001,"msg":"Authentication parameter not received in Header, unable to authenticate","success":false}`)
+				return
+			}
+			io.WriteString(w, `{"code":200,"success":true,"data":{"limits":[{"type":"TOKENS_LIMIT","percentage":32},{"type":"TIME_LIMIT","percentage":7,"currentValue":3,"usage":40}]}}`)
 		default:
 			w.WriteHeader(404)
 		}
@@ -2733,7 +2742,8 @@ func TestProviderUsageQuery(t *testing.T) {
 		c.Providers = append(c.Providers,
 			Provider{ID: "p_ds", Name: "DeepSeek", Kind: "deepseek", Auth: "none", BaseURL: upstream.URL + "/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
 			Provider{ID: "p_oc", Name: "OpenCode", Kind: "opencode", Auth: "none", BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30},
-			Provider{ID: "p_cc2", Name: "Command Code", Kind: "commandcode", Auth: "none", BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+			Provider{ID: "p_cc2", Name: "Command Code", Kind: "commandcode", Auth: "none", BaseURL: upstream.URL + "/provider/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
+			Provider{ID: "p_zai", Name: "Z.AI", Kind: "zai", Auth: "bearer", Secret: "zai-raw-token", HasKey: true, BaseURL: upstream.URL + "/api/coding/paas/v4", AllowPrivate: true, Enabled: true, TimeoutSec: 30})
 	})
 	_, o := h.rpc(t, "provider.usage", Object{}, h.token)
 	got := map[string]Object{}
@@ -2751,9 +2761,19 @@ func TestProviderUsageQuery(t *testing.T) {
 	if oc["supported"] != true || str(oc, "headline") != "12.5" || len(arr(oc["fields"])) != 1 {
 		t.Fatalf("OpenCode 通用扫描应把 balance 提为主数值、plan 作明细: %v", oc)
 	}
+	// Command Code 的额度在 CLI 用的 /alpha/billing/credits 上，不在 Provider API 里
 	cc := got["p_cc2"]
-	if cc["supported"] != false || str(cc, "note") == "" {
-		t.Fatalf("Command Code 没有额度接口，应标注不支持并说明原因: %v", cc)
+	if cc["supported"] != true || str(cc, "headline") != "$50.00" {
+		t.Fatalf("Command Code 剩余额度应为三项之和: %v", cc)
+	}
+	ccFields := arr(cc["fields"])
+	if len(ccFields) != 4 || str(obj(ccFields[2]), "value") != "$3.20 / $14" {
+		t.Fatalf("Command Code 应带上两个滚动窗口: %v", ccFields)
+	}
+	// Z.AI 的监控接口要裸 token，加了 Bearer 前缀会被判未鉴权
+	zai := got["p_zai"]
+	if zai["supported"] != true || str(zai, "headline") != "已用 32%" {
+		t.Fatalf("Z.AI 额度解析不正确: %v", zai)
 	}
 	if _, ok, note := providerUsageURL(Provider{Kind: "mock"}); ok || note == "" {
 		t.Fatalf("本地演示不应查询上游额度")

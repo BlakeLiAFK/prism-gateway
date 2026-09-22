@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,15 +40,36 @@ func providerUsageURL(p Provider) (url string, ok bool, note string) {
 	case p.Kind == "opencode":
 		return base + "/usage", true, ""
 	case p.Kind == "commandcode":
-		return "", false, "Provider API 未提供额度接口；额度见 CLI /usage 或 Studio"
+		// Provider API 那四个端点里没有额度接口，但 CLI 的 /usage 走的是同一个域名下的
+		// /alpha/billing/credits，鉴权同样是 Bearer + 同一把 Key（官方文档写明
+		// Provider Key 与 CLI Key 是同一把）。未公开接口，形状变了会退回通用扫描。
+		if root := originOf(base); root != "" {
+			return root + "/alpha/billing/credits", true, ""
+		}
+		return "", false, "供应商地址无法解析出额度接口"
 	case p.Kind == "openai":
 		return "", false, "没有按 Key 的余额接口；用量只在组织后台（需 admin key）"
 	case p.Kind == "anthropic":
 		return "", false, "没有按 Key 的余额接口；用量只在 Console（需 admin key）"
 	case p.Kind == "zai":
-		return "", false, "未公开按 Key 的额度接口；额度见官方控制台"
+		// 官方 glm-plan-usage 插件查的就是这个监控接口（未公开文档，但随插件源码发布），
+		// 鉴权是裸 token、不加 Bearer 前缀。地址跟随 base_url 的域名，
+		// 智谱开放平台（open.bigmodel.cn）用同一套路径。
+		if root := originOf(base); root != "" {
+			return root + "/api/monitor/usage/quota/limit", true, ""
+		}
+		return "", false, "供应商地址无法解析出额度接口"
 	}
 	return "", false, "该供应商未提供可查询的额度接口"
+}
+
+// originOf 取地址的 scheme://host，用于拼同域名下的其它接口。
+func originOf(base string) string {
+	u, err := url.Parse(base)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 func (a *App) providerUsageAll(ctx context.Context) []any {
@@ -101,6 +123,11 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 		return out
 	}
 	requestHeaders(req, &http.Request{Header: http.Header{}}, p, "chat", "")
+	if p.Kind == "zai" && p.Secret != "" {
+		// 监控接口要的是裸 token，带 Bearer 前缀会被判为未鉴权
+		req.Header.Set("Authorization", p.Secret)
+		req.Header.Set("Accept-Language", "en-US,en")
+	}
 	res, err := a.Engine.client(p).Do(req)
 	if err != nil {
 		out["error"] = "上游连接失败"
@@ -116,6 +143,15 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 	var o Object
 	if json.Unmarshal(body, &o) != nil {
 		out["error"] = "额度接口返回了无法解析的内容"
+		return out
+	}
+	// Z.AI 这类接口鉴权失败也回 HTTP 200，错误藏在 body 的业务码里
+	if o["success"] == false {
+		msg := str(o, "msg")
+		if msg == "" {
+			msg = "额度接口返回失败"
+		}
+		out["error"] = msg
 		return out
 	}
 	headline, fields := parseUsage(p, o)
@@ -139,6 +175,42 @@ func parseUsage(p Provider, o Object) (string, []any) {
 			}
 		}
 		return "", nil
+	}
+	if p.Kind == "zai" {
+		labels := map[string]string{"TOKENS_LIMIT": "Token 用量 · 5 小时", "TIME_LIMIT": "MCP 用量 · 1 个月"}
+		fields := []any{}
+		headline := ""
+		for _, v := range arr(obj(o["data"])["limits"]) {
+			it := obj(v)
+			kind := str(it, "type")
+			label := labels[kind]
+			if label == "" {
+				label = kind
+			}
+			value := fmt.Sprintf("%.0f%%", num(it, "percentage"))
+			if kind == "TOKENS_LIMIT" {
+				headline = "已用 " + value
+				continue
+			}
+			fields = append(fields, Object{"label": label, "value": value})
+		}
+		return headline, fields
+	}
+	if p.Kind == "commandcode" {
+		c := obj(o["credits"])
+		remain := num(c, "monthlyCredits") + num(c, "purchasedCredits") + num(c, "freeCredits")
+		fields := []any{
+			Object{"label": "月度剩余", "value": fmt.Sprintf("$%.2f", num(c, "monthlyCredits"))},
+			Object{"label": "附加额度", "value": fmt.Sprintf("$%.2f", num(c, "purchasedCredits")+num(c, "freeCredits"))},
+		}
+		// 套餐档另有 5 小时与 7 天两个滚动窗口，耗尽时请求会被直接拒掉，比总额更需要盯
+		w := obj(c["windowLimits"])
+		for _, x := range []struct{ key, label string }{{"fiveHour", "5 小时"}, {"weekly", "本周"}} {
+			if v := obj(w[x.key]); v != nil {
+				fields = append(fields, Object{"label": x.label, "value": fmt.Sprintf("$%.2f / $%.0f", num(v, "used"), num(v, "cap"))})
+			}
+		}
+		return fmt.Sprintf("$%.2f", remain), fields
 	}
 	if strings.Contains(host, "openrouter.ai") {
 		d := obj(o["data"])

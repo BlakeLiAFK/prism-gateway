@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.12.1 · 2026-09-22
+
+- Command Code 与 Z.AI 的额度改为真查，不再只写「不支持」。两家的接口都没有
+  写进公开文档，但都随官方客户端一起发布，形状是确定的：
+  - Command Code：`GET /alpha/billing/credits`，CLI 的 `/usage` 走的就是它，
+    鉴权同样是 Bearer + 同一把 Key（官方文档写明 Provider Key 与 CLI Key 同源）。
+    展示剩余总额，并拆出月度剩余、附加额度，以及 5 小时 / 本周两个滚动窗口
+    ——套餐档真正会卡住请求的是这两个窗口，不是总额。
+  - Z.AI：`GET /api/monitor/usage/quota/limit`，取自官方 glm-plan-usage 插件源码。
+    鉴权是裸 token，**加 Bearer 前缀会被判为未鉴权**。展示 5 小时 Token 用量百分比
+    与一个月 MCP 用量百分比。地址跟随 base_url 域名，智谱开放平台同路径。
+- 上游用鉴权失败也回 HTTP 200 的（Z.AI 就是），改为按 body 里的业务码判失败，
+  不再把一条错误消息当额度渲染出来。
+
 ## 1.12.0 · 2026-09-22
 
 - 供应商卡片显示上游额度。只有少数供应商提供「凭 API Key 就能查」的接口，
