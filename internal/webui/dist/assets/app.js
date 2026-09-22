@@ -2,7 +2,7 @@
 import {rpc,setCSRF} from './api.js';
 import {$,$$,E,json,ms,pages,state} from './core.js';
 import {icon} from './icons.js';
-import {avatar,badge,btn,checked,closeDialog,confirm,copy,empty,field,footer,getModel,nval,pillStatus,report,save,showDialog,tag,toast,val} from './ui.js';
+import {avatar,badge,btn,checked,closeDialog,confirm,copy,empty,field,footer,getModel,getProvider,nval,pillStatus,report,save,showDialog,tag,toast,val} from './ui.js';
 import {aliasEditor,buildQuestions,connectionGuide,defaultQuestions,jobs,keyEditor,keys,modelEditor,models,moveCandidate,overview,playground,preservePlayground,providerEditor,providers,requests,routeEditor,routes,sessions,settings,usage} from './views.js';
 
 export function login(){
@@ -302,6 +302,20 @@ export async function handleAction(el){
  case 'toggle-model':{
       const m=getModel(id);
       await save('model.save',{id,model:{enabled:!m.enabled}});
+      break;
+
+    }
+
+ case 'toggle-route':{
+      const r=state.config.routes.find(x=>x.id===id);
+      await save('route.save',{id,route:{enabled:!r.enabled}});
+      break;
+
+    }
+
+ case 'toggle-provider':{
+      const p=getProvider(id);
+      await save('provider.save',{id,provider:{enabled:!p.enabled}});
       break;
 
     }

@@ -2674,3 +2674,42 @@ func TestZaiProtocolFollowsBaseURL(t *testing.T) {
 		}
 	}
 }
+
+// 额度耗尽（402）和套餐不含该模型（403）都不是「上游暂时忙」，
+// 但对本次请求同样是确定性不可用，应当换到下一个候选，
+// 并给出比 429 长得多的冷却：这类问题要等人去充值或升级套餐。
+func TestExhaustedFallsOverAndCoolsDownLonger(t *testing.T) {
+	for _, status := range []int{402, 403} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			h := newHarness(t)
+			var second atomic.Int32
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				o := Object{}
+				json.NewDecoder(r.Body).Decode(&o)
+				if str(o, "model") == "upstream-first" {
+					w.WriteHeader(status)
+					return
+				}
+				second.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(completionObject(Completion{Blocks: []Block{{Kind: "text", Text: "fallback success"}}, Usage: Usage{Input: 1, Output: 2, Known: true}}, "chat", "second", "f"))
+			}))
+			defer up.Close()
+			h.configure(t, up.URL, modelFixture("first", "chat"), modelFixture("second", "chat"))
+			h.change(t, func(c *Config) {
+				c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"first", 10}, {"second", 10}}}}
+			})
+			w := h.generate(t, "chat", requestFixture("chat", "auto"))
+			requireStatus(t, w, 200)
+			if second.Load() != 1 || !strings.Contains(w.Body.String(), "fallback success") {
+				t.Fatalf("HTTP %d 应当切换到下一个候选，实得 %s", status, w.Body)
+			}
+			// 冷却要明显长于 429 的 30 秒默认值，否则下一个请求又会去撞一次没额度的上游
+			left := obj(obj(h.a.Engine.Health()["models"])["first"])
+			until := int64(num(left, "cooldown_until"))
+			if d := until - now(); d < int64(14*time.Minute/time.Millisecond) {
+				t.Fatalf("耗尽类故障的冷却应接近 15 分钟，实得 %d ms", d)
+			}
+		})
+	}
+}

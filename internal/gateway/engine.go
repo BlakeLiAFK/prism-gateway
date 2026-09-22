@@ -395,6 +395,10 @@ func (e *Engine) cooldown(id, retry string) {
 	} else if t, er := http.ParseTime(retry); er == nil && t.After(time.Now()) {
 		d = time.Until(t)
 	}
+	e.cooldownFor(id, d)
+}
+
+func (e *Engine) cooldownFor(id string, d time.Duration) {
 	e.mu.Lock()
 	e.state(id).Cooldown = now() + int64(min(d, 24*time.Hour)/time.Millisecond)
 	e.mu.Unlock()
@@ -406,6 +410,18 @@ func (e *Engine) cooldown(id, retry string) {
 func retryable(status int) bool {
 	return status == 429 || status == 503 || status == 529
 }
+
+// exhausted 是「这个上游对本次请求确定性不可用」：额度用尽（402）
+// 或套餐不含该模型、凭证权限不足（403）。同样该换候选，但和 429 不是一回事——
+// 429 过一会儿就好了，这类问题要等人去充值或升级套餐，所以冷却时间长得多。
+func exhausted(status int) bool {
+	return status == 402 || status == 403
+}
+
+// exhaustedCooldown 决定耗尽类故障的冷却时长。
+// 取 15 分钟：短到额度恢复后不至于把候选闲置太久，
+// 长到不会每来一个请求就先去撞一次已经没额度的上游。
+const exhaustedCooldown = 15 * time.Minute
 
 func pathFor(p string) string {
 	switch p {
@@ -620,6 +636,8 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				runErr = fmt.Errorf("upstream status %d", status)
 				if retryable(status) {
 					e.cooldown(s.Model.ID, res.Header.Get("Retry-After"))
+				} else if exhausted(status) {
+					e.cooldownFor(s.Model.ID, exhaustedCooldown)
 				}
 				return
 			}
@@ -711,6 +729,10 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		}
 		if retryable(status) && safeFallback {
 			lastErr = fail("UPSTREAM_RATE_LIMIT", "上游拒绝请求，已尝试可用候选", 429)
+			continue
+		}
+		if exhausted(status) && safeFallback {
+			lastErr = fail("UPSTREAM_EXHAUSTED", "上游额度或权限不可用，已尝试可用候选", 402)
 			continue
 		}
 		if status == 499 {
