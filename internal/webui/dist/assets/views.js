@@ -30,7 +30,7 @@ export function overview(){
 
 export function providers(){
   const ps=state.config.providers;
-  return head('PROVIDERS','把你的模型，连接进来。','凭证加密保存在 SQLite；只有网关会向上游发送真实 API Key。',btn('添加供应商','add-provider','plus','','primary'))+`<div class="provider-grid">${ps.map(p=>{const models=state.config.models.filter(m=>m.provider_id===p.id);return `<article class="card provider-card"><div class="provider-card-head">${avatar(p)}<div style="min-width:0"><h3 class="ellipsis">${E(p.name)}</h3><span class="tiny muted mono">${E(p.kind)}</span></div>${tag(p.enabled?'已启用':'已停用',p.enabled?'':'neutral')}</div><p class="small sub">${E(p.description||'独立凭证、协议和网络边界。')}</p><div class="provider-url">${E(p.kind==='mock'?'LOCAL ONLY · NO CLOUD TRAFFIC':p.base_url)}</div><div class="provider-meta"><div><strong>${models.length} <span class="tiny muted">models</span></strong><small>${models.filter(m=>m.enabled).length} 个已启用</small></div><div><strong>${p.kind==='mock'?'本地演示':p.has_key?'已加密':'无凭证'}</strong><small>${p.kind==='mock'?'非真实推理':`鉴权方式 ${E(p.auth)}`}</small></div></div><div class="provider-buttons">${btn('编辑','edit-provider','edit',`data-id="${E(p.id)}"`,'small')}${btn('测试连接','test-provider','bolt',`data-id="${E(p.id)}"`,'small')}${p.kind!=='mock'?btn('同步模型','sync-provider','refresh',`data-id="${E(p.id)}"`,'small'):''}<button class="icon-btn" data-action="delete-provider" data-id="${E(p.id)}" aria-label="删除供应商">${icon('trash')}</button></div></article>`;}).join('')}<button class="add-card" data-action="add-provider">${icon('plus')}<span>连接新的供应商</span><small class="tiny">OpenCode Go / OpenAI / Anthropic / 自定义</small></button></div><div class="banner" style="margin-top:22px">${icon('shield')}<span>默认禁止访问私有网络。连接 Ollama、内网 vLLM 等服务时，需在供应商设置中明确授权。</span></div>`;
+  return head('PROVIDERS','把你的模型，连接进来。','凭证加密保存在 SQLite；只有网关会向上游发送真实 API Key。',btn('添加供应商','add-provider','plus','','primary'))+`<div class="provider-grid">${ps.map(p=>{const models=state.config.models.filter(m=>m.provider_id===p.id);return `<article class="card provider-card"><div class="provider-card-head">${avatar(p)}<div style="min-width:0"><h3 class="ellipsis">${E(p.name)}</h3><span class="tiny muted mono">${E(p.kind)}</span></div>${tag(p.enabled?'已启用':'已停用',p.enabled?'':'neutral')}</div><p class="small sub">${E(p.description||'独立凭证、协议和网络边界。')}</p><div class="provider-url">${E(p.kind==='mock'?'LOCAL ONLY · NO CLOUD TRAFFIC':p.base_url)}</div><div class="provider-meta"><div><strong>${models.length} <span class="tiny muted">models</span></strong><small>${models.filter(m=>m.enabled).length} 个已启用</small></div><div><strong>${p.kind==='mock'?'本地演示':p.has_key?'已加密':'无凭证'}</strong><small>${p.kind==='mock'?'非真实推理':`鉴权方式 ${E(p.auth)}`}</small></div></div><div class="provider-buttons">${btn('编辑','edit-provider','edit',`data-id="${E(p.id)}"`,'small')}${btn('测试连接','test-provider','bolt',`data-id="${E(p.id)}"`,'small')}${p.kind!=='mock'?btn('同步模型','sync-provider','refresh',`data-id="${E(p.id)}"`,'small'):''}<button class="icon-btn" data-action="delete-provider" data-id="${E(p.id)}" aria-label="删除供应商">${icon('trash')}</button></div></article>`;}).join('')}<button class="add-card" data-action="add-provider">${icon('plus')}<span>连接新的供应商</span><small class="tiny">OpenCode / Command Code / Z.AI / OpenAI / Anthropic / 自定义</small></button></div><div class="banner" style="margin-top:22px">${icon('shield')}<span>默认禁止访问私有网络。连接 Ollama、内网 vLLM 等服务时，需在供应商设置中明确授权。</span></div>`;
 
 }
 
@@ -158,11 +158,11 @@ function questionCard(q,i){
 }
 
 // 概率分布画成条，比一串小数好读；最高的一项用强调色。
-function probBars(probs,picked){
+function probBars(probs,picked,labels){
   const entries=Object.entries(probs||{}).sort((a,b)=>b[1]-a[1]);
   if(!entries.length)return '';
   return `<div class="prob-list">${entries.map(([k,v])=>`<div class="prob-row ${k===String(picked)?'picked':''}">
-    <span class="prob-name ellipsis">${E(k)}</span>
+    <span class="prob-name ellipsis">${E(labels?.[k]??k)}</span>
     <span class="prob-track"><i style="width:${Math.max(1,Math.round(v*100))}%"></i></span>
     <span class="prob-value mono">${(v*100).toFixed(1)}%</span></div>`).join('')}</div>`;
 }
@@ -176,9 +176,13 @@ function answerCard(key,a){
   }else if(a.type==='choice'){
     body=`<div class="answer-headline"><strong>${E(a.choice)}</strong>${a.confidence!=null?badge('置信度 '+(a.confidence*100).toFixed(0)+'%'):''}</div>${probBars(a.probabilities,a.choice)}`;
   }else if(a.type==='score'){
-    const legend=a.legend||[];
-    const label=legend[a.score-1];
-    body=`<div class="answer-headline"><strong>${E(a.score)}${legend.length?` / ${legend.length}`:''}</strong>${label?`<span>${E(label)}</span>`:''}${a.confidence!=null?badge('置信度 '+(a.confidence*100).toFixed(0)+'%'):''}</div>${probBars(a.probabilities,a.score)}`;
+    // legend 是 {级别序号: 文字} 的对象，序号从 0 开始；
+    // score 是落在这些级别上的连续值（例如 1.3），不是整数下标。
+    const legend=a.legend||{};
+    const levels=Object.keys(legend).length;
+    const nearest=String(Math.round(Number(a.score)||0));
+    const label=legend[nearest];
+    body=`<div class="answer-headline"><strong>${label?E(label):E(a.score)}</strong><span class="mono">${E(a.score)}${levels?` · 共 ${levels} 级`:''}</span>${a.confidence!=null?badge('置信度 '+(a.confidence*100).toFixed(0)+'%'):''}</div>${probBars(a.probabilities,nearest,legend)}`;
   }else{
     body=`<pre>${E(json(a))}</pre>`;
   }
@@ -227,13 +231,13 @@ export function providerEditor(id=''){
     name:'',kind:'opencode',base_url:'https://opencode.ai/zen/go/v1',auth:'auto',enabled:true,allow_private:false,timeout_sec:300,description:''
   };
 
- const d=showDialog(old?'编辑供应商':'连接新的供应商','设置上游地址与独立凭证；密钥不会返回给浏览器。',`<div class="form-section"><h3>连接信息</h3>${field('显示名称','name',p.name,'text','','required placeholder="例如：OpenCode Go"')}${selectField('供应商类型','kind',p.kind,[['opencode','OpenCode Go'],['openai','OpenAI'],['anthropic','Anthropic'],['custom','自定义兼容接口'],...(p.kind==='mock'?[['mock','本地演示']]:[])])}${field('API Base URL','base_url',p.base_url,'url','包含上游 /v1 前缀；不要包含 /chat/completions 等操作路径。',p.kind==='mock'?'':'required')}${field('上游 API Key','api_key','','password',p.has_key?'已保存加密凭证。留空保持原密钥；勾选下方选项可清除。':'只会加密持久化，不在日志与配置接口中回显。','autocomplete="new-password" placeholder="sk-…"')}${p.has_key?check('清除现有上游凭证','clear_key',false):''}${selectField('鉴权方式','auth',p.auth,[['auto','自动（根据目标协议）'],['bearer','Authorization: Bearer'],['x-api-key','x-api-key'],['none','不使用凭证']])}</div><div class="form-section"><h3>行为与安全</h3>${field('超时 · 秒','timeout_sec',p.timeout_sec,'number','包含完整响应和流式生成时间。','min="5" max="1800" required')}${field('备注','description',p.description)}${check('启用供应商','enabled',p.enabled)}${check('允许私有网络 / 明文 HTTP','allow_private',p.allow_private,'仅连接你信任的本地或内网模型服务时开启。开启后可访问回环与私网 IP。')}<div class="dialog-note">连接测试只调用 GET /models。同步模型不会自动确认价格、额度与全部能力，新模型默认禁用。</div></div>`,async f=>{
+ const d=showDialog(old?'编辑供应商':'连接新的供应商','设置上游地址与独立凭证；密钥不会返回给浏览器。',`<div class="form-section"><h3>连接信息</h3>${field('显示名称','name',p.name,'text','','required placeholder="例如：OpenCode Go"')}${selectField('供应商类型','kind',p.kind,[['opencode','OpenCode Go'],['commandcode','Command Code'],['zai','Z.AI'],['openai','OpenAI'],['anthropic','Anthropic'],['custom','自定义兼容接口'],...(p.kind==='mock'?[['mock','本地演示']]:[])])}${field('API Base URL','base_url',p.base_url,'url','包含上游 /v1 前缀；不要包含 /chat/completions 等操作路径。',p.kind==='mock'?'':'required')}${field('上游 API Key','api_key','','password',p.has_key?'已保存加密凭证。留空保持原密钥；勾选下方选项可清除。':'只会加密持久化，不在日志与配置接口中回显。','autocomplete="new-password" placeholder="sk-…"')}${p.has_key?check('清除现有上游凭证','clear_key',false):''}${selectField('鉴权方式','auth',p.auth,[['auto','自动（根据目标协议）'],['bearer','Authorization: Bearer'],['x-api-key','x-api-key'],['none','不使用凭证']])}</div><div class="form-section"><h3>行为与安全</h3>${field('超时 · 秒','timeout_sec',p.timeout_sec,'number','包含完整响应和流式生成时间。','min="5" max="1800" required')}${field('备注','description',p.description)}${check('启用供应商','enabled',p.enabled)}${check('允许私有网络 / 明文 HTTP','allow_private',p.allow_private,'仅连接你信任的本地或内网模型服务时开启。开启后可访问回环与私网 IP。')}<div class="dialog-note">连接测试只调用 GET /models。同步模型不会自动确认价格、额度与全部能力，新模型默认禁用。</div></div>`,async f=>{
   const v={name:val(f,'name').trim(),kind:val(f,'kind'),base_url:val(f,'base_url').trim(),auth:val(f,'auth'),timeout_sec:nval(f,'timeout_sec'),enabled:checked(f,'enabled'),allow_private:checked(f,'allow_private'),description:val(f,'description')};
   if(val(f,'api_key'))v.api_key=val(f,'api_key');else if(checked(f,'clear_key'))v.api_key='';
   await save('provider.save',{id,provider:v},f);
  });
 
- $('[name=kind]',d).addEventListener('change',ev=>{const preset={opencode:'https://opencode.ai/zen/go/v1',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1'}[ev.target.value];if(preset&&!old)$('[name=base_url]',d).value=preset;});
+ $('[name=kind]',d).addEventListener('change',ev=>{const preset={opencode:'https://opencode.ai/zen/go/v1',commandcode:'https://api.commandcode.ai/provider/v1',zai:'https://api.z.ai/api/coding/paas/v4',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1'}[ev.target.value];if(preset&&!old)$('[name=base_url]',d).value=preset;});
 
 }
 

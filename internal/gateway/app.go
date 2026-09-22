@@ -767,7 +767,8 @@ func (a *App) EnableDemo(version int64) (Config, error) {
 	})
 }
 func providerProtocol(p Provider) string {
-	if p.Kind == "anthropic" {
+	// Z.AI 同时提供 OpenAI 兼容面和 Anthropic 兼容面，由填入的地址决定协议
+	if p.Kind == "anthropic" || (p.Kind == "zai" && strings.Contains(p.BaseURL, "/anthropic")) {
 		return "messages"
 	}
 	return "chat"
@@ -849,8 +850,11 @@ func (a *App) syncModels(ctx context.Context, p Provider, version int64) (any, e
 				continue
 			}
 			protocol := providerProtocol(p)
-			if p.Kind == "opencode" {
+			switch p.Kind {
+			case "opencode":
 				protocol = openCodeProtocol(up)
+			case "commandcode":
+				protocol = commandCodeProtocol(v)
 			}
 			name := str(v, "name")
 			if name == "" {
@@ -877,6 +881,26 @@ func (a *App) syncModels(ctx context.Context, p Provider, version int64) (any, e
 		return nil, err
 	}
 	return Object{"added": added, "note": "新模型默认禁用。请确认原生协议、能力、上下文和价格，再手动启用；未自动抓取官方额度。"}, nil
+}
+
+// commandCodeProtocol 按上游 supported_endpoints 判定原生协议：
+// Command Code 在模型列表里直接声明了每个模型能走哪些端点，不需要像
+// OpenCode 那样维护模型名表。同时支持多个端点时取兼容性最好的一个。
+func commandCodeProtocol(src Object) string {
+	eps := map[string]bool{}
+	for _, v := range arr(src["supported_endpoints"]) {
+		s, _ := v.(string)
+		eps[s] = true
+	}
+	switch {
+	case eps["/messages"]:
+		return "messages"
+	case eps["/chat/completions"]:
+		return "chat"
+	case eps["/responses"]:
+		return "responses"
+	}
+	return "chat"
 }
 func openCodeProtocol(id string) string {
 	switch id {

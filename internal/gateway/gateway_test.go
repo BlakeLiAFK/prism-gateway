@@ -2619,3 +2619,58 @@ func TestDemoSystemOneMatchesUpstreamShape(t *testing.T) {
 		t.Fatalf("noul 应返回概率值: %v", yes)
 	}
 }
+
+// Command Code 在模型列表里直接声明每个模型支持的端点，协议应当照抄，
+// 而不是像 OpenCode 那样靠模型名表猜。
+func TestCommandCodeSyncUsesSupportedEndpoints(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"data":[
+			{"id":"cc-claude","name":"Claude","context_length":1000000,"supported_endpoints":["/messages"]},
+			{"id":"cc-gpt","name":"GPT","context_length":400000,"supported_endpoints":["/chat/completions","/responses"]},
+			{"id":"cc-resp","name":"Resp","context_length":200000,"supported_endpoints":["/responses"]},
+			{"id":"cc-bare","name":"Bare","context_length":128000}]}`)
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers, Provider{ID: "p_cc", Name: "Command Code", Kind: "commandcode",
+			Auth: "none", BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+	})
+	_, o := h.rpc(t, "provider.sync_models", Object{"id": "p_cc"}, h.token)
+	jobID := str(obj(o["data"]), "job_id")
+	for i := 0; i < 200; i++ {
+		_, jo := h.rpc(t, "job.get", Object{"id": jobID}, h.token)
+		if st := str(obj(jo["data"]), "status"); st != "queued" && st != "running" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	want := map[string]string{"cc-claude": "messages", "cc-gpt": "chat", "cc-resp": "responses", "cc-bare": "chat"}
+	got := map[string]string{}
+	for _, m := range h.s.Config().Models {
+		if m.ProviderID == "p_cc" {
+			got[m.Upstream] = m.Protocol
+		}
+	}
+	for up, proto := range want {
+		if got[up] != proto {
+			t.Fatalf("模型 %s 的协议应为 %s，实际 %q", up, proto, got[up])
+		}
+	}
+}
+
+// Z.AI 有 OpenAI 兼容面和 Anthropic 兼容面两个地址，协议由填入的地址决定。
+func TestZaiProtocolFollowsBaseURL(t *testing.T) {
+	cases := []struct {
+		base, want string
+	}{
+		{"https://api.z.ai/api/coding/paas/v4", "chat"},
+		{"https://api.z.ai/api/paas/v4", "chat"},
+		{"https://api.z.ai/api/anthropic/v1", "messages"},
+	}
+	for _, c := range cases {
+		if got := providerProtocol(Provider{Kind: "zai", BaseURL: c.base}); got != c.want {
+			t.Fatalf("%s 应判定为 %s，实际 %s", c.base, c.want, got)
+		}
+	}
+}

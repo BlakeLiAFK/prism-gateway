@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.10.0 · 2026-09-22
+
+- 新增 Command Code 与 Z.AI 两种供应商类型。
+- Command Code 的模型列表直接声明了每个模型支持的端点，同步时照抄
+  `supported_endpoints` 判定原生协议（`/messages` > `/chat/completions` >
+  `/responses`），不像 OpenCode 那样维护一张会过期的模型名表。
+- Z.AI 同时提供 OpenAI 兼容面和 Anthropic 兼容面，协议由填入的地址决定：
+  地址含 `/anthropic` 走 messages，否则走 chat。默认预设为 Coding Plan 端点
+  `https://api.z.ai/api/coding/paas/v4`。
+
 ## 1.9.1 · 2026-09-19
 
 - 路由列表改为拖拽排序，编辑器里的「列表排序」数字框去掉了。顺序本来就该是

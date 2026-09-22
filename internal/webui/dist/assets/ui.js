@@ -26,7 +26,7 @@ export function empty(title,desc,action='',label='',ico='model'){
 
 export function avatar(p){
   const k=p?.kind||'custom';
-  return `<span class="provider-avatar ${E(k)}">${({opencode:'OC',openai:'OA',anthropic:'AN',mock:'LO',custom:'API'})[k]||'API'}</span>`;
+  return `<span class="provider-avatar ${E(k)}">${({opencode:'OC',commandcode:'CC',zai:'ZA',openai:'OA',anthropic:'AN',mock:'LO',custom:'API'})[k]||'API'}</span>`;
 
 }
 
