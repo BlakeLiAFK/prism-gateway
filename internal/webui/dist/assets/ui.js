@@ -2,7 +2,7 @@
 import {rpc} from './api.js';
 import {loadPage,login,shell} from './app.js';
 import {$,$$,E,compact,dateTime,state} from './core.js';
-import {icon} from './icons.js';
+import {brand,brandOf,icon} from './icons.js';
 
 export function btn(text,action,ico='',extra='',type=''){
   return `<button class="btn ${type}" data-action="${action}" ${extra}>${ico?icon(ico):''}${E(text)}</button>`;
@@ -25,8 +25,9 @@ export function empty(title,desc,action='',label='',ico='model'){
 }
 
 export function avatar(p){
-  const k=p?.kind||'custom';
-  return `<span class="provider-avatar ${E(k)}">${({opencode:'OC',commandcode:'CC',zai:'ZA',deepseek:'DS',openai:'OA',anthropic:'AN',mock:'LO',custom:'API'})[k]||'API'}</span>`;
+  const b=brandOf(p);
+  const k=b||p?.kind||'custom';
+  return `<span class="provider-avatar ${E(k)}">${b?brand(b):({opencode:'OC',commandcode:'CC',zai:'ZA',deepseek:'DS',openai:'OA',anthropic:'AN',mock:'LO',custom:'API'})[k]||'API'}</span>`;
 
 }
 
