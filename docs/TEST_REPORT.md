@@ -201,7 +201,7 @@ p50 9.5 ms，无错误。说明 SQLite 的全局串行化在这个量级不是�
 
 ## 4.6 真实 Claude Code 端到端（v1.7.0 起）
 
-连接 https://w.1kb.win/anthropic，模型 lite（OpenRouter 免费池）：
+连接 https://ai.1kb.win/anthropic，模型 lite（OpenRouter 免费池）：
 
 - 单轮问答返回正确结果
 - **Read 工具调用往返**，正确读出文件内容并原样回答
