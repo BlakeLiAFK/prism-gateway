@@ -68,7 +68,12 @@ export function brandOf(p){
   return '';
 }
 
+// 这几家有官方 app icon（自带品牌底色），直接用图；
+// 其余用单色路径，形状同样取自官方 logo。
+const brandImages=new Set(['anthropic','commandcode','deepseek','openrouter','zai','opencode']);
+
 export function brand(name){
+  if(brandImages.has(name))return `<img class="provider-logo image" src="assets/brands/${name}.png" alt="" aria-hidden="true">`;
   return `<svg class="provider-logo" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">${brands[name]||''}</svg>`;
 
 }

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.12.6 · 2026-09-22
+
+- 供应商头像改用各家官方 app icon（Anthropic / Command Code / DeepSeek /
+  OpenRouter / Z.AI / OpenCode），压到 96px 随二进制内嵌，不请求外部图片。
+  OpenAI 官网挡爬虫拿不到图，它和 Ollama 继续用单色路径——这两家的官方标识
+  本来就是单色，不影响辨识。
+
 ## 1.12.5 · 2026-09-22
 
 - 修复供应商图标几乎不可见：图标用的 class 名 `brand` 与侧边栏品牌块的
