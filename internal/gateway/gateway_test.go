@@ -2584,3 +2584,38 @@ func TestRouteReorderWritesWholeOrderAtOnce(t *testing.T) {
 		t.Fatalf("重启后顺序丢失: %v", got)
 	}
 }
+
+// 演示响应的形状必须和真实上游一致。形状不一致的话，调试台和冒烟测试
+// 都在验证一个不存在的响应：真实 Jev 返回的 legend 是 {序号: 文字} 的对象、
+// 序号从 0 开始，score 是连续值而不是整数下标。
+func TestDemoSystemOneMatchesUpstreamShape(t *testing.T) {
+	res := demoSystemOne(Object{"questions": Object{
+		"sev": Object{"type": "score", "instructions": "严重度", "criteria": []any{"可忽略", "一般", "严重"}},
+		"dep": Object{"type": "choice", "instructions": "部门", "criteria": Object{"a": "A", "b": "B"}},
+		"yes": Object{"type": "noul", "instructions": "是否"},
+	}}, "jev-latest")
+	sev := obj(obj(res["answers"])["sev"])
+	legend := obj(sev["legend"])
+	if legend == nil {
+		t.Fatalf("legend 必须是对象，实得 %T", sev["legend"])
+	}
+	for _, k := range []string{"0", "1", "2"} {
+		if legend[k] == nil {
+			t.Fatalf("legend 的序号应从 0 开始且连续，实得 %v", legend)
+		}
+	}
+	if obj(sev["probabilities"])["0"] == nil {
+		t.Fatalf("probabilities 的键应与 legend 对齐，实得 %v", sev["probabilities"])
+	}
+	if _, ok := sev["score"].(float64); !ok {
+		t.Fatalf("score 应是连续值，实得 %T", sev["score"])
+	}
+	dep := obj(obj(res["answers"])["dep"])
+	if str(dep, "choice") == "" || obj(dep["probabilities"]) == nil {
+		t.Fatalf("choice 答案形状不对: %v", dep)
+	}
+	yes := obj(obj(res["answers"])["yes"])
+	if _, ok := yes["noul"].(float64); !ok {
+		t.Fatalf("noul 应返回概率值: %v", yes)
+	}
+}

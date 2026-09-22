@@ -112,13 +112,17 @@ func demoSystemOne(o Object, upstream string) Object {
 			}
 			answers[k] = Object{"type": qChoice, "choice": opts[0], "probabilities": probs, "confidence": 0.5}
 		case qScore:
+			// 形状跟着真实上游走：legend 是 {序号: 文字} 的对象、序号从 0 开始，
+			// score 是落在这些级别上的连续值而不是整数下标。
+			// demo 的形状一旦和上游不一致，调试台和冒烟测试就都在验证一个不存在的响应。
 			levels := arr(q["criteria"])
-			probs := Object{}
-			for i := range levels {
-				probs[fmt.Sprint(i+1)] = roundProb(1 / float64(len(levels)))
+			probs, legend := Object{}, Object{}
+			for i, v := range levels {
+				probs[fmt.Sprint(i)] = roundProb(1 / float64(len(levels)))
+				legend[fmt.Sprint(i)] = v
 			}
-			mid := (len(levels) + 1) / 2
-			answers[k] = Object{"type": qScore, "score": mid, "legend": levels, "probabilities": probs, "confidence": 0.5}
+			answers[k] = Object{"type": qScore, "score": float64(len(levels)-1) / 2,
+				"legend": legend, "probabilities": probs, "confidence": 0.5}
 		}
 	}
 	return Object{
