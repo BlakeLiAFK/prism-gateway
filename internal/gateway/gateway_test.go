@@ -2722,6 +2722,13 @@ func TestProviderUsageQuery(t *testing.T) {
 		switch r.URL.Path {
 		case "/user/balance":
 			io.WriteString(w, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}`)
+		case "/dual/user/balance":
+			// 同时持有两种币种时，各算各的，不能只认第一条
+			io.WriteString(w, `{"is_available":true,"balance_infos":[
+				{"currency":"USD","total_balance":"0.00","granted_balance":"0.00","topped_up_balance":"0.00"},
+				{"currency":"CNY","total_balance":"10.30","granted_balance":"0.00","topped_up_balance":"10.30"}]}`)
+		case "/zero/user/balance":
+			io.WriteString(w, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"10.30","granted_balance":"0.00","topped_up_balance":"10.30"}]}`)
 		case "/usage":
 			io.WriteString(w, `{"balance":12.5,"plan":"go"}`)
 		case "/alpha/billing/credits":
@@ -2743,7 +2750,9 @@ func TestProviderUsageQuery(t *testing.T) {
 			Provider{ID: "p_ds", Name: "DeepSeek", Kind: "deepseek", Auth: "none", BaseURL: upstream.URL + "/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
 			Provider{ID: "p_oc", Name: "OpenCode", Kind: "opencode", Auth: "none", BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30},
 			Provider{ID: "p_cc2", Name: "Command Code", Kind: "commandcode", Auth: "none", BaseURL: upstream.URL + "/provider/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
-			Provider{ID: "p_zai", Name: "Z.AI", Kind: "zai", Auth: "bearer", Secret: "zai-raw-token", HasKey: true, BaseURL: upstream.URL + "/api/coding/paas/v4", AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+			Provider{ID: "p_zai", Name: "Z.AI", Kind: "zai", Auth: "bearer", Secret: "zai-raw-token", HasKey: true, BaseURL: upstream.URL + "/api/coding/paas/v4", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
+			Provider{ID: "p_ds2", Name: "DeepSeek 双币", Kind: "deepseek", Auth: "none", BaseURL: upstream.URL + "/dual", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
+			Provider{ID: "p_ds3", Name: "DeepSeek 无赠金", Kind: "deepseek", Auth: "none", BaseURL: upstream.URL + "/zero", AllowPrivate: true, Enabled: true, TimeoutSec: 30})
 	})
 	_, o := h.rpc(t, "provider.usage", Object{}, h.token)
 	got := map[string]Object{}
@@ -2771,6 +2780,17 @@ func TestProviderUsageQuery(t *testing.T) {
 		t.Fatalf("Command Code 应带上两个滚动窗口: %v", ccFields)
 	}
 	// Z.AI 的监控接口要裸 token，加了 Bearer 前缀会被判未鉴权
+	// 双币种：美元那条是 0，主数值要落到真正有钱的人民币上
+	dual := got["p_ds2"]
+	if str(dual, "headline") != "¥10.30" || len(arr(dual["fields"])) != 2 {
+		t.Fatalf("双币种余额应两条都列出、主数值取非零的: %v", dual)
+	}
+	// 赠送余额为 0 时不占位置，否则一眼看过去像是余额为零
+	zero := got["p_ds3"]
+	zf := arr(zero["fields"])
+	if str(zero, "headline") != "¥10.30" || len(zf) != 1 || str(obj(zf[0]), "label") != "充值余额" {
+		t.Fatalf("为 0 的明细不应展示: %v", zero)
+	}
 	zai := got["p_zai"]
 	if zai["supported"] != true || str(zai, "headline") != "5 小时 32%" {
 		t.Fatalf("Z.AI 额度解析不正确: %v", zai)

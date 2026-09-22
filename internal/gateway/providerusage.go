@@ -166,15 +166,37 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 func parseUsage(p Provider, o Object) (string, []any) {
 	host := strings.ToLower(p.BaseURL)
 	if p.Kind == "deepseek" || strings.Contains(host, "deepseek.com") {
-		for _, v := range arr(o["balance_infos"]) {
-			b := obj(v)
-			sym := currencySymbol(str(b, "currency"))
-			return sym + str(b, "total_balance"), []any{
-				Object{"label": "赠送余额", "value": sym + str(b, "granted_balance")},
-				Object{"label": "充值余额", "value": sym + str(b, "topped_up_balance")},
+		infos := arr(o["balance_infos"])
+		// 账号可能同时持有人民币和美元两种余额，各是一条独立记录
+		if len(infos) > 1 {
+			headline, fields := "", []any{}
+			for _, v := range infos {
+				b := obj(v)
+				total := str(b, "total_balance")
+				sym := currencySymbol(str(b, "currency"))
+				fields = append(fields, Object{"label": str(b, "currency"), "value": sym + total})
+				if headline == "" && !zeroAmount(total) {
+					headline = sym + total
+				}
+			}
+			if headline == "" && len(fields) > 0 {
+				headline = str(obj(fields[0]), "value")
+			}
+			return headline, fields
+		}
+		if len(infos) == 0 {
+			return "", nil
+		}
+		b := obj(infos[0])
+		sym := currencySymbol(str(b, "currency"))
+		fields := []any{}
+		// 为 0 的那项不占位置，否则一眼看过去像是余额为零
+		for _, x := range []struct{ key, label string }{{"granted_balance", "赠送余额"}, {"topped_up_balance", "充值余额"}} {
+			if amount := str(b, x.key); amount != "" && !zeroAmount(amount) {
+				fields = append(fields, Object{"label": x.label, "value": sym + amount})
 			}
 		}
-		return "", nil
+		return sym + str(b, "total_balance"), fields
 	}
 	if p.Kind == "zai" {
 		labels := map[string]string{"TOKENS_LIMIT": "Token 用量 · 5 小时", "TIME_LIMIT": "MCP 用量 · 1 个月"}
@@ -268,6 +290,12 @@ func scalarText(v any) (string, bool) {
 		return map[bool]string{true: "是", false: "否"}[x], true
 	}
 	return "", false
+}
+
+// zeroAmount 判断上游给的金额字符串是不是 0；金额是字符串，不能直接比较。
+func zeroAmount(s string) bool {
+	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	return err == nil && v == 0
 }
 
 func currencySymbol(c string) string {
