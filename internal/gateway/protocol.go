@@ -843,3 +843,59 @@ func stripReasoning(o Object, protocol string) bool {
 	}
 	return dropped
 }
+
+// hasVisibleOutput 判断上游响应里有没有调用方真正用得上的产出：文本或工具调用。
+// 推理内容不算数——它可能按配置被丢弃，也可能压根不会转发给调用方。
+// 推理模型把输出预算全花在思考上时，响应是 200 但正文为空，对调用方等同于失败。
+func hasVisibleOutput(o Object, protocol string) bool {
+	switch protocol {
+	case "chat":
+		for _, v := range arr(o["choices"]) {
+			m := obj(obj(v)["message"])
+			if strings.TrimSpace(str(m, "content")) != "" || len(arr(m["tool_calls"])) > 0 {
+				return true
+			}
+		}
+	case "messages":
+		for _, v := range arr(o["content"]) {
+			b := obj(v)
+			if str(b, "type") == "tool_use" || strings.TrimSpace(str(b, "text")) != "" {
+				return true
+			}
+		}
+	case "responses":
+		for _, v := range arr(o["output"]) {
+			b := obj(v)
+			if str(b, "type") == "function_call" {
+				return true
+			}
+			for _, x := range arr(b["content"]) {
+				if strings.TrimSpace(str(obj(x), "text")) != "" {
+					return true
+				}
+			}
+		}
+	case "systemone":
+		// System One 的产出是结构化答案，不是自由文本
+		return len(obj(o["answers"])) > 0
+	}
+	return false
+}
+
+// truncatedStop 判断上游是因为触到输出上限才停的。推理模型配上偏小的
+// max_tokens 时会命中这里：预算全花在推理上，正文一个字都没留下。
+func truncatedStop(o Object, protocol string) bool {
+	switch protocol {
+	case "chat":
+		for _, v := range arr(o["choices"]) {
+			if str(obj(v), "finish_reason") == "length" {
+				return true
+			}
+		}
+	case "messages":
+		return str(o, "stop_reason") == "max_tokens"
+	case "responses":
+		return str(o, "status") == "incomplete"
+	}
+	return false
+}

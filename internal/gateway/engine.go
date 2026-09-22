@@ -358,6 +358,12 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 	if err != nil || status >= 400 {
 		state = "error"
 		code = fmt.Sprintf("UPSTREAM_%d", status)
+		// 带自有错误码的失败（空回答、跨协议不兼容）记它自己的码：
+		// 记成 UPSTREAM_502 会把「上游坏了」和「上游好好的但内容用不了」混为一谈
+		var ae *APIError
+		if errors.As(err, &ae) && ae.Code != "" {
+			code = ae.Code
+		}
 		if status == 499 {
 			code = "CLIENT_CANCELED"
 		}
@@ -366,7 +372,10 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 		mode = "unknown"
 		known = false
 	}
-	if state == "error" || !u.Known {
+	// 上游回了 200 又给了可信用量，就按实际用量记账——空回答同样烧掉了推理 token，
+	// 那是真花出去的钱，退回预留值或抹成零都不对。
+	billed := status == 200 && u.Known
+	if (state == "error" || !u.Known) && !billed {
 		if status == 429 || status == 503 || (status >= 400 && status < 500 && status != 499) {
 			value = 0
 			mode = "rejected"
@@ -405,17 +414,26 @@ func (e *Engine) cooldownFor(id string, d time.Duration) {
 }
 
 // retryable 是「上游暂时忙，换个候选重试是安全的」这一类状态码。
-// 529 是 TypeSafe 的过载码，语义与 503 相同。502 不在其中：
-// 它往往代表上游真的坏了或者返回了我们读不懂的东西，重放解决不了。
+// 529 是 TypeSafe 的过载码，语义与 503 相同。
 func retryable(status int) bool {
 	return status == 429 || status == 503 || status == 529
 }
 
-// exhausted 是「这个上游对本次请求确定性不可用」：额度用尽（402）
-// 或套餐不含该模型、凭证权限不足（403）。同样该换候选，但和 429 不是一回事——
-// 429 过一会儿就好了，这类问题要等人去充值或升级套餐，所以冷却时间长得多。
+// gatewayFailure 判断上游自己的网关层报错。只在「上游确实回了一个 HTTP 响应」
+// 时才成立——这种响应到不了模型，用量为零，换候选是安全的。
+// 网关自己标成 502 的那些情况（连不上、SSE 类型不对、响应读不懂）不走这里：
+// 请求可能已经被部分处理，重放并不安全。
+func gatewayFailure(upstreamStatus int) bool {
+	return upstreamStatus == 502 || upstreamStatus == 504
+}
+
+// exhausted 是「这个上游对本次请求确定性不可用」：额度用尽（402）、
+// 套餐不含该模型或凭证权限不足（403）、模型在上游已经不存在（404，
+// 上游下架某个模型变体就会这样）。同样该换候选，但和 429 不是一回事——
+// 429 过一会儿就好了，这类问题要等人去充值、升级套餐或改配置，
+// 所以冷却时间长得多。
 func exhausted(status int) bool {
-	return status == 402 || status == 403
+	return status == 402 || status == 403 || status == 404
 }
 
 // exhaustedCooldown 决定耗尽类故障的冷却时长。
@@ -549,6 +567,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		start := now()
 		u := Usage{}
 		status := 200
+		upstreamStatus := 0
 		var runErr error
 		func() {
 			defer func() { e.finish(s, att, session, key.ID, u, status, runErr, start) }()
@@ -632,6 +651,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			}
 			defer res.Body.Close()
 			status = res.StatusCode
+			upstreamStatus = res.StatusCode
 			if status < 200 || status >= 300 {
 				io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 				runErr = fmt.Errorf("upstream status %d", status)
@@ -695,6 +715,16 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				return
 			}
 			extractUsage(obj(ro["usage"]), s.Model.Protocol, &u)
+			if !hasVisibleOutput(ro, s.Model.Protocol) {
+				// 上游 200 了却没给出任何可用内容。静默把空回答转出去，调用方只会
+				// 以为模型答不上来；实际是这个候选本次不可用，该换下一个。
+				if truncatedStop(ro, s.Model.Protocol) {
+					runErr = fail("EMPTY_OUTPUT_TRUNCATED", "上游在触及输出上限前没有产出正文（推理模型常见：输出预算被思考占满）", 502)
+				} else {
+					runErr = fail("EMPTY_OUTPUT", "上游返回了空内容", 502)
+				}
+				return
+			}
 			if s.Cross {
 				co, er := decodeCompletion(ro, s.Model.Protocol)
 				if er != nil && s.Model.DropReasoning && stripReasoning(ro, s.Model.Protocol) {
@@ -734,6 +764,15 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		}
 		if exhausted(status) && safeFallback {
 			lastErr = fail("UPSTREAM_EXHAUSTED", "上游额度或权限不可用，已尝试可用候选", 402)
+			continue
+		}
+		if gatewayFailure(upstreamStatus) && safeFallback {
+			lastErr = fail("UPSTREAM_GATEWAY_ERROR", "上游网关错误，请求未到达模型，已尝试可用候选", 502)
+			continue
+		}
+		if emptyOutput(runErr) && safeFallback {
+			// 换一个候选才有意义：同一个模型再来一次大概率还是同样的结果
+			lastErr = fail("EMPTY_OUTPUT", "候选模型没有返回任何可用内容，已尝试可用候选", 502)
 			continue
 		}
 		if status == 499 {
@@ -942,4 +981,11 @@ func (e *Engine) pruneOnce() {
 			slog.Error("retention cleanup failed", "table", job.name, "err", err)
 		}
 	}
+}
+
+// emptyOutput 判断这次失败是不是「上游通了但没给出正文」。
+// 只在非流式路径产生：流式一旦开始写就不能回退换候选了。
+func emptyOutput(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && (ae.Code == "EMPTY_OUTPUT" || ae.Code == "EMPTY_OUTPUT_TRUNCATED")
 }

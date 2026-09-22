@@ -2868,3 +2868,115 @@ func TestRequestLogRecordsClientSource(t *testing.T) {
 		t.Fatalf("不匹配的 IP 不应命中: %v", mo["data"])
 	}
 }
+
+// failoverHarness 搭一个两候选的路由：第一个候选的上游按 bad 的行为回应，
+// 第二个永远正常。用来验证各种「该换候选」的判定。
+func failoverHarness(t *testing.T, bad http.HandlerFunc) *harness {
+	t.Helper()
+	h := newHarness(t)
+	first := httptest.NewServer(bad)
+	t.Cleanup(first.Close)
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"c1","object":"chat.completion","model":"m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"在的"}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`)
+	}))
+	t.Cleanup(second.Close)
+	h.change(t, func(c *Config) {
+		c.Providers = []Provider{
+			{ID: "p_bad", Name: "bad", Kind: "custom", BaseURL: first.URL, Auth: "auto", Secret: "s", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_ok", Name: "ok", Kind: "custom", BaseURL: second.URL, Auth: "auto", Secret: "s", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+		}
+		bad := modelFixture("cand-bad", "chat")
+		bad.ProviderID = "p_bad"
+		ok := modelFixture("cand-ok", "chat")
+		ok.ProviderID = "p_ok"
+		c.Models = []Model{bad, ok}
+		c.Routes = []Route{{ID: "pair", Name: "pair", Strategy: "priority", Enabled: true,
+			Candidates: []Candidate{{"cand-bad", 20}, {"cand-ok", 10}}}}
+	})
+	return h
+}
+
+// 上游下架某个模型变体就会回 404。这对当前候选是确定性失败，该换下一个，
+// 而不是把 404 直接甩给调用方——同档位后面的候选还活着。
+func TestNotFoundFallsOverToNextCandidate(t *testing.T) {
+	hits := 0
+	h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(404)
+		io.WriteString(w, `{"error":{"message":"model not found"}}`)
+	})
+	w := h.generate(t, "chat", requestFixture("chat", "pair"))
+	requireStatus(t, w, 200)
+	if got := w.Header().Get("X-Prism-Model"); got != "cand-ok" {
+		t.Fatalf("404 应当换候选，实得 %s", got)
+	}
+	if hits != 1 {
+		t.Fatalf("404 的候选只该试一次，实得 %d", hits)
+	}
+	rows, err := h.s.DB.Query("SELECT model_id,status,error_code FROM requests ORDER BY started_at")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 || rows[0].String("error_code") != "UPSTREAM_404" || rows[1].String("status") != "success" {
+		t.Fatalf("记录应为一条 404 一条成功: %v", rows)
+	}
+}
+
+// 上游网关层的 502 / 504 意味着请求根本没到模型，换候选是安全的。
+func TestUpstreamGatewayErrorFallsOver(t *testing.T) {
+	for _, status := range []int{502, 504} {
+		h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			io.WriteString(w, `{"error":{"message":"bad gateway"}}`)
+		})
+		w := h.generate(t, "chat", requestFixture("chat", "pair"))
+		requireStatus(t, w, 200)
+		if got := w.Header().Get("X-Prism-Model"); got != "cand-ok" {
+			t.Fatalf("上游 %d 应当换候选，实得 %s", status, got)
+		}
+	}
+}
+
+// 网关自己标成 502 的情况（这里是读不懂的响应体）不该换候选：
+// 请求可能已经被上游部分处理，重放并不安全。
+func TestGatewaySideFailureDoesNotFallOver(t *testing.T) {
+	h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"not":"a completion"`)
+	})
+	w := h.generate(t, "chat", requestFixture("chat", "pair"))
+	requireStatus(t, w, 502)
+	if got := w.Header().Get("X-Prism-Model"); got != "cand-bad" {
+		t.Fatalf("网关侧失败不该换候选，实得 %s", got)
+	}
+}
+
+// 推理模型把输出预算花光在思考上时，上游回 200 但正文为空。
+// 这对调用方等同于失败：要换候选、记成错误，而推理烧掉的 token 照实记账。
+func TestEmptyOutputFallsOverAndStillBills(t *testing.T) {
+	h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"c0","object":"chat.completion","model":"m","choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"","reasoning":"想了很久"}}],"usage":{"prompt_tokens":10,"completion_tokens":16,"total_tokens":26}}`)
+	})
+	w := h.generate(t, "chat", requestFixture("chat", "pair"))
+	requireStatus(t, w, 200)
+	if got := w.Header().Get("X-Prism-Model"); got != "cand-ok" {
+		t.Fatalf("空回答应当换候选，实得 %s", got)
+	}
+	rows, err := h.s.DB.Query("SELECT model_id,status,error_code,input_tokens,output_tokens,usage_mode FROM requests ORDER BY started_at")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("应有两条记录: %v", rows)
+	}
+	first := rows[0]
+	if first.String("status") != "error" || first.String("error_code") != "EMPTY_OUTPUT_TRUNCATED" {
+		t.Fatalf("空回答要记成错误并带自己的错误码: %v", first)
+	}
+	// 推理 token 是真花掉的，不能抹成零，也不能退回预留值
+	if first.Int("input_tokens") != 10 || first.Int("output_tokens") != 16 || first.String("usage_mode") != "reported_tokens" {
+		t.Fatalf("空回答仍应按上游上报的用量记账: %v", first)
+	}
+}
