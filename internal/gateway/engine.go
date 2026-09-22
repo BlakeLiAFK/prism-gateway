@@ -40,6 +40,8 @@ type health struct {
 	Cooldown   int64
 	LastStatus int
 	LatencyMS  int64
+	Limits     Object // 上游最近一次声明的限额，原样留存
+	LimitsAt   int64
 }
 type Engine struct {
 	store    *Store
@@ -84,7 +86,8 @@ func (e *Engine) Health() Object {
 	defer e.mu.Unlock()
 	m := Object{}
 	for k, v := range e.states {
-		m[k] = Object{"active": v.Active, "cooldown_until": v.Cooldown, "last_status": v.LastStatus, "latency_ms": v.LatencyMS}
+		m[k] = Object{"active": v.Active, "cooldown_until": v.Cooldown, "last_status": v.LastStatus, "latency_ms": v.LatencyMS,
+			"limits": v.Limits, "limits_at": v.LimitsAt}
 	}
 	return Object{"active": e.global, "models": m}
 }
@@ -662,6 +665,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				}
 				return
 			}
+			e.recordLimits(s.Model.ID, res.Header)
 			for _, h := range []string{"retry-after", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-tokens-remaining", "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens"} {
 				if v := res.Header.Get(h); v != "" {
 					w.Header().Set(h, v)
@@ -988,4 +992,21 @@ func (e *Engine) pruneOnce() {
 func emptyOutput(err error) bool {
 	var ae *APIError
 	return errors.As(err, &ae) && (ae.Code == "EMPTY_OUTPUT" || ae.Code == "EMPTY_OUTPUT_TRUNCATED")
+}
+
+// recordLimits 留存上游这次声明的限额，并在它明说额度已经归零时
+// 直接冷却到重置时刻——不必再拿下一个请求去撞一次 429。
+func (e *Engine) recordLimits(model string, h http.Header) {
+	raw := limitHeaders(h)
+	if len(raw) == 0 {
+		return
+	}
+	e.mu.Lock()
+	st := e.state(model)
+	st.Limits = raw
+	st.LimitsAt = now()
+	if until := exhaustedUntil(raw); until > st.Cooldown {
+		st.Cooldown = min(until, now()+int64(24*time.Hour/time.Millisecond))
+	}
+	e.mu.Unlock()
 }

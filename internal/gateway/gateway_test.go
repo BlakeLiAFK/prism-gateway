@@ -2980,3 +2980,92 @@ func TestEmptyOutputFallsOverAndStillBills(t *testing.T) {
 		t.Fatalf("空回答仍应按上游上报的用量记账: %v", first)
 	}
 }
+
+// 限额头的名字、单位、重置时间格式各家都不一样，先能原样留存，再尽力解析。
+func TestParseUpstreamRateLimitHeaders(t *testing.T) {
+	h := http.Header{}
+	h.Set("anthropic-ratelimit-requests-limit", "1000")
+	h.Set("anthropic-ratelimit-requests-remaining", "0")
+	h.Set("anthropic-ratelimit-requests-reset", time.Now().Add(90*time.Second).UTC().Format(time.RFC3339))
+	h.Set("x-ratelimit-remaining-tokens", "12000")
+	h.Set("x-ratelimit-reset-tokens", "6m0s")
+	h.Set("content-type", "application/json")
+
+	raw := limitHeaders(h)
+	if len(raw) != 5 {
+		t.Fatalf("应当只留存 5 个限额头，实得 %v", raw)
+	}
+	if _, ok := raw["content-type"]; ok {
+		t.Fatal("无关的响应头不该被留存")
+	}
+
+	parsed := parseLimits(raw)
+	req := parsed["requests"]
+	if !req.HasRemain || req.Remaining != 0 || !req.HasLimit || req.Limit != 1000 {
+		t.Fatalf("requests 一族解析错误: %+v", req)
+	}
+	tok := parsed["tokens"]
+	if !tok.HasRemain || tok.Remaining != 12000 {
+		t.Fatalf("tokens 一族解析错误: %+v", tok)
+	}
+	// "6m0s" 这种 Go duration 写法要折算成绝对时刻
+	if d := tok.Reset - now(); d < 5*60*1000 || d > 7*60*1000 {
+		t.Fatalf("duration 形式的重置时间换算错误: %d", d)
+	}
+	// 只有 requests 剩 0，冷却应当落在它的重置时刻附近
+	until := exhaustedUntil(raw)
+	if d := until - now(); d < 60*1000 || d > 120*1000 {
+		t.Fatalf("额度归零应冷却到重置时刻，实得 %d ms 之后", d)
+	}
+}
+
+// 各种重置时间写法都要能折算成绝对毫秒时间戳。
+func TestParseResetAcceptsEveryFormatSeen(t *testing.T) {
+	ms := time.Now().Add(time.Minute).UnixMilli()
+	cases := []struct{ in string }{
+		{fmt.Sprint(ms)},        // 毫秒时间戳
+		{fmt.Sprint(ms / 1000)}, // 秒时间戳
+		{"60"},                  // 还有多少秒
+		{"1m0s"},                // Go duration
+		{time.Now().Add(time.Minute).UTC().Format(time.RFC3339)}, // RFC3339
+	}
+	for _, c := range cases {
+		got := parseReset(c.in)
+		if d := got - now(); d < 30*1000 || d > 90*1000 {
+			t.Fatalf("%q 应解析到约一分钟后，实得 %d ms", c.in, d)
+		}
+	}
+	if parseReset("not-a-time") != 0 {
+		t.Fatal("解析不了的值应当返回 0，而不是猜一个")
+	}
+}
+
+// 上游明说额度归零时，下一个请求不该再去撞一次 429，直接换候选。
+func TestZeroRemainingCoolsDownModel(t *testing.T) {
+	h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-ratelimit-remaining-requests", "0")
+		w.Header().Set("x-ratelimit-reset-requests", "120")
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"c0","object":"chat.completion","model":"m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"这次还能答"}}],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`)
+	})
+	// 第一次正常返回：额度虽然归零，这次响应本身是好的
+	w := h.generate(t, "chat", requestFixture("chat", "pair"))
+	requireStatus(t, w, 200)
+	if got := w.Header().Get("X-Prism-Model"); got != "cand-bad" {
+		t.Fatalf("第一次应当正常落在首选候选，实得 %s", got)
+	}
+	// 第二次：首选已被冷却，应当换到下一个候选
+	w = h.generate(t, "chat", requestFixture("chat", "pair"))
+	requireStatus(t, w, 200)
+	if got := w.Header().Get("X-Prism-Model"); got != "cand-ok" {
+		t.Fatalf("额度归零后应当换候选，实得 %s", got)
+	}
+	runtime := h.a.Engine.Health()
+	m := obj(obj(runtime["models"])["cand-bad"])
+	if len(obj(m["limits"])) != 2 {
+		t.Fatalf("限额头应当留存在运行状态里: %v", m["limits"])
+	}
+	if m["cooldown_until"].(int64) <= now() {
+		t.Fatalf("冷却时刻应当在未来: %v", m["cooldown_until"])
+	}
+}
