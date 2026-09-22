@@ -2772,7 +2772,7 @@ func TestProviderUsageQuery(t *testing.T) {
 	}
 	// Z.AI 的监控接口要裸 token，加了 Bearer 前缀会被判未鉴权
 	zai := got["p_zai"]
-	if zai["supported"] != true || str(zai, "headline") != "已用 32%" {
+	if zai["supported"] != true || str(zai, "headline") != "5 小时 32%" {
 		t.Fatalf("Z.AI 额度解析不正确: %v", zai)
 	}
 	if _, ok, note := providerUsageURL(Provider{Kind: "mock"}); ok || note == "" {

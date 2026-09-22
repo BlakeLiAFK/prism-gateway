@@ -189,7 +189,8 @@ func parseUsage(p Provider, o Object) (string, []any) {
 			}
 			value := fmt.Sprintf("%.0f%%", num(it, "percentage"))
 			if kind == "TOKENS_LIMIT" {
-				headline = "已用 " + value
+				// 主位要自带窗口名，只写「已用 1%」看不出是哪个窗口的 1%
+				headline = "5 小时 " + value
 				continue
 			}
 			fields = append(fields, Object{"label": label, "value": value})
