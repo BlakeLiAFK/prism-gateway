@@ -298,7 +298,7 @@ func containsImage(v any) bool {
 	}
 	return false
 }
-func (e *Engine) admit(s selection, key Principal, reqID, requested, p, session string) (string, error) {
+func (e *Engine) admit(s selection, key Principal, reqID, requested, p, session string, from client) (string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.state(s.Model.ID)
@@ -333,7 +333,7 @@ func (e *Engine) admit(s selection, key Principal, reqID, requested, p, session 
 		}
 	}
 	id := randomID("att_")
-	err = e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,cost_nano,cost_known,reason,is_demo) VALUES (?,?,?,?,?,?,?,?,?,'running',?,?,?,?,?)`, id, reqID, key.ID, requested, s.Model.ID, s.Provider.ID, p, s.Model.Protocol, session, t, reserve, s.Model.PricingSet, s.Reason, s.Provider.Kind == "mock")
+	err = e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,cost_nano,cost_known,reason,is_demo,client_ip,user_agent) VALUES (?,?,?,?,?,?,?,?,?,'running',?,?,?,?,?,?,?)`, id, reqID, key.ID, requested, s.Model.ID, s.Provider.ID, p, s.Model.Protocol, session, t, reserve, s.Model.PricingSet, s.Reason, s.Provider.Kind == "mock", from.IP, from.Agent)
 	if err != nil {
 		return "", err
 	}
@@ -464,6 +464,7 @@ func errorParts(err error) (int, string, string) {
 	return 500, "INTERNAL_ERROR", "内部操作失败，请检查服务端日志"
 }
 func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Principal) {
+	from := clientOf(r)
 	id := randomID("req_")
 	w.Header().Set("X-Request-ID", id)
 	c := e.store.Config()
@@ -540,7 +541,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 	}
 	lastErr := fail("NO_CAPACITY", "所有候选模型当前均不可用", 429)
 	for _, s := range selections {
-		att, er := e.admit(s, key, id, requested, p, session)
+		att, er := e.admit(s, key, id, requested, p, session, from)
 		if er != nil {
 			lastErr = er
 			continue

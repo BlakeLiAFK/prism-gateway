@@ -1,13 +1,61 @@
 // 各页面与编辑抽屉的渲染。
 import {rpc} from './api.js';
 import {renderPage} from './app.js';
-import {$,$$,E,compact,dateTime,json,money,ms,number,state} from './core.js';
+import {$,$$,E,compact,dateTime,dateTimeSec,json,money,ms,number,state} from './core.js';
 import {icon} from './icons.js';
 import {avatar,badge,btn,chart,check,checked,closeDialog,copy,empty,field,flowMini,getModel,getProvider,head,headerValue,modelName,nval,pillStatus,quotaBars,rangeTools,save,selectField,selectRow,showDialog,spark,tag,toast,val} from './ui.js';
 
+// 客户端名称：认得出的给正式名，认不出的退回 UA 第一段，至少看得出是什么在调。
+const agentNames=[['claude-code','Claude Code'],['opencode','OpenCode'],['codex','Codex'],['cursor','Cursor'],['openai-python','OpenAI Python'],['openai/python','OpenAI Python'],['openai-node','OpenAI Node'],['openai/node','OpenAI Node'],['anthropic-sdk','Anthropic SDK'],['python-requests','Python requests'],['node-fetch','node-fetch'],['axios','axios'],['curl','curl'],['go-http-client','Go HTTP'],['postman','Postman'],['prism-gateway','Prism 调试台']];
+
+export function agentName(ua){
+  if(!ua)return '';
+  const l=ua.toLowerCase();
+  for(const[m,name]of agentNames)if(l.includes(m))return name;
+  return ua.split(/[\s/]/)[0].slice(0,18);
+}
+
+function sourceCell(r){
+  if(!r.client_ip&&!r.user_agent)return '<span class="muted">—</span>';
+  const name=agentName(r.user_agent);
+  return `<div class="cell-title mono tiny">${E(r.client_ip||'—')}</div>${name?`<div class="cell-sub" title="${E(r.user_agent)}">${E(name)}</div>`:''}`;
+}
+
+// 输入输出分开看才有意义：输入贵在量大、输出贵在单价，混成一个数就都看不出来了。
+function tokenCell(main,sub,label){
+  return `<td class="mono">${compact(Number(main))}${Number(sub)>0?`<div class="cell-sub">${label} ${compact(Number(sub))}</div>`:''}</td>`;
+}
+
 export function requestRows(items,short=false){
   if(!items?.length)return empty('请求记录会出现在这里','每次真实转发或本地演示都会记录元数据；不保存你的提示词和回答。','go-playground','发起测试','request');
-  return `<div class="table-scroll"><table><thead><tr><th>模型 / 请求</th><th>协议</th><th>状态</th><th>耗时</th>${short?'':'<th>Tokens</th><th>估算价值</th>'}<th>时间</th></tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td><div class="cell-title flex">${E(modelName(r.model_id))}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td><td>${badge(r.protocol)}</td><td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}</td>${short?'':`<td class="mono">${compact(Number(r.input_tokens)+Number(r.output_tokens))}</td><td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'?'—':'待确认'}</td>`}<td class="mono tiny">${dateTime(r.started_at)}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr><th>时间</th><th>模型 / 请求</th>${short?'':'<th>协议</th>'}<th>状态</th><th>耗时</th>${short?'':'<th>输入</th><th>输出</th><th>估算价值</th><th class="col-source">来源</th>'}</tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono tiny nowrap">${E(dateTimeSec(r.started_at))}</td><td><div class="cell-title flex">${E(modelName(r.model_id))}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td>${short?'':`<td>${badge(r.protocol)}</td>`}<td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}</td>${short?'':`${tokenCell(r.input_tokens,r.cache_tokens,'缓存')}${tokenCell(r.output_tokens,r.write_tokens,'写入')}<td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'?'—':'待确认'}</td><td class="col-source">${sourceCell(r)}</td>`}</tr>`).join('')}</tbody></table></div>`;
+
+}
+
+// 请求详情：原来直接打一坨 JSON，字段名是英文、时间是毫秒数，看一眼还得自己翻译。
+export function requestDetail(r){
+  const rows=[
+    ['来源 IP',r.client_ip||'—',true],
+    ['客户端',r.user_agent?`${agentName(r.user_agent)} · ${r.user_agent}`:'—'],
+    ['开始时间',dateTimeSec(r.started_at),true],
+    ['耗时',ms(r.duration_ms),true],
+    ['客户端请求名',r.requested_model,true],
+    ['实际模型',modelName(r.model_id),false],
+    ['供应商',getProvider(r.provider_id)?.name||r.provider_id],
+    ['协议',r.protocol===r.upstream_protocol?`${r.protocol}（原生）`:`${r.protocol} → ${r.upstream_protocol}（转换）`,true],
+    ['输入 Tokens',number(r.input_tokens),true],
+    ['输出 Tokens',number(r.output_tokens),true],
+    ['缓存 / 写入',`${number(r.cache_tokens)} / ${number(r.write_tokens)}`,true],
+    ['估算价值',r.cost_known?money(r.cost_nano/1e9):'待确认',true],
+    ['计价来源',r.usage_mode,true],
+    ['HTTP 状态',r.http_status||'—',true],
+    ['错误码',r.error_code||'—',true],
+    ['选择原因',(r.reason||'').replace(/^;\s*/,'')||'—'],
+    ['会话',r.session_id,true],
+    ['客户端 Key',r.key_id,true],
+    ['请求 ID',r.parent_id,true],
+  ];
+  return `<div class="detail-grid">${rows.map(([k,v,mono])=>`<div><small>${E(k)}</small><span class="${mono?'mono ':''}">${E(v)}</span></div>`).join('')}</div><details style="margin-top:18px"><summary class="small muted">原始记录</summary><pre style="margin-top:10px">${E(json(r))}</pre></details>`;
 
 }
 
@@ -74,7 +122,7 @@ export function usage(){
 
 export function requests(){
   const d=state.data;
-  return head('REQUEST EXPLORER','每一次调用，都有迹可循。','查看真实选模、协议转换、状态与耗时。日志不保存 Prompt、模型回答和 API Key。',btn('刷新','refresh','refresh'))+`<form id="request-filter" class="toolbar"><div class="search-field">${icon('search')}<input name="q" placeholder="搜索模型或请求 ID" value="${E(state.requestQ)}" aria-label="搜索请求"></div><select name="status" aria-label="筛选请求状态"><option value="">全部状态</option>${[['success','成功'],['error','失败'],['unknown','待确认'],['running','进行中']].map(([v,l])=>`<option value="${v}" ${state.requestStatus===v?'selected':''}>${l}</option>`).join('')}</select><button class="btn" type="submit">筛选</button><span class="small muted" style="margin-left:auto">${number(d.total)} 条尝试记录</span></form><section class="card">${requestRows(d.items)}<div class="list-foot"><span>第 ${d.page} 页 · 每页 ${d.page_size} 条</span><div class="flex">${btn('上一页','request-prev','',d.page<=1?'disabled':'','small')}${btn('下一页','request-next','',d.page*d.page_size>=d.total?'disabled':'','small')}</div></div></section>`;
+  return head('REQUEST EXPLORER','每一次调用，都有迹可循。','查看真实选模、协议转换、用量与调用来源。日志记录来源 IP 与客户端标识，不保存 Prompt、模型回答和 API Key。',btn('刷新','refresh','refresh'))+`<form id="request-filter" class="toolbar"><div class="search-field">${icon('search')}<input name="q" placeholder="搜索模型、请求 ID 或来源 IP" value="${E(state.requestQ)}" aria-label="搜索请求"></div><select name="status" aria-label="筛选请求状态"><option value="">全部状态</option>${[['success','成功'],['error','失败'],['unknown','待确认'],['running','进行中']].map(([v,l])=>`<option value="${v}" ${state.requestStatus===v?'selected':''}>${l}</option>`).join('')}</select><button class="btn" type="submit">筛选</button><span class="small muted" style="margin-left:auto">${number(d.total)} 条尝试记录</span></form><section class="card">${requestRows(d.items)}<div class="list-foot"><span>第 ${d.page} 页 · 每页 ${d.page_size} 条</span><div class="flex">${btn('上一页','request-prev','',d.page<=1?'disabled':'','small')}${btn('下一页','request-next','',d.page*d.page_size>=d.total?'disabled':'','small')}</div></div></section>`;
 
 }
 

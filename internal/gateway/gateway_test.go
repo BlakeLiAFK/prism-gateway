@@ -405,7 +405,7 @@ func TestQuotaRPMConcurrencyAndReservations(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			x, err := h.a.Engine.admit(s, Principal{ID: "k"}, randomID("r_"), "m", "chat", "")
+			x, err := h.a.Engine.admit(s, Principal{ID: "k"}, randomID("r_"), "m", "chat", "", client{})
 			if err == nil {
 				accepted.Add(1)
 				lock.Lock()
@@ -423,13 +423,13 @@ func TestQuotaRPMConcurrencyAndReservations(t *testing.T) {
 		t.Fatal("missing inflight reservation")
 	}
 	h.a.Engine.finish(s, id, "", "k", Usage{Input: 10, Output: 10, Known: true}, 200, nil, now())
-	_, e = h.a.Engine.admit(s, Principal{ID: "k"}, "r2", "m", "chat", "")
+	_, e = h.a.Engine.admit(s, Principal{ID: "k"}, "r2", "m", "chat", "", client{})
 	if e == nil {
 		t.Fatal("RPM not enforced")
 	}
 	h.change(t, func(c *Config) { c.Models[0].RPM = 0; c.Models[0].Limit5h = .000001 })
 	ss, _, _ = h.a.Engine.selections(h.s.Config(), requestFixture("chat", "m"), "chat", "")
-	_, e = h.a.Engine.admit(ss[0], Principal{ID: "k"}, "r3", "m", "chat", "")
+	_, e = h.a.Engine.admit(ss[0], Principal{ID: "k"}, "r3", "m", "chat", "", client{})
 	if e == nil {
 		t.Fatal("budget not enforced")
 	}
@@ -2797,5 +2797,74 @@ func TestProviderUsageQuery(t *testing.T) {
 	}
 	if _, ok, note := providerUsageURL(Provider{Kind: "mock"}); ok || note == "" {
 		t.Fatalf("本地演示不应查询上游额度")
+	}
+}
+
+// 来源记录：网关跑在同机反代后面，所以回环直连时才认 X-Forwarded-For，
+// 公网直连带上的 XFF 一律不认——否则任何人都能把来源伪装成别的地址。
+func TestClientOfTrustsForwardedOnlyFromLoopback(t *testing.T) {
+	cases := []struct {
+		remote, xff, want string
+	}{
+		{"127.0.0.1:5510", "203.0.113.9", "203.0.113.9"},
+		{"[::1]:5510", "203.0.113.9, 10.0.0.1", "203.0.113.9"},
+		{"198.51.100.4:5510", "203.0.113.9", "198.51.100.4"},
+		{"127.0.0.1:5510", "not-an-ip", "127.0.0.1"},
+		{"127.0.0.1:5510", "", "127.0.0.1"},
+	}
+	for _, c := range cases {
+		r := httptest.NewRequest("POST", "/openai/v1/chat/completions", nil)
+		r.RemoteAddr = c.remote
+		if c.xff != "" {
+			r.Header.Set("X-Forwarded-For", c.xff)
+		}
+		if got := clientOf(r).IP; got != c.want {
+			t.Fatalf("RemoteAddr %q + XFF %q 应解析为 %q，实际 %q", c.remote, c.xff, c.want, got)
+		}
+	}
+	long := httptest.NewRequest("POST", "/x", nil)
+	long.Header.Set("User-Agent", strings.Repeat("a", 500))
+	if got := len(clientOf(long).Agent); got != 200 {
+		t.Fatalf("User-Agent 应截断到 200 字符，实际 %d", got)
+	}
+}
+
+// 来源 IP 与客户端标识要真的落到请求记录里，并且能被搜索命中。
+func TestRequestLogRecordsClientSource(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.a.EnableDemo(h.s.Config().Version); err != nil {
+		t.Fatal(err)
+	}
+	_, o := h.rpc(t, "apikey.create", Object{"name": "src"}, h.token)
+	key := str(obj(o["data"]), "key")
+	r := httptest.NewRequest("POST", "/openai/v1/chat/completions", strings.NewReader(raw(requestFixture("chat", "demo-chat"))))
+	r.Header.Set("Authorization", "Bearer "+key)
+	r.Header.Set("User-Agent", "claude-code/2.0.1 (external, cli)")
+	r.RemoteAddr = "127.0.0.1:5510"
+	r.Header.Set("X-Forwarded-For", "203.0.113.9")
+	rr := httptest.NewRecorder()
+	h.a.ServeHTTP(rr, r)
+	requireStatus(t, rr, 200)
+
+	_, lo := h.rpc(t, "request.list", Object{}, h.token)
+	items := arr(obj(lo["data"])["items"])
+	if len(items) == 0 {
+		t.Fatal("没有请求记录")
+	}
+	row := obj(items[0])
+	if str(row, "client_ip") != "203.0.113.9" {
+		t.Fatalf("来源 IP 未记录: %v", row["client_ip"])
+	}
+	if !strings.HasPrefix(str(row, "user_agent"), "claude-code/2.0.1") {
+		t.Fatalf("客户端标识未记录: %v", row["user_agent"])
+	}
+	// 搜索框要能按 IP 找记录
+	_, so := h.rpc(t, "request.list", Object{"q": "203.0.113"}, h.token)
+	if len(arr(obj(so["data"])["items"])) != 1 {
+		t.Fatalf("按来源 IP 搜索应命中 1 条: %v", so["data"])
+	}
+	_, mo := h.rpc(t, "request.list", Object{"q": "198.51.100"}, h.token)
+	if len(arr(obj(mo["data"])["items"])) != 0 {
+		t.Fatalf("不匹配的 IP 不应命中: %v", mo["data"])
 	}
 }

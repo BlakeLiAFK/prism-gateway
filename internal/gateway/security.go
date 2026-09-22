@@ -133,3 +133,32 @@ func requestHeaders(dst *http.Request, src *http.Request, p Provider, protocol, 
 		dst.Header.Set("x-opencode-session", session)
 	}
 }
+
+// client 是一次调用的来源元数据：只有 IP 与 User-Agent，不含任何请求内容。
+type client struct {
+	IP    string
+	Agent string
+}
+
+// clientOf 取调用方地址。网关部署在同机反代（Caddy）后面，所以只有当直连地址
+// 是回环时才采信 X-Forwarded-For 的第一跳；公网直连时伪造的 XFF 一律不认，
+// 这样不必再维护一份可信代理名单。
+func clientOf(r *http.Request) client {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	if p := net.ParseIP(ip); p != nil && p.IsLoopback() {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			first := strings.TrimSpace(strings.Split(xff, ",")[0])
+			if net.ParseIP(first) != nil {
+				ip = first
+			}
+		}
+	}
+	agent := r.Header.Get("User-Agent")
+	if len(agent) > 200 {
+		agent = agent[:200]
+	}
+	return client{IP: ip, Agent: agent}
+}

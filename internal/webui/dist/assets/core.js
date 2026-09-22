@@ -12,6 +12,8 @@ export const compact=n=>Number(n)>=1e6?(n/1e6).toFixed(2)+'M':Number(n)>=1000?(n
 
 export const money=n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:Number(n)>0&&Number(n)<.01?6:4});
 
+export const dateTimeSec=n=>n?new Date(n).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'—';
+
 export const dateTime=n=>n?new Date(n).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'—';
 
 export const ms=n=>Number(n)>=1000?(Number(n)/1000).toFixed(2)+' s':Math.round(Number(n)||0)+' ms';

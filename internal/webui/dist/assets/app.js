@@ -3,7 +3,7 @@ import {rpc,setCSRF} from './api.js';
 import {$,$$,E,json,ms,pages,state} from './core.js';
 import {icon} from './icons.js';
 import {avatar,badge,btn,checked,closeDialog,confirm,copy,empty,field,footer,getModel,getProvider,nval,pillStatus,report,save,showDialog,tag,toast,val} from './ui.js';
-import {aliasEditor,buildQuestions,connectionGuide,defaultQuestions,jobs,keyEditor,keys,modelEditor,models,moveCandidate,overview,playground,preservePlayground,providerEditor,providers,requests,routeEditor,routes,sessions,settings,usage} from './views.js';
+import {aliasEditor,buildQuestions,connectionGuide,defaultQuestions,jobs,keyEditor,keys,modelEditor,models,moveCandidate,overview,playground,preservePlayground,providerEditor,providers,requestDetail,requests,routeEditor,routes,sessions,settings,usage} from './views.js';
 
 export function login(){
 
@@ -408,7 +408,7 @@ export async function handleAction(el){
 
  case 'request-detail':{
       const r=await rpc('request.get',{id});
-      showDialog('请求诊断',id,`<div class="flex" style="margin-bottom:20px">${pillStatus(r.status)}${badge(r.protocol)}${r.is_demo?tag('本地演示','warning'):''}</div><div class="dialog-note">只记录元数据，不保存 prompt、回答或工具参数。费用未知时不会假装为零。</div><pre>${E(json(r))}</pre>`,null,'',true);
+      showDialog('请求诊断',id,`<div class="flex" style="margin-bottom:20px">${pillStatus(r.status)}${badge(r.protocol)}${r.is_demo?tag('本地演示','warning'):''}</div><div class="dialog-note">只记录元数据与调用来源，不保存 prompt、回答或工具参数。费用未知时不会假装为零。</div>${requestDetail(r)}`,null,'',true);
       break;
 
     }

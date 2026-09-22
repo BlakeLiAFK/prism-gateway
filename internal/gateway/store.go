@@ -127,7 +127,7 @@ func (s *Store) migrate() error {
 			`CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, prefix TEXT NOT NULL, digest TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL, allowed TEXT NOT NULL, created_at INTEGER NOT NULL, last_used INTEGER, revoked_at INTEGER)`,
 			`CREATE TABLE IF NOT EXISTS admin_sessions (digest TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
 			`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, updated_at INTEGER NOT NULL, requests INTEGER NOT NULL DEFAULT 1)`,
-			`CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, key_id TEXT NOT NULL, requested_model TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_tokens INTEGER NOT NULL DEFAULT 0, write_tokens INTEGER NOT NULL DEFAULT 0, cost_nano INTEGER NOT NULL DEFAULT 0, cost_known INTEGER NOT NULL DEFAULT 0, usage_mode TEXT NOT NULL DEFAULT 'reserved', reason TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', is_demo INTEGER NOT NULL DEFAULT 0)`,
+			`CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, key_id TEXT NOT NULL, requested_model TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_tokens INTEGER NOT NULL DEFAULT 0, write_tokens INTEGER NOT NULL DEFAULT 0, cost_nano INTEGER NOT NULL DEFAULT 0, cost_known INTEGER NOT NULL DEFAULT 0, usage_mode TEXT NOT NULL DEFAULT 'reserved', reason TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', is_demo INTEGER NOT NULL DEFAULT 0, client_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '')`,
 			`CREATE INDEX IF NOT EXISTS requests_model_time ON requests(model_id,started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_time ON requests(started_at)`,
 			`CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, action TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
@@ -140,6 +140,22 @@ func (s *Store) migrate() error {
 		for _, q := range qs {
 			if e := t.Exec(q); e != nil {
 				return e
+			}
+		}
+		// 老库补列。SQLite 没有 ADD COLUMN IF NOT EXISTS，先照着表结构看一眼有没有
+		cols, e := t.Query("PRAGMA table_info(requests)")
+		if e != nil {
+			return e
+		}
+		have := map[string]bool{}
+		for _, c := range cols {
+			have[c.String("name")] = true
+		}
+		for _, c := range []string{"client_ip", "user_agent"} {
+			if !have[c] {
+				if e := t.Exec("ALTER TABLE requests ADD COLUMN " + c + " TEXT NOT NULL DEFAULT ''"); e != nil {
+					return e
+				}
 			}
 		}
 		r, e := t.Query("SELECT value FROM meta WHERE key='schema_version'")

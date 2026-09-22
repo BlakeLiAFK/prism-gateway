@@ -925,8 +925,8 @@ func (a *App) requests(p Object) (any, error) {
 	q := str(p, "q")
 	status := str(p, "status")
 	provider := str(p, "provider_id")
-	where := ` WHERE (?='' OR model_id LIKE ? OR parent_id LIKE ?) AND (?='' OR status=?) AND (?='' OR provider_id=?)`
-	args := []any{q, "%" + q + "%", "%" + q + "%", status, status, provider, provider}
+	where := ` WHERE (?='' OR model_id LIKE ? OR parent_id LIKE ? OR client_ip LIKE ?) AND (?='' OR status=?) AND (?='' OR provider_id=?)`
+	args := []any{q, "%" + q + "%", "%" + q + "%", "%" + q + "%", status, status, provider, provider}
 	count, err := a.Store.DB.Query("SELECT COUNT(*) n FROM requests"+where, args...)
 	if err != nil {
 		return nil, err
