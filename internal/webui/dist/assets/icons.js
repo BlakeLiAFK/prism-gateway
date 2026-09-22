@@ -69,7 +69,7 @@ export function brandOf(p){
 }
 
 export function brand(name){
-  return `<svg class="brand" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">${brands[name]||''}</svg>`;
+  return `<svg class="provider-logo" width="20" height="20" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true">${brands[name]||''}</svg>`;
 
 }
 
