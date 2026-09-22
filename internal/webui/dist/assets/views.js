@@ -38,7 +38,9 @@ function providerUsageBlock(p){
   if(!u.supported)return wrap(`<span class="tiny muted ellipsis" title="${E(u.note)}">${E(u.note)}</span>`);
   if(u.error)return wrap(`<span class="tiny negative ellipsis" title="${E(u.error)}">${E(u.error)}</span>`);
   const fields=(u.fields||[]).map(f=>`<span class="tiny muted">${E(f.label)} <b class="mono">${E(f.value)}</b></span>`).join('');
-  return wrap(`<strong class="mono">${E(u.headline||'—')}</strong>`,fields?`<div class="provider-usage-fields">${fields}</div>`:'');
+  // 等宽字体只给纯数值用，中文混进去字距会被撑开
+  const h=u.headline||'—',mono=/^[\d$¥%.,\s/+-]+$/.test(h)?' class="mono"':'';
+  return wrap(`<strong${mono}>${E(h)}</strong>`,fields?`<div class="provider-usage-fields">${fields}</div>`:'');
 }
 
 export function providers(){
