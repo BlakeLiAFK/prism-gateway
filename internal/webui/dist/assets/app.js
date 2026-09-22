@@ -74,6 +74,8 @@ export async function loadPage(animated=true){
     state.data=data;
     state.lastSync=Date.now();
     renderPage(animated);
+    // 上游额度要打外网，慢且可能超时，单独异步取，不挡页面渲染
+    if(state.page==='providers')loadProviderUsage();
 
   }
   finally{
@@ -84,6 +86,18 @@ export async function loadPage(animated=true){
     }
   }
 
+}
+
+async function loadProviderUsage(){
+  try{
+    const list=await rpc('provider.usage');
+    state.providerUsage=Object.fromEntries(list.map(u=>[u.id,u]));
+    if(state.page==='providers')renderPage(false);
+
+  }
+  catch{
+    // 额度查不到不影响供应商页面其余部分
+  }
 }
 
 export function renderPage(animated=false){

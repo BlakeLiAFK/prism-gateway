@@ -2713,3 +2713,49 @@ func TestExhaustedFallsOverAndCoolsDownLonger(t *testing.T) {
 		})
 	}
 }
+
+// 上游额度查询：DeepSeek 这类有公开余额接口的精确解析，
+// OpenCode 这类形状未知的走通用扫描，Command Code 这类没有接口的必须明确说不支持。
+func TestProviderUsageQuery(t *testing.T) {
+	h := newHarness(t)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user/balance":
+			io.WriteString(w, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"110.00","granted_balance":"10.00","topped_up_balance":"100.00"}]}`)
+		case "/usage":
+			io.WriteString(w, `{"balance":12.5,"plan":"go"}`)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	defer upstream.Close()
+	h.change(t, func(c *Config) {
+		c.Providers = append(c.Providers,
+			Provider{ID: "p_ds", Name: "DeepSeek", Kind: "deepseek", Auth: "none", BaseURL: upstream.URL + "/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
+			Provider{ID: "p_oc", Name: "OpenCode", Kind: "opencode", Auth: "none", BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30},
+			Provider{ID: "p_cc2", Name: "Command Code", Kind: "commandcode", Auth: "none", BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
+	})
+	_, o := h.rpc(t, "provider.usage", Object{}, h.token)
+	got := map[string]Object{}
+	for _, v := range arr(o["data"]) {
+		got[str(obj(v), "id")] = obj(v)
+	}
+	ds := got["p_ds"]
+	if ds["supported"] != true || str(ds, "headline") != "¥110.00" {
+		t.Fatalf("DeepSeek 余额解析不正确: %v", ds)
+	}
+	if len(arr(ds["fields"])) != 2 {
+		t.Fatalf("DeepSeek 应有赠送与充值两项明细: %v", ds)
+	}
+	oc := got["p_oc"]
+	if oc["supported"] != true || str(oc, "headline") != "12.5" || len(arr(oc["fields"])) != 1 {
+		t.Fatalf("OpenCode 通用扫描应把 balance 提为主数值、plan 作明细: %v", oc)
+	}
+	cc := got["p_cc2"]
+	if cc["supported"] != false || str(cc, "note") == "" {
+		t.Fatalf("Command Code 没有额度接口，应标注不支持并说明原因: %v", cc)
+	}
+	if _, ok, note := providerUsageURL(Provider{Kind: "mock"}); ok || note == "" {
+		t.Fatalf("本地演示不应查询上游额度")
+	}
+}

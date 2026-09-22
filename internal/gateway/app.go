@@ -21,19 +21,21 @@ import (
 )
 
 type App struct {
-	Store   *Store
-	Engine  *Engine
-	UI      http.Handler
-	Listen  *Listener
-	Started int64
-	Context context.Context
-	loginMu sync.Mutex
-	logins  map[string][]int64
-	workers sync.WaitGroup
+	Store      *Store
+	Engine     *Engine
+	UI         http.Handler
+	Listen     *Listener
+	Started    int64
+	Context    context.Context
+	loginMu    sync.Mutex
+	logins     map[string][]int64
+	workers    sync.WaitGroup
+	usageMu    sync.Mutex
+	usageCache map[string]usageCacheEntry
 }
 
 func NewApp(ctx context.Context, s *Store, ui http.Handler) *App {
-	a := &App{Store: s, Engine: NewEngine(s), UI: ui, Started: now(), Context: ctx, logins: map[string][]int64{}}
+	a := &App{Store: s, Engine: NewEngine(s), UI: ui, Started: now(), Context: ctx, logins: map[string][]int64{}, usageCache: map[string]usageCacheEntry{}}
 	go a.Engine.Prune(ctx)
 	return a
 }
@@ -318,6 +320,8 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		return c.Settings, nil
 	case "quota.list":
 		return a.Engine.Quotas()
+	case "provider.usage":
+		return a.providerUsageAll(ctx), nil
 	case "provider.save":
 		v := Provider{ID: id, Enabled: true, Kind: "custom", Auth: "auto", TimeoutSec: 300}
 		if id != "" {
@@ -682,7 +686,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			v := obj(v)
 			act := str(v, "action")
 			switch act {
-			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "usage.summary", "quota.list", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list":
+			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "usage.summary", "quota.list", "provider.usage", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list":
 				data, er := a.call(ctx, act, obj(v["params"]))
 				if er != nil {
 					_, code, msg := errorParts(er)

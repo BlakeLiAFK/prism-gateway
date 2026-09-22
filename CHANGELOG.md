@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.12.0 · 2026-09-22
+
+- 供应商卡片显示上游额度。只有少数供应商提供「凭 API Key 就能查」的接口，
+  能查的直接查，查不了的写明原因，不做猜测性展示——这一栏和总览里那个
+  本地滚动估算的预算水位不是一回事，混在一起看就失去意义了。
+  - DeepSeek：`GET /user/balance`（接口挂在根路径，不在 `/v1` 下），
+    展示总余额并拆出赠送 / 充值两项。
+  - OpenCode Zen：`GET {base}/usage`，形状未公开，走通用扫描，
+    把最像余额的字段提为主数值，其余原样列出。
+  - OpenRouter（按地址识别）：`GET /api/v1/credits`，展示已充值减已消耗。
+  - Command Code：Provider API 只有 chat / responses / messages / models
+    四个端点，额度只在 CLI `/usage` 与 Studio 可见，卡片上明确标注不支持。
+  - OpenAI / Anthropic / Z.AI：没有按 Key 的余额接口，同样标注原因。
+- 新增 DeepSeek 供应商类型，base_url 预设 `https://api.deepseek.com`。
+- `provider.usage` 并发查询全部供应商，结果缓存 60 秒；前端在供应商页渲染
+  之后异步拉取，上游慢或超时都不挡页面。
+
 ## 1.11.0 · 2026-09-22
 
 - 额度耗尽（402）与套餐 / 权限不足（403）纳入候选切换：这类失败对本次请求是
