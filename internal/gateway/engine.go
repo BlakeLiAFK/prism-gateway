@@ -658,6 +658,8 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			if status < 200 || status >= 300 {
 				io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 				runErr = fmt.Errorf("upstream status %d", status)
+				// 被拒的响应往往才带着 Retry-After 和剩余额度，这里同样要留存
+				e.recordLimits(s.Model.ID, res.Header)
 				if retryable(status) {
 					e.cooldown(s.Model.ID, res.Header.Get("Retry-After"))
 				} else if exhausted(status) {

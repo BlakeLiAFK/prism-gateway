@@ -3069,3 +3069,20 @@ func TestZeroRemainingCoolsDownModel(t *testing.T) {
 		t.Fatalf("冷却时刻应当在未来: %v", m["cooldown_until"])
 	}
 }
+
+// 被上游拒掉的响应往往才带着 Retry-After 与剩余额度，这些同样要留存下来。
+func TestRateLimitHeadersRecordedOnRejection(t *testing.T) {
+	h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Retry-After", "42")
+		w.Header().Set("x-ratelimit-remaining-requests", "0")
+		w.WriteHeader(429)
+		io.WriteString(w, `{"error":{"message":"slow down"}}`)
+	})
+	w := h.generate(t, "chat", requestFixture("chat", "pair"))
+	requireStatus(t, w, 200)
+	m := obj(obj(h.a.Engine.Health()["models"])["cand-bad"])
+	limits := obj(m["limits"])
+	if limits["retry-after"] != "42" || limits["x-ratelimit-remaining-requests"] != "0" {
+		t.Fatalf("被拒响应的限额头也要留存: %v", limits)
+	}
+}
