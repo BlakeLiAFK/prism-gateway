@@ -24,7 +24,10 @@ type Provider struct {
 	TimeoutSec   int    `json:"timeout_sec"`
 	HasKey       bool   `json:"has_key"`
 	Secret       string `json:"-"`
-	Description  string `json:"description"`
+	// 组织级 admin key，只用于查 OpenAI / Anthropic 官方账单，不参与推理转发
+	HasAdminKey bool   `json:"has_admin_key"`
+	AdminSecret string `json:"-"`
+	Description string `json:"description"`
 }
 type Model struct {
 	ID          string `json:"id"`

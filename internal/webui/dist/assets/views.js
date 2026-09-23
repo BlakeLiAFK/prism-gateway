@@ -83,8 +83,11 @@ function providerUsageBlock(p){
   const u=state.providerUsage?.[p.id];
   const wrap=(t,extra='')=>`<div class="provider-usage"><div class="provider-usage-row"><span class="tiny muted">上游额度</span>${t}</div>${extra}</div>`;
   if(!u)return wrap('<span class="tiny muted">查询中…</span>');
-  if(!u.supported)return wrap(`<span class="tiny muted ellipsis" title="${E(u.note)}">${E(u.note)}</span>`);
-  if(u.error)return wrap(`<span class="tiny negative ellipsis" title="${E(u.error)}">${E(u.error)}</span>`);
+  // 额度接口查不到时，用上游最近一次在响应头里声明的限额兜底
+  const limits=(u.limits||[]).flatMap(x=>Object.entries(x.limits).map(([k,v])=>`<span class="tiny muted" title="${E(modelName(x.model))}">${E(k)} <b class="mono">${E(v)}</b></span>`)).slice(0,4).join('');
+  const fallback=limits?`<div class="provider-usage-fields">${limits}</div>`:'';
+  if(!u.supported)return wrap(`<span class="tiny muted ellipsis" title="${E(u.note)}">${E(u.note)}</span>`,fallback);
+  if(u.error)return wrap(`<span class="tiny negative ellipsis" title="${E(u.error)}">${E(u.error)}</span>`,fallback);
   const fields=(u.fields||[]).map(f=>`<span class="tiny muted">${E(f.label)} <b class="mono">${E(f.value)}</b></span>`).join('');
   // 等宽字体只给纯数值用，中文混进去字距会被撑开
   const h=u.headline||'—',mono=/^[\d$¥%.,\s/+-]+$/.test(h)?' class="mono"':'';
@@ -305,13 +308,14 @@ export function providerEditor(id=''){
     name:'',kind:'opencode',base_url:'https://opencode.ai/zen/go/v1',auth:'auto',enabled:true,allow_private:false,timeout_sec:300,description:''
   };
 
- const d=showDialog(old?'编辑供应商':'连接新的供应商','设置上游地址与独立凭证；密钥不会返回给浏览器。',`<div class="form-section"><h3>连接信息</h3>${field('显示名称','name',p.name,'text','','required placeholder="例如：OpenCode Go"')}${selectField('供应商类型','kind',p.kind,[['opencode','OpenCode Go'],['commandcode','Command Code'],['zai','Z.AI'],['deepseek','DeepSeek'],['openai','OpenAI'],['anthropic','Anthropic'],['custom','自定义兼容接口'],...(p.kind==='mock'?[['mock','本地演示']]:[])])}${field('API Base URL','base_url',p.base_url,'url','包含上游 /v1 前缀；不要包含 /chat/completions 等操作路径。',p.kind==='mock'?'':'required')}${field('上游 API Key','api_key','','password',p.has_key?'已保存加密凭证。留空保持原密钥；勾选下方选项可清除。':'只会加密持久化，不在日志与配置接口中回显。','autocomplete="new-password" placeholder="sk-…"')}${p.has_key?check('清除现有上游凭证','clear_key',false):''}${selectField('鉴权方式','auth',p.auth,[['auto','自动（根据目标协议）'],['bearer','Authorization: Bearer'],['x-api-key','x-api-key'],['none','不使用凭证']])}</div><div class="form-section"><h3>行为与安全</h3>${field('超时 · 秒','timeout_sec',p.timeout_sec,'number','包含完整响应和流式生成时间。','min="5" max="1800" required')}${field('备注','description',p.description)}${check('启用供应商','enabled',p.enabled)}${check('允许私有网络 / 明文 HTTP','allow_private',p.allow_private,'仅连接你信任的本地或内网模型服务时开启。开启后可访问回环与私网 IP。')}<div class="dialog-note">连接测试只调用 GET /models。同步模型不会自动确认价格、额度与全部能力，新模型默认禁用。</div></div>`,async f=>{
+ const d=showDialog(old?'编辑供应商':'连接新的供应商','设置上游地址与独立凭证；密钥不会返回给浏览器。',`<div class="form-section"><h3>连接信息</h3>${field('显示名称','name',p.name,'text','','required placeholder="例如：OpenCode Go"')}${selectField('供应商类型','kind',p.kind,[['opencode','OpenCode Go'],['commandcode','Command Code'],['zai','Z.AI'],['deepseek','DeepSeek'],['openai','OpenAI'],['anthropic','Anthropic'],['custom','自定义兼容接口'],...(p.kind==='mock'?[['mock','本地演示']]:[])])}${field('API Base URL','base_url',p.base_url,'url','包含上游 /v1 前缀；不要包含 /chat/completions 等操作路径。',p.kind==='mock'?'':'required')}${field('上游 API Key','api_key','','password',p.has_key?'已保存加密凭证。留空保持原密钥；勾选下方选项可清除。':'只会加密持久化，不在日志与配置接口中回显。','autocomplete="new-password" placeholder="sk-…"')}${p.has_key?check('清除现有上游凭证','clear_key',false):''}<div id="admin-key-row" class="${['openai','anthropic'].includes(p.kind)?'':'hidden'}">${field('组织 Admin Key · 可选','admin_key','','password',p.has_admin_key?'已保存加密凭证。留空保持原密钥。只用于查询本月花费，不参与推理转发。':'只用于在供应商卡片上查询本月官方花费，不参与推理转发。','autocomplete="new-password" placeholder="sk-admin-…"')}${p.has_admin_key?check('清除现有 Admin Key','clear_admin_key',false):''}</div>${selectField('鉴权方式','auth',p.auth,[['auto','自动（根据目标协议）'],['bearer','Authorization: Bearer'],['x-api-key','x-api-key'],['none','不使用凭证']])}</div><div class="form-section"><h3>行为与安全</h3>${field('超时 · 秒','timeout_sec',p.timeout_sec,'number','包含完整响应和流式生成时间。','min="5" max="1800" required')}${field('备注','description',p.description)}${check('启用供应商','enabled',p.enabled)}${check('允许私有网络 / 明文 HTTP','allow_private',p.allow_private,'仅连接你信任的本地或内网模型服务时开启。开启后可访问回环与私网 IP。')}<div class="dialog-note">连接测试只调用 GET /models。同步模型不会自动确认价格、额度与全部能力，新模型默认禁用。</div></div>`,async f=>{
   const v={name:val(f,'name').trim(),kind:val(f,'kind'),base_url:val(f,'base_url').trim(),auth:val(f,'auth'),timeout_sec:nval(f,'timeout_sec'),enabled:checked(f,'enabled'),allow_private:checked(f,'allow_private'),description:val(f,'description')};
   if(val(f,'api_key'))v.api_key=val(f,'api_key');else if(checked(f,'clear_key'))v.api_key='';
+  if(val(f,'admin_key'))v.admin_key=val(f,'admin_key');else if(checked(f,'clear_admin_key'))v.admin_key='';
   await save('provider.save',{id,provider:v},f);
  });
 
- $('[name=kind]',d).addEventListener('change',ev=>{const preset={opencode:'https://opencode.ai/zen/go/v1',commandcode:'https://api.commandcode.ai/provider/v1',zai:'https://api.z.ai/api/coding/paas/v4',deepseek:'https://api.deepseek.com',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1'}[ev.target.value];if(preset&&!old)$('[name=base_url]',d).value=preset;});
+ $('[name=kind]',d).addEventListener('change',ev=>{const preset={opencode:'https://opencode.ai/zen/go/v1',commandcode:'https://api.commandcode.ai/provider/v1',zai:'https://api.z.ai/api/coding/paas/v4',deepseek:'https://api.deepseek.com',openai:'https://api.openai.com/v1',anthropic:'https://api.anthropic.com/v1'}[ev.target.value];if(preset&&!old)$('[name=base_url]',d).value=preset;$('#admin-key-row',d).classList.toggle('hidden',!['openai','anthropic'].includes(ev.target.value));});
 
 }
 

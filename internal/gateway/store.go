@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"prism-gateway/internal/sqlite"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -158,6 +159,14 @@ func (s *Store) migrate() error {
 				}
 			}
 		}
+		if cols, e = t.Query("PRAGMA table_info(providers)"); e != nil {
+			return e
+		}
+		if !slices.ContainsFunc(cols, func(c sqlite.Row) bool { return c.String("name") == "admin_secret" }) {
+			if e := t.Exec("ALTER TABLE providers ADD COLUMN admin_secret TEXT NOT NULL DEFAULT ''"); e != nil {
+				return e
+			}
+		}
 		r, e := t.Query("SELECT value FROM meta WHERE key='schema_version'")
 		if e != nil {
 			return e
@@ -175,7 +184,7 @@ func (s *Store) load() error {
 		return e
 	}
 	c.Version = r[0].Int("v")
-	r, e = s.DB.Query("SELECT body,secret FROM providers ORDER BY id")
+	r, e = s.DB.Query("SELECT body,secret,admin_secret FROM providers ORDER BY id")
 	if e != nil {
 		return e
 	}
@@ -189,6 +198,10 @@ func (s *Store) load() error {
 			return fmt.Errorf("无法解密 Provider 凭证，请恢复与数据库配套的 .key 文件: %w", e)
 		}
 		p.HasKey = p.Secret != ""
+		if p.AdminSecret, e = s.decrypt(row.String("admin_secret")); e != nil {
+			return fmt.Errorf("无法解密 Provider 凭证，请恢复与数据库配套的 .key 文件: %w", e)
+		}
+		p.HasAdminKey = p.AdminSecret != ""
 		c.Providers = append(c.Providers, p)
 	}
 	for _, table := range []string{"models", "routes", "aliases"} {
@@ -335,7 +348,8 @@ func (s *Store) Change(version int64, action, target string, fn func(*Config) er
 		}
 		for _, p := range c.Providers {
 			p.HasKey = p.Secret != ""
-			if e := t.Exec("INSERT INTO providers VALUES (?,?,?)", p.ID, raw(p), s.encrypt(p.Secret)); e != nil {
+			p.HasAdminKey = p.AdminSecret != ""
+			if e := t.Exec("INSERT INTO providers(id,body,secret,admin_secret) VALUES (?,?,?,?)", p.ID, raw(p), s.encrypt(p.Secret), s.encrypt(p.AdminSecret)); e != nil {
 				return e
 			}
 		}

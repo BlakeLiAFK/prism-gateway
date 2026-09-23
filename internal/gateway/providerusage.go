@@ -1,14 +1,15 @@
 package gateway
 
 // 上游额度查询。只有少数供应商提供“凭 API Key 就能查”的额度接口；
-// Command Code、OpenAI、Anthropic 等只能在各自控制台看，这里明确标注不支持，
-// 不做任何猜测性展示，免得和本地估算的预算水位混为一谈。
+// OpenAI、Anthropic 没有余额接口，配了组织级 admin key 时改查本月花费。
+// 查不到的明确标注原因，不做任何猜测性展示，免得和本地估算的预算水位混为一谈。
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -26,7 +27,7 @@ type usageCacheEntry struct {
 }
 
 // providerUsageURL 返回额度查询地址；ok 为 false 时 note 说明原因。
-func providerUsageURL(p Provider) (url string, ok bool, note string) {
+func providerUsageURL(p Provider) (addr string, ok bool, note string) {
 	base := strings.TrimRight(p.BaseURL, "/")
 	host := strings.ToLower(base)
 	switch {
@@ -47,10 +48,17 @@ func providerUsageURL(p Provider) (url string, ok bool, note string) {
 			return root + "/alpha/billing/credits", true, ""
 		}
 		return "", false, "供应商地址无法解析出额度接口"
-	case p.Kind == "openai":
-		return "", false, "没有按 Key 的余额接口；用量只在组织后台（需 admin key）"
-	case p.Kind == "anthropic":
-		return "", false, "没有按 Key 的余额接口；用量只在 Console（需 admin key）"
+	case p.Kind == "openai" || p.Kind == "anthropic":
+		root := originOf(base)
+		if p.AdminSecret == "" || root == "" {
+			return "", false, "没有按 Key 的余额接口；填写组织 admin key 后可查本月花费"
+		}
+		// 两家都按天分桶，本月最多 31 桶，一页取完
+		start := monthStart()
+		if p.Kind == "openai" {
+			return fmt.Sprintf("%s/v1/organization/costs?start_time=%d&limit=31", root, start.Unix()), true, ""
+		}
+		return root + "/v1/organizations/cost_report?limit=31&starting_at=" + url.QueryEscape(start.Format(time.RFC3339)), true, ""
 	case p.Kind == "zai":
 		// 官方 glm-plan-usage 插件查的就是这个监控接口（未公开文档，但随插件源码发布），
 		// 鉴权是裸 token、不加 Bearer 前缀。地址跟随 base_url 的域名，
@@ -77,20 +85,39 @@ func (a *App) providerUsageAll(ctx context.Context) []any {
 	out := make([]any, len(c.Providers))
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
+	models := obj(a.Engine.Health()["models"])
 	var wg sync.WaitGroup
 	for i, p := range c.Providers {
 		wg.Add(1)
 		go func(i int, p Provider) {
 			defer wg.Done()
-			out[i] = a.providerUsage(ctx, p)
+			// 缓存里的对象是共享的，复制一份再挂限额快照
+			v := maps.Clone(a.providerUsage(ctx, p))
+			v["limits"] = providerLimits(c, p.ID, models)
+			out[i] = v
 		}(i, p)
 	}
 	wg.Wait()
 	return out
 }
 
+// providerLimits 取该供应商各模型最近一次在响应头里声明的限额。
+// 限额快照不走 60 秒缓存，额度接口查不到时供应商卡片拿它兜底展示。
+func providerLimits(c Config, id string, models Object) []any {
+	out := []any{}
+	for _, m := range c.Models {
+		h := obj(models[m.ID])
+		if m.ProviderID != id || len(obj(h["limits"])) == 0 {
+			continue
+		}
+		out = append(out, Object{"model": m.ID, "limits": h["limits"], "limits_at": h["limits_at"]})
+	}
+	return out
+}
+
 func (a *App) providerUsage(ctx context.Context, p Provider) Object {
-	key := p.ID + "|" + p.BaseURL
+	// 凭证摘要进缓存键：换 Key、清 admin key 后立即重查，不必等缓存过期
+	key := p.ID + "|" + p.BaseURL + "|" + digest(p.Secret+"\x00"+p.AdminSecret)
 	a.usageMu.Lock()
 	if e, okc := a.usageCache[key]; okc && now()-e.at < providerUsageTTL {
 		a.usageMu.Unlock()
@@ -113,7 +140,15 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 	if !ok {
 		return out
 	}
-	if !p.HasKey && p.Auth != "none" {
+	// 账单接口只认 admin key：换上它，Anthropic 走 x-api-key 与 anthropic-version
+	auth, protocol := p, "chat"
+	if p.Kind == "openai" || p.Kind == "anthropic" {
+		auth.Secret, auth.Auth = p.AdminSecret, "auto"
+		if p.Kind == "anthropic" {
+			protocol = "messages"
+		}
+	}
+	if auth.Secret == "" && auth.Auth != "none" {
 		out["error"] = "未配置上游凭证"
 		return out
 	}
@@ -122,7 +157,7 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 		out["error"] = "额度接口地址无效"
 		return out
 	}
-	requestHeaders(req, &http.Request{Header: http.Header{}}, p, "chat", "")
+	requestHeaders(req, &http.Request{Header: http.Header{}}, auth, protocol, "")
 	if p.Kind == "zai" && p.Secret != "" {
 		// 监控接口要的是裸 token，带 Bearer 前缀会被判为未鉴权
 		req.Header.Set("Authorization", p.Secret)
@@ -235,6 +270,9 @@ func parseUsage(p Provider, o Object) (string, []any) {
 		}
 		return fmt.Sprintf("$%.2f", remain), fields
 	}
+	if p.Kind == "openai" || p.Kind == "anthropic" {
+		return fmt.Sprintf("本月 $%.2f", monthCost(p.Kind, o)), nil
+	}
 	if strings.Contains(host, "openrouter.ai") {
 		d := obj(o["data"])
 		total, used := num(d, "total_credits"), num(d, "total_usage")
@@ -315,4 +353,27 @@ func sortedKeys(o Object) []string {
 	}
 	slices.Sort(ks)
 	return ks
+}
+
+// monthStart 返回本月 1 日零点（UTC），两家账单接口都按 UTC 分桶。
+func monthStart() time.Time {
+	t := time.Now().UTC()
+	return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+}
+
+// monthCost 汇总账单各天各项的金额，单位美元。
+// OpenAI 的 amount 是 {value: 美元数值}；Anthropic 的 amount 是以美分计的十进制字符串。
+func monthCost(kind string, o Object) float64 {
+	total := 0.0
+	for _, b := range arr(o["data"]) {
+		for _, r := range arr(obj(b)["results"]) {
+			if kind == "openai" {
+				total += num(obj(obj(r)["amount"]), "value")
+				continue
+			}
+			cents, _ := strconv.ParseFloat(str(obj(r), "amount"), 64)
+			total += cents / 100
+		}
+	}
+	return total
 }

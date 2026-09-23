@@ -67,9 +67,10 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			return nil, fail("INVALID_PARAMS", "缺少 provider 对象", 400)
 		}
 		secret, changeSecret := vals["api_key"]
+		adminSecret, changeAdmin := vals["admin_key"]
 		valsCopy := Object{}
 		for k, x := range vals {
-			if k != "api_key" {
+			if k != "api_key" && k != "admin_key" {
 				valsCopy[k] = x
 			}
 		}
@@ -79,7 +80,11 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		if changeSecret {
 			v.Secret, _ = secret.(string)
 		}
+		if changeAdmin {
+			v.AdminSecret, _ = adminSecret.(string)
+		}
 		v.HasKey = v.Secret != ""
+		v.HasAdminKey = v.AdminSecret != ""
 		return a.Store.Change(version, action, v.ID, func(c *Config) error {
 			for i, x := range c.Providers {
 				if x.ID == v.ID {
@@ -454,15 +459,16 @@ func (a *App) importConfig(version int64, p Object) (any, error) {
 		return nil, fail("INVALID_CONFIG", "配置结构无法解析："+e.Error(), 400)
 	}
 	c, err := a.Store.Change(version, "config.import", "config", func(cur *Config) error {
-		kept := map[string]string{}
+		kept := map[string]Provider{}
 		for _, old := range cur.Providers {
-			kept[old.ID] = old.Secret
+			kept[old.ID] = old
 		}
 		cur.Providers = append([]Provider{}, in.Providers...)
 		for i := range cur.Providers {
-			cur.Providers[i].Secret = kept[cur.Providers[i].ID]
+			p := &cur.Providers[i]
+			p.Secret, p.AdminSecret = kept[p.ID].Secret, kept[p.ID].AdminSecret
 			// has_key 由库中实际凭证决定，不接受导入文件的声明
-			cur.Providers[i].HasKey = cur.Providers[i].Secret != ""
+			p.HasKey, p.HasAdminKey = p.Secret != "", p.AdminSecret != ""
 		}
 		cur.Models = append([]Model{}, in.Models...)
 		cur.Routes = append([]Route{}, in.Routes...)
