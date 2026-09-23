@@ -3,7 +3,9 @@ package gateway
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -161,4 +163,29 @@ func clientOf(r *http.Request) client {
 		agent = agent[:200]
 	}
 	return client{IP: ip, Agent: agent}
+}
+
+func (e *Engine) Authenticate(r *http.Request) (Principal, error) {
+	token := bearer(r)
+	if token == "" {
+		token = r.Header.Get("x-api-key")
+	}
+	if len(token) < 20 {
+		return Principal{}, fail("UNAUTHORIZED", "需要网关 API Key，不是上游 Key", 401)
+	}
+	rows, err := e.store.DB.Query("SELECT id,allowed FROM api_keys WHERE digest=? AND enabled=1", digest(token))
+	if err != nil {
+		return Principal{}, err
+	}
+	if len(rows) == 0 {
+		return Principal{}, fail("UNAUTHORIZED", "网关 API Key 无效或已撤销", 401)
+	}
+	p := Principal{ID: rows[0].String("id")}
+	if err = json.Unmarshal([]byte(rows[0].String("allowed")), &p.Allowed); err != nil {
+		return Principal{}, err
+	}
+	if err := e.store.DB.Exec("UPDATE api_keys SET last_used=? WHERE id=?", now(), p.ID); err != nil {
+		slog.Error("api key last_used update failed", "key_id", p.ID, "err", err)
+	}
+	return p, nil
 }
