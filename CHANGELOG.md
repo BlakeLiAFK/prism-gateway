@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.16.0 · 2026-09-23
+
+- OpenAI / Anthropic 供应商可选填组织级 admin key，供应商卡片显示本月官方花费
+  （两家的账单接口按 UTC 自然月加总）。admin key 与推理凭证分开加密保存在
+  `providers.admin_secret` 新列，只用于查账单，不参与转发；老库启动时自动补列，
+  导出不含明文，导入沿用库中已有的值。
+- 额度接口查不到（或出错）时，供应商卡片用该供应商各模型最近一次在响应头里
+  声明的限额兜底展示。`provider.usage` 每项新增 `limits` 字段。
+- **移除** `usage.summary` 与 `usage.timeseries`：两者一直只是 `dashboard.get`
+  的别名，`timeseries` 并不返回时间序列。请改用 `dashboard.get`。
+- API 文档补上 `provider.usage` 与 `route.reorder`。
+- 内部：`engine.go`、`app.go`、`protocol.go`、`stream.go` 按职责拆分，逻辑不变。
+
 ## 1.15.1 · 2026-09-22
 
 - 被上游拒掉的响应也采集限额头。`Retry-After` 和归零的剩余额度恰恰出现在
