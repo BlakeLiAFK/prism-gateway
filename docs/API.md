@@ -68,18 +68,19 @@ curl http://127.0.0.1:8080/api.json \
 | `config.get` | `{}` | 完整非敏感 Config |
 | `system.info` | `{}` | 网关、Go、SQLite、运行时长 |
 | `dashboard.get` | `{range:"24h"\|"7d"\|"30d"}` | 概览、24 个时间桶、top_models、recent、quotas、runtime |
-| `usage.summary` / `usage.timeseries` | 同 dashboard | 本版本返回同一聚合结构 |
 | `provider.list` | `{}` | Provider[] |
 | `provider.save` | `{version,id?,provider}` | 新 Config |
 | `provider.delete` | `{version,id}` | 新 Config；存在引用则拒绝 |
 | `provider.test` | `{id}` | GET /models HTTP 状态与耗时，不调用模型生成 |
 | `provider.sync_models` | `{id}` | `job_id`，异步执行 |
+| `provider.usage` | `{}` | 每个供应商一项：supported / note / headline / fields / error / limits；结果缓存 60 秒 |
 | `model.list` | `{}` | Model[] |
 | `model.save` | `{version,id?,model}` | 新 Config；model.id 是对外名称 |
 | `model.delete` | `{version,id}` | 新 Config；检查路由与别名引用 |
 | `route.list` | `{}` | Route[] |
 | `route.save` | `{version,id?,route}` | 新 Config |
 | `route.delete` | `{version,id}` | 新 Config |
+| `route.reorder` | `{version,ids:[]}` | 新 Config；按 ids 顺序整体重排路由，未列出的保持原序号 |
 | `route.test` | `{id,protocol?,request?}` | ranked / checks / note；默认模拟 Chat 文本 |
 | `alias.list` | `{}` | Alias[] |
 | `alias.save` | `{version,alias:{id,target,enabled}}` | 新 Config |

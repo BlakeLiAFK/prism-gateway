@@ -37,7 +37,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		return a.importConfig(version, p)
 	case "system.info":
 		return Object{"version": Version, "go": runtime.Version(), "sqlite": sqlite.Version(), "uptime_ms": now() - a.Started, "config_version": c.Version, "storage": "SQLite", "ui": "embed.FS", "management_api": "POST /api.json", "runtime": a.Engine.Health()}, nil
-	case "dashboard.get", "usage.summary", "usage.timeseries":
+	case "dashboard.get":
 		return a.dashboard(p)
 	case "provider.list":
 		return c.Providers, nil
@@ -417,7 +417,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			v := obj(v)
 			act := str(v, "action")
 			switch act {
-			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "usage.summary", "quota.list", "provider.usage", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list":
+			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "quota.list", "provider.usage", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list":
 				data, er := a.call(ctx, act, obj(v["params"]))
 				if er != nil {
 					_, code, msg := errorParts(er)

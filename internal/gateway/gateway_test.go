@@ -1302,7 +1302,7 @@ func TestReadOnlyViewsAcrossWorkspace(t *testing.T) {
 	if len(arr(so["data"])) != 1 {
 		t.Fatal("会话亲和记录缺失")
 	}
-	for _, action := range []string{"audit.list", "job.list", "usage.summary", "usage.timeseries"} {
+	for _, action := range []string{"audit.list", "job.list", "dashboard.get"} {
 		if _, o := h.rpc(t, action, Object{}, h.token); o["ok"] != true {
 			t.Fatalf("%s 失败: %v", action, o)
 		}
