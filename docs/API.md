@@ -71,6 +71,8 @@ curl http://127.0.0.1:8080/api.json \
 | `provider.list` | `{}` | Provider[] |
 | `provider.save` | `{version,id?,provider}` | 新 Config |
 | `provider.delete` | `{version,id}` | 新 Config；存在引用则拒绝 |
+| `route.stats` | `{minutes?}` | 近 N 分钟（默认 60）各路由的实际落点 share（每个候选含 attempts、success、affinity 命中次数）与运行状态 runtime |
+| `provider.reorder` | `{version,ids:[]}` | 新 Config；按 ids 顺序整体重排供应商，未列出的保持原序号 |
 | `provider.test` | `{id}` | GET /models HTTP 状态与耗时，不调用模型生成 |
 | `provider.sync_models` | `{id}` | `job_id`，异步执行 |
 | `provider.usage` | `{}` | 每个供应商一项：supported / note / headline / fields / error / limits；结果缓存 60 秒 |
@@ -92,7 +94,7 @@ curl http://127.0.0.1:8080/api.json \
 | `apikey.create` | `{name,allowed:[]}` | id / key / warning；key 仅创建时返回 |
 | `apikey.revoke` | `{id}` | 撤销结果 |
 | `session.list` | `{}` | 最近 200 个本地亲和映射 |
-| `session.delete` | `{id}` | 解除本地绑定，不重置上游状态 |
+| `session.delete` | `{id}` 或 `{model_id}` | 解除本地绑定（给 model_id 时解除该模型的全部绑定，返回 unbound 数量），不重置上游状态 |
 | `request.list` | `{page?,page_size?,q?,status?,provider_id?}` | items / page / page_size / total |
 | `request.get` | `{id}` | 单次上游尝试元数据 |
 | `job.list` | `{}` | 最近 100 个模型同步任务 |
@@ -157,6 +159,27 @@ curl http://127.0.0.1:8080/api.json \
   }
 }
 ```
+
+`strategy` 决定候选的尝试顺序：
+
+| 取值 | 规则 |
+| --- | --- |
+| `priority` | 按候选顺序 |
+| `balanced` | 权重优先：`weight` 最高的先试，设了本地预算时按用量降权；没配预算时就是按权重固定排序，不做随机分流 |
+| `weighted` | 按 `weight` 比例随机抽签，备选顺序同样按剩余权重抽取。候选中不能出现同一厂商的多个供应商（内置类型按 `kind`、自定义按上游域名判断），否则保存返回 400 |
+| `latency` | 按上游 2xx 响应头耗时的滑动平均升序，没有样本的先试。非流式请求的响应头要等生成结束，长回答会被算慢 |
+| `cost` | 按 `input_price + output_price` 升序，`pricing_set=false` 的排最后 |
+| `least_busy` | 按当前并发 / 并发上限升序 |
+
+所有策略共用三条规则：会话亲和的模型排最前；冷却中、并发已满或本地 RPM 已满的候选排最后（不剔除）；原生协议在同分时优先。
+
+会话亲和的键是「网关 Key + 客户端会话头」。Claude Code 的子代理与主线程共用 `X-Claude-Code-Session-Id`，
+网关会再拼上 `x-claude-code-agent-id`，让每个子代理单独亲和。故障切换成功后，如果原绑定模型仍是合格候选、
+且冷却剩余不超过 5 分钟，绑定保持不变，冷却结束后回到原模型；否则改绑到本次成功的模型。
+请求记录的 `agent_role` 列保存 Claude Code 声明的角色（如 `subagent:Explore`）；
+客户端设置 `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` 后才会发送类别与类型，否则子代理只记为 `subagent`。
+
+`route.save` 可带 `enable_models:true`：在同一事务里启用所有候选模型。
 
 更新已有模型/路由可在 params.id 指定对象，并只提交变化字段。数组替换整体列表，不做隐藏的逐项 merge。模型、路由、别名对外 ID 共用一个命名空间。
 
