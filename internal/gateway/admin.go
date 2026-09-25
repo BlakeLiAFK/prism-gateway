@@ -124,7 +124,12 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		if er := decode(p["route"], &v); er != nil {
 			return nil, fail("INVALID_PARAMS", er.Error(), 400)
 		}
+		// 显式要求时顺带启用候选模型：加进路由就是要用它，与路由在同一事务里生效
+		enable := boolean(p, "enable_models")
 		return a.Store.Change(version, action, v.ID, func(c *Config) error {
+			if enable {
+				enableModels(c, v.Candidates)
+			}
 			for i, x := range c.Routes {
 				if x.ID == v.ID {
 					c.Routes[i] = v
@@ -134,7 +139,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			c.Routes = append(c.Routes, v)
 			return nil
 		})
-	case "route.reorder":
+	case "route.reorder", "provider.reorder":
 		// 顺序是一个整体，一次写完。逐个保存会在中途失败时留下一个
 		// 比原来更错的顺序，而且每次保存都要递增配置版本。
 		ids := arr(p["ids"])
@@ -146,11 +151,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			rank[fmt.Sprint(v)] = (i + 1) * 10
 		}
 		return a.Store.Change(version, action, "", func(c *Config) error {
-			for i := range c.Routes {
-				if n, ok := rank[c.Routes[i].ID]; ok {
-					c.Routes[i].Sort = n
-				}
-			}
+			applyOrder(c, action == "provider.reorder", rank)
 			return nil
 		})
 	case "alias.save":
@@ -263,7 +264,11 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		for _, s := range ss {
 			ranked = append(ranked, Object{"model_id": s.Model.ID, "score": s.Score, "reason": s.Reason, "protocol": s.Model.Protocol})
 		}
-		return Object{"ranked": ranked, "checks": reasons, "note": "静态协议/配置模拟，不发起模型请求。实际调用仍须通过实时额度、冷却与并发检查。"}, nil
+		note := "静态协议/配置模拟，不发起模型请求。实际调用仍须通过实时额度、冷却与并发检查。"
+		if r, ok := c.route(id); ok && r.Strategy == "weighted" {
+			note += "按权重分流每次抽签，排序会变化。"
+		}
+		return Object{"ranked": ranked, "checks": reasons, "note": note}, nil
 	case "provider.test":
 		pr, ok := c.provider(id)
 		if !ok {
@@ -335,6 +340,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		return Object{"id": kid, "key": key, "warning": "完整密钥只显示这一次；请保存在密码管理器中。"}, nil
 	case "apikey.revoke":
 		er := a.Store.DB.Exec("UPDATE api_keys SET enabled=0,revoked_at=? WHERE id=?", now(), id)
+		a.Engine.forgetKeys()
 		if er == nil {
 			a.audit(action, id)
 		}
@@ -342,11 +348,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 	case "session.list":
 		return a.Store.DB.Query("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 200")
 	case "session.delete":
-		er := a.Store.DB.Exec("DELETE FROM sessions WHERE id=?", id)
-		if er == nil {
-			a.audit(action, id)
-		}
-		return Object{"id": id, "unbound": true}, er
+		return a.deleteSessions(id, str(p, "model_id"))
 	case "request.list":
 		return a.requests(p)
 	case "request.get":
@@ -422,7 +424,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			v := obj(v)
 			act := str(v, "action")
 			switch act {
-			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "quota.list", "provider.usage", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list":
+			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "quota.list", "provider.usage", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list", "route.stats":
 				data, er := a.call(ctx, act, obj(v["params"]))
 				if er != nil {
 					_, code, msg := errorParts(er)
@@ -436,6 +438,9 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		}
 		return out, nil
 	default:
+		if f, ok := consoleActions[action]; ok {
+			return f(a, id, p)
+		}
 		return nil, fail("UNKNOWN_ACTION", "未知管理 action: "+action, 400)
 	}
 }

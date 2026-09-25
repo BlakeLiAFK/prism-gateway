@@ -1351,11 +1351,16 @@ func TestProviderTestAndModelSync(t *testing.T) {
 		t.Fatalf("应同步出 3 个模型: %d", len(cfg.Models))
 	}
 	for _, m := range cfg.Models {
-		if m.Enabled {
-			t.Fatalf("同步的模型 %s 必须默认禁用", m.ID)
+		// 同步即可用：只给了 id 的上游也要能被 Claude Code 这类带工具、64K 输出的客户端路由到
+		if !m.Enabled || !m.Tools || m.Context != 128000 || m.MaxOutput != 64000 || m.Concurrency != 4 {
+			t.Fatalf("同步的模型 %s 应默认可用: %+v", m.ID, m)
 		}
 		if m.PricingSet {
 			t.Fatalf("同步不得擅自认定 %s 的计价", m.ID)
+		}
+		// AGENTS 第 15 条：丢弃推理内容只能逐个模型显式开启
+		if m.DropReasoning {
+			t.Fatalf("同步不得默认开启 %s 的推理丢弃", m.ID)
 		}
 	}
 	byUpstream := map[string]string{}
@@ -2266,8 +2271,8 @@ func TestSyncCarriesUpstreamCapabilities(t *testing.T) {
 	if big.PricingSet {
 		t.Fatal("同步不得代替人确认计价")
 	}
-	if big.Enabled {
-		t.Fatal("同步的模型必须默认禁用")
+	if !big.Enabled {
+		t.Fatal("同步的模型应默认启用")
 	}
 
 	plain := byID["vendor/plain-model"]

@@ -30,6 +30,7 @@ type App struct {
 
 func NewApp(ctx context.Context, s *Store, ui http.Handler) *App {
 	a := &App{Store: s, Engine: NewEngine(s), UI: ui, Started: now(), Context: ctx, logins: map[string][]int64{}, usageCache: map[string]usageCacheEntry{}}
+	a.Engine.OnRateLimited = a.checkWindows
 	go a.Engine.Prune(ctx)
 	return a
 }
@@ -346,7 +347,7 @@ func (a *App) dashboard(p Object) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	recent, err := a.Store.DB.Query("SELECT id,parent_id,model_id,provider_id,protocol,status,http_status,started_at,duration_ms,cost_nano,is_demo FROM requests ORDER BY started_at DESC LIMIT 6")
+	recent, err := a.Store.DB.Query("SELECT id,parent_id,model_id,provider_id,protocol,status,http_status,started_at,duration_ms,output_tokens,cost_nano,is_demo FROM requests ORDER BY started_at DESC LIMIT 6")
 	if err != nil {
 		return nil, err
 	}

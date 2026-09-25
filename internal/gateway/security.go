@@ -140,6 +140,8 @@ func requestHeaders(dst *http.Request, src *http.Request, p Provider, protocol, 
 type client struct {
 	IP    string
 	Agent string
+	// Role 是 Claude Code 声明的请求角色，例如 subagent:Explore；其他客户端为空
+	Role string
 }
 
 // clientOf 取调用方地址。网关部署在同机反代（Caddy）后面，所以只有当直连地址
@@ -162,7 +164,24 @@ func clientOf(r *http.Request) client {
 	if len(agent) > 200 {
 		agent = agent[:200]
 	}
-	return client{IP: ip, Agent: agent}
+	return client{IP: ip, Agent: agent, Role: agentRole(r.Header)}
+}
+
+// agentRole 由 Claude Code 的提示头组成「类别:子代理类型」。类别与类型只在客户端
+// 开了 CLAUDE_CODE_GATEWAY_HINT_HEADERS 时才发；子代理始终带 agent-id，据此至少标出 subagent。
+func agentRole(h http.Header) string {
+	class, kind := h.Get("x-claude-code-request-class"), h.Get("x-claude-code-agent-type")
+	if class == "" && h.Get("x-claude-code-agent-id") != "" {
+		class = "subagent"
+	}
+	role := class
+	if kind != "" {
+		role += ":" + kind
+	}
+	if len(role) > 64 {
+		role = role[:64]
+	}
+	return role
 }
 
 func (e *Engine) Authenticate(r *http.Request) (Principal, error) {
@@ -173,19 +192,60 @@ func (e *Engine) Authenticate(r *http.Request) (Principal, error) {
 	if len(token) < 20 {
 		return Principal{}, fail("UNAUTHORIZED", "需要网关 API Key，不是上游 Key", 401)
 	}
-	rows, err := e.store.DB.Query("SELECT id,allowed FROM api_keys WHERE digest=? AND enabled=1", digest(token))
+	k, err := e.lookupKey(digest(token))
 	if err != nil {
 		return Principal{}, err
 	}
+	// last_used 只用于界面展示，每把 Key 最多每分钟落库一次
+	e.keyMu.Lock()
+	t := now()
+	write := t-k.written >= lastUsedEvery
+	if write {
+		k.written = t
+	}
+	e.keyMu.Unlock()
+	if write {
+		if err := e.store.DB.Exec("UPDATE api_keys SET last_used=? WHERE id=?", t, k.p.ID); err != nil {
+			slog.Error("api key last_used update failed", "key_id", k.p.ID, "err", err)
+		}
+	}
+	return k.p, nil
+}
+
+// cachedKey 已通过校验的网关 Key；written 是上次写 last_used 的时刻
+type cachedKey struct {
+	p       Principal
+	written int64
+}
+
+const lastUsedEvery = 60000
+
+// lookupKey 先查内存，未命中再查库并缓存。查库期间持锁，
+// 保证与 forgetKeys 互斥：吊销写库后清缓存，不会被并发的旧查询结果回填。
+func (e *Engine) lookupKey(d string) (*cachedKey, error) {
+	e.keyMu.Lock()
+	defer e.keyMu.Unlock()
+	if k := e.keys[d]; k != nil {
+		return k, nil
+	}
+	rows, err := e.store.DB.Query("SELECT id,allowed FROM api_keys WHERE digest=? AND enabled=1", d)
+	if err != nil {
+		return nil, err
+	}
 	if len(rows) == 0 {
-		return Principal{}, fail("UNAUTHORIZED", "网关 API Key 无效或已撤销", 401)
+		return nil, fail("UNAUTHORIZED", "网关 API Key 无效或已撤销", 401)
 	}
-	p := Principal{ID: rows[0].String("id")}
-	if err = json.Unmarshal([]byte(rows[0].String("allowed")), &p.Allowed); err != nil {
-		return Principal{}, err
+	k := &cachedKey{p: Principal{ID: rows[0].String("id")}}
+	if err = json.Unmarshal([]byte(rows[0].String("allowed")), &k.p.Allowed); err != nil {
+		return nil, err
 	}
-	if err := e.store.DB.Exec("UPDATE api_keys SET last_used=? WHERE id=?", now(), p.ID); err != nil {
-		slog.Error("api key last_used update failed", "key_id", p.ID, "err", err)
-	}
-	return p, nil
+	e.keys[d] = k
+	return k, nil
+}
+
+// forgetKeys 在 api_keys 写库后调用，下一次请求重新查库
+func (e *Engine) forgetKeys() {
+	e.keyMu.Lock()
+	e.keys = map[string]*cachedKey{}
+	e.keyMu.Unlock()
 }

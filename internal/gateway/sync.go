@@ -128,7 +128,7 @@ func (a *App) syncModels(ctx context.Context, p Provider, version int64) (any, e
 	if err != nil {
 		return nil, err
 	}
-	return Object{"added": added, "note": "新模型默认禁用。请确认原生协议、能力、上下文和价格，再手动启用；未自动抓取官方额度。"}, nil
+	return Object{"added": added, "note": "新模型已启用，能力与上下文取自上游声明（未声明的按常用值）。计价需在模型库确认后才计入预算；跨协议丢弃推理内容需逐个模型开启。"}, nil
 }
 
 // commandCodeProtocol 按上游 supported_endpoints 判定原生协议：

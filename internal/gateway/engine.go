@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -37,7 +38,8 @@ type health struct {
 	Cooldown   int64
 	LastStatus int
 	LatencyMS  int64
-	Limits     Object // 上游最近一次声明的限额，原样留存
+	TTFB       float64 // 上游 2xx 响应头耗时的滑动平均，latency 策略的依据
+	Limits     Object  // 上游最近一次声明的限额，原样留存
 	LimitsAt   int64
 }
 type Engine struct {
@@ -47,10 +49,14 @@ type Engine struct {
 	global   int
 	clientMu sync.Mutex
 	clients  map[string]*http.Client
+	keyMu    sync.Mutex
+	keys     map[string]*cachedKey
+	// OnRateLimited 在上游返回 429 后调用，供 App 去查额度窗口
+	OnRateLimited func(Provider)
 }
 
 func NewEngine(s *Store) *Engine {
-	return &Engine{store: s, states: map[string]*health{}, clients: map[string]*http.Client{}}
+	return &Engine{store: s, states: map[string]*health{}, clients: map[string]*http.Client{}, keys: map[string]*cachedKey{}}
 }
 func (e *Engine) client(p Provider) *http.Client {
 	e.clientMu.Lock()
@@ -83,7 +89,7 @@ func (e *Engine) Health() Object {
 	defer e.mu.Unlock()
 	m := Object{}
 	for k, v := range e.states {
-		m[k] = Object{"active": v.Active, "cooldown_until": v.Cooldown, "last_status": v.LastStatus, "latency_ms": v.LatencyMS,
+		m[k] = Object{"active": v.Active, "cooldown_until": v.Cooldown, "last_status": v.LastStatus, "latency_ms": v.LatencyMS, "ttfb_ms": math.Round(v.TTFB),
 			"limits": v.Limits, "limits_at": v.LimitsAt}
 	}
 	return Object{"active": e.global, "models": m}
@@ -145,6 +151,8 @@ type selection struct {
 	Cross    bool
 	// Ignored 是被接受但没有传给上游的请求字段，会在 X-Prism-Ignored 里告知调用方
 	Ignored []string
+	// Pinned 是会话原绑定的模型，仅当它在本次请求中仍是合格候选时非空
+	Pinned string
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
@@ -248,34 +256,31 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			}
 		}
 		if why == "" {
-			q, err := e.quota(m.ID)
+			pressure, err := e.pressure(m)
 			if err != nil {
 				return nil, nil, err
 			}
-			pressure := 0.0
-			for _, v := range []struct {
-				key   string
-				limit float64
-			}{{"used_5h", m.Limit5h}, {"used_7d", m.Limit7d}, {"used_30d", m.Limit30d}} {
-				if v.limit > 0 {
-					pressure = max(pressure, num(q, v.key)/v.limit)
-				}
-			}
-			score := 1000 - float64(i)*10
-			if route.Strategy == "balanced" {
-				score = 1000 - pressure*500 + float64(cm.Weight)
-			}
+			l := e.load(m)
+			score := baseScore(route.Strategy, i, cm, m, pressure, l)
 			if pinned == m.ID {
-				score += 10000
+				score += affinityBonus
 			}
 			if !cross {
-				score += 2
+				score += nativeBonus(route.Strategy)
 			}
-			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f", route.Strategy, !cross, pinned == m.ID, pressure), cross, ignored})
+			if l.Cooling || l.Full {
+				score -= unhealthyPenalty
+			}
+			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB), cross, ignored, ""})
 		}
 		reasons = append(reasons, Object{"model_id": m.ID, "eligible": why == "", "reason": why, "native": !cross})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	if slices.ContainsFunc(out, func(s selection) bool { return s.Model.ID == pinned }) {
+		for i := range out {
+			out[i].Pinned = pinned
+		}
+	}
 	return out, reasons, nil
 }
 func containsImage(v any) bool {
@@ -319,21 +324,23 @@ func (e *Engine) admit(s selection, key Principal, reqID, requested, p, session 
 	if s.Model.RPM > 0 && len(h.Recent) >= s.Model.RPM {
 		return "", fail("RPM_LIMIT", "本地 RPM 限额已满", 429)
 	}
-	q, err := e.quota(s.Model.ID)
-	if err != nil {
-		return "", err
-	}
 	reserve := reserveCost(s.Model, s.Body)
-	for _, v := range []struct {
-		k string
-		n float64
-	}{{"used_5h", s.Model.Limit5h}, {"used_7d", s.Model.Limit7d}, {"used_30d", s.Model.Limit30d}} {
-		if v.n > 0 && nano(num(q, v.k))+reserve > nano(v.n) {
-			return "", fail("LOCAL_QUOTA_LIMIT", "本地滚动预算不足（包含本次预留）；不是上游官方余额", 429)
+	if hasBudget(s.Model) {
+		q, err := e.quota(s.Model.ID)
+		if err != nil {
+			return "", err
+		}
+		for _, v := range []struct {
+			k string
+			n float64
+		}{{"used_5h", s.Model.Limit5h}, {"used_7d", s.Model.Limit7d}, {"used_30d", s.Model.Limit30d}} {
+			if v.n > 0 && nano(num(q, v.k))+reserve > nano(v.n) {
+				return "", fail("LOCAL_QUOTA_LIMIT", "本地滚动预算不足（包含本次预留）；不是上游官方余额", 429)
+			}
 		}
 	}
 	id := randomID("att_")
-	err = e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,cost_nano,cost_known,reason,is_demo,client_ip,user_agent) VALUES (?,?,?,?,?,?,?,?,?,'running',?,?,?,?,?,?,?)`, id, reqID, key.ID, requested, s.Model.ID, s.Provider.ID, p, s.Model.Protocol, session, t, reserve, s.Model.PricingSet, s.Reason, s.Provider.Kind == "mock", from.IP, from.Agent)
+	err := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,cost_nano,cost_known,reason,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?)`, id, reqID, key.ID, requested, s.Model.ID, s.Provider.ID, p, s.Model.Protocol, session, t, reserve, s.Model.PricingSet, s.Reason, s.Provider.Kind == "mock", from.IP, from.Agent, from.Role)
 	if err != nil {
 		return "", err
 	}
@@ -392,7 +399,12 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 	if session != "" && state == "success" {
 		// 冲突分支里的列要用本表限定。曾经误写成 requests.requests（另一张表），
 		// 导致整条语句编译失败、会话亲和记录一条都没写进去，而错误被丢弃因此无人察觉。
-		if e := e.store.DB.Exec(`INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET model_id=excluded.model_id,provider_id=excluded.provider_id,updated_at=excluded.updated_at,requests=sessions.requests+1`, session, keyID, s.Model.ID, s.Provider.ID, now()); e != nil {
+		q := `INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET model_id=excluded.model_id,provider_id=excluded.provider_id,updated_at=excluded.updated_at,requests=sessions.requests+1`
+		if e.keepPin(s) {
+			// 原模型只是临时故障：保留绑定、只续期，冷却结束后回到原模型
+			q = `INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,requests=sessions.requests+1`
+		}
+		if e := e.store.DB.Exec(q, session, keyID, s.Model.ID, s.Provider.ID, now()); e != nil {
 			slog.Error("session affinity write failed", "request_id", id, "err", e)
 		}
 	}

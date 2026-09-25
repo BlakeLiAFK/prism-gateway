@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.16.0"
+const Version = "1.20.0"
 
 type Object = map[string]any
 
@@ -28,6 +28,8 @@ type Provider struct {
 	HasAdminKey bool   `json:"has_admin_key"`
 	AdminSecret string `json:"-"`
 	Description string `json:"description"`
+	// Sort 决定供应商在管理界面里的先后，与路由的 Sort 同理
+	Sort int `json:"sort"`
 }
 type Model struct {
 	ID          string `json:"id"`
@@ -232,8 +234,11 @@ func (c Config) Validate() error {
 			return errors.New("路由 ID 无效或重复")
 		}
 		names[r.ID] = true
-		if r.Strategy != "priority" && r.Strategy != "balanced" {
-			return errors.New("路由策略仅支持 priority / balanced")
+		if !routeStrategies[r.Strategy] {
+			return errors.New("路由策略仅支持 priority / balanced / weighted / latency / cost / least_busy")
+		}
+		if err := checkWeightedAccounts(&c, r); err != nil {
+			return err
 		}
 		seen := map[string]bool{}
 		for _, x := range r.Candidates {
@@ -314,25 +319,30 @@ func (c Config) nameTaken(id string) bool {
 // pricing_set 一律保持 false：价格要由人对着自己的账户确认过才算数，
 // 否则费用统计会拿着一个没人看过的数字装作确定。
 func newSyncedModel(id, providerID, upstream, name, protocol string, src Object) Model {
+	// 同步即可用：默认启用，能力尽量取自上游声明，没声明的按主流对话模型取值
 	m := Model{
 		ID: id, ProviderID: providerID, Upstream: upstream, Name: name,
-		Protocol: protocol, Enabled: false, Concurrency: 2,
-		Context: int(num(src, "context_length")),
+		Protocol: protocol, Enabled: true, Concurrency: 4,
+		Context: int(firstNum(src, "context_length", "context_window", "max_context_length", "max_model_len")),
 	}
 	if m.Context < 1 {
 		m.Context = 128000
 	}
-	top := obj(src["top_provider"])
-	m.MaxOutput = int(num(top, "max_completion_tokens"))
+	m.MaxOutput = int(firstNum(obj(src["top_provider"]), "max_completion_tokens"))
 	if m.MaxOutput < 1 {
-		// 上游没声明就按上下文估一个够用的值。
-		// 原来固定 4096，同步来的模型连 Claude Code 的 64000 都满足不了。
-		m.MaxOutput = min(m.Context, 32768)
+		m.MaxOutput = int(firstNum(src, "max_output_tokens", "max_completion_tokens"))
+	}
+	if m.MaxOutput < 1 {
+		// 没声明就按上下文估，至少够 Claude Code 常用的 64000
+		m.MaxOutput = min(m.Context, 64000)
 	}
 	m.MaxOutput = clamp(m.MaxOutput, 1, 1000000)
 	m.Context = clamp(m.Context, 1, 10000000)
 
-	for _, v := range arr(src["supported_parameters"]) {
+	// 声明了参数表就照声明；没声明时默认支持工具，不支持的上游会明确报错而不是静默出错
+	params, declared := src["supported_parameters"]
+	m.Tools = !declared
+	for _, v := range arr(params) {
 		if s, _ := v.(string); s == "tools" {
 			m.Tools = true
 		}
@@ -349,6 +359,16 @@ func newSyncedModel(id, providerID, upstream, name, protocol string, src Object)
 	m.CachePrice = clampPrice(price(pricing, "input_cache_read"))
 	m.WritePrice = clampPrice(price(pricing, "input_cache_write"))
 	return m
+}
+
+// firstNum 返回第一个为正数的字段值
+func firstNum(o Object, keys ...string) float64 {
+	for _, k := range keys {
+		if v := num(o, k); v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 func price(o Object, key string) float64 {

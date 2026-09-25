@@ -128,7 +128,7 @@ func (s *Store) migrate() error {
 			`CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, prefix TEXT NOT NULL, digest TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL, allowed TEXT NOT NULL, created_at INTEGER NOT NULL, last_used INTEGER, revoked_at INTEGER)`,
 			`CREATE TABLE IF NOT EXISTS admin_sessions (digest TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
 			`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, updated_at INTEGER NOT NULL, requests INTEGER NOT NULL DEFAULT 1)`,
-			`CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, key_id TEXT NOT NULL, requested_model TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_tokens INTEGER NOT NULL DEFAULT 0, write_tokens INTEGER NOT NULL DEFAULT 0, cost_nano INTEGER NOT NULL DEFAULT 0, cost_known INTEGER NOT NULL DEFAULT 0, usage_mode TEXT NOT NULL DEFAULT 'reserved', reason TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', is_demo INTEGER NOT NULL DEFAULT 0, client_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '')`,
+			`CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, key_id TEXT NOT NULL, requested_model TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_tokens INTEGER NOT NULL DEFAULT 0, write_tokens INTEGER NOT NULL DEFAULT 0, cost_nano INTEGER NOT NULL DEFAULT 0, cost_known INTEGER NOT NULL DEFAULT 0, usage_mode TEXT NOT NULL DEFAULT 'reserved', reason TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', is_demo INTEGER NOT NULL DEFAULT 0, client_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', agent_role TEXT NOT NULL DEFAULT '')`,
 			`CREATE INDEX IF NOT EXISTS requests_model_time ON requests(model_id,started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_time ON requests(started_at)`,
 			`CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, action TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
@@ -152,7 +152,7 @@ func (s *Store) migrate() error {
 		for _, c := range cols {
 			have[c.String("name")] = true
 		}
-		for _, c := range []string{"client_ip", "user_agent"} {
+		for _, c := range []string{"client_ip", "user_agent", "agent_role"} {
 			if !have[c] {
 				if e := t.Exec("ALTER TABLE requests ADD COLUMN " + c + " TEXT NOT NULL DEFAULT ''"); e != nil {
 					return e
@@ -229,7 +229,7 @@ func (s *Store) load() error {
 			}
 		}
 	}
-	sortRoutes(&c)
+	sortConfig(&c)
 	r, e = s.DB.Query("SELECT key,value FROM settings")
 	if e != nil {
 		return e
@@ -319,10 +319,39 @@ func cloneConfig(c Config) Config {
 	return out
 }
 
-// sortRoutes 按 Sort 升序排列路由，Sort 相同的维持原有的 ID 字母序。
+// sortConfig 按 Sort 升序排列供应商与路由，Sort 相同的维持原有的 ID 字母序。
 // 加载与写入两条路径都要调用：只排加载那一条，界面在重启前看到的仍是旧顺序。
-func sortRoutes(c *Config) {
+func sortConfig(c *Config) {
+	sort.SliceStable(c.Providers, func(i, j int) bool { return c.Providers[i].Sort < c.Providers[j].Sort })
 	sort.SliceStable(c.Routes, func(i, j int) bool { return c.Routes[i].Sort < c.Routes[j].Sort })
+}
+
+// applyOrder 按 rank 写入供应商或路由的 Sort，未列出的保持原值
+func applyOrder(c *Config, providers bool, rank map[string]int) {
+	if providers {
+		for i := range c.Providers {
+			if n, ok := rank[c.Providers[i].ID]; ok {
+				c.Providers[i].Sort = n
+			}
+		}
+		return
+	}
+	for i := range c.Routes {
+		if n, ok := rank[c.Routes[i].ID]; ok {
+			c.Routes[i].Sort = n
+		}
+	}
+}
+
+// enableModels 启用路由候选里的模型
+func enableModels(c *Config, cs []Candidate) {
+	for _, x := range cs {
+		for i := range c.Models {
+			if c.Models[i].ID == x.ModelID {
+				c.Models[i].Enabled = true
+			}
+		}
+	}
 }
 
 func (s *Store) Change(version int64, action, target string, fn func(*Config) error) (Config, error) {
@@ -338,7 +367,7 @@ func (s *Store) Change(version int64, action, target string, fn func(*Config) er
 	if e := c.Validate(); e != nil {
 		return c, fail("INVALID_CONFIG", e.Error(), 400)
 	}
-	sortRoutes(&c)
+	sortConfig(&c)
 	c.Version++
 	e := s.DB.Transaction(func(t *sqlite.Tx) error {
 		for _, table := range []string{"route_models", "aliases", "routes", "models", "providers", "settings"} {

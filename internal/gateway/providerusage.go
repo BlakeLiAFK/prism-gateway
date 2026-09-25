@@ -189,6 +189,16 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 		out["error"] = msg
 		return out
 	}
+	if p.Kind == "commandcode" {
+		if len(ccWindows(o)) == 0 {
+			if o2 := a.ccCreditsWithOrg(ctx, p, url); o2 != nil {
+				o = o2
+			}
+		}
+		if label, until := ccExhausted(ccWindows(o)); label != "" {
+			out["exhausted_until"] = until
+		}
+	}
 	headline, fields := parseUsage(p, o)
 	out["headline"] = headline
 	out["fields"] = fields
@@ -261,12 +271,11 @@ func parseUsage(p Provider, o Object) (string, []any) {
 			Object{"label": "月度剩余", "value": fmt.Sprintf("$%.2f", num(c, "monthlyCredits"))},
 			Object{"label": "附加额度", "value": fmt.Sprintf("$%.2f", num(c, "purchasedCredits")+num(c, "freeCredits"))},
 		}
-		// 套餐档另有 5 小时与 7 天两个滚动窗口，耗尽时请求会被直接拒掉，比总额更需要盯
-		w := obj(c["windowLimits"])
-		for _, x := range []struct{ key, label string }{{"fiveHour", "5 小时"}, {"weekly", "本周"}} {
-			if v := obj(w[x.key]); v != nil {
-				fields = append(fields, Object{"label": x.label, "value": fmt.Sprintf("$%.2f / $%.0f", num(v, "used"), num(v, "cap"))})
-			}
+		// 套餐档另有 5 小时与每周两个滚动窗口，耗尽时请求会被直接拒掉，比总额更需要盯
+		w := ccWindows(o)
+		fields = append(fields, ccWindowFields(w)...)
+		if label, _ := ccExhausted(w); label != "" {
+			return label + "额度已用完", fields
 		}
 		return fmt.Sprintf("$%.2f", remain), fields
 	}

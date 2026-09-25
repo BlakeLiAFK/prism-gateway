@@ -90,7 +90,13 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 	if rawSession == "" {
 		rawSession = randomID("conv_")
 	}
-	session := "ses_" + digest(key.ID + ":" + rawSession)[:32]
+	// Claude Code 的子代理与主线程共用会话 ID，但提示词前缀不同、不共享上游缓存，
+	// 按 agent-id 分开亲和，多个子代理才能分散到不同候选
+	sessionKey := rawSession
+	if a := r.Header.Get("x-claude-code-agent-id"); a != "" && len(a) <= 128 {
+		sessionKey += "#" + a
+	}
+	session := "ses_" + digest(key.ID + ":" + sessionKey)[:32]
 	w.Header().Set("X-Prism-Session", rawSession)
 	w.Header().Set("X-Prism-Config-Version", fmt.Sprint(c.Version))
 	if p == "systemone" {
@@ -233,11 +239,15 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				e.recordLimits(s.Model.ID, res.Header)
 				if retryable(status) {
 					e.cooldown(s.Model.ID, res.Header.Get("Retry-After"))
+					if status == 429 && e.OnRateLimited != nil {
+						go e.OnRateLimited(s.Provider)
+					}
 				} else if exhausted(status) {
 					e.cooldownFor(s.Model.ID, exhaustedCooldown)
 				}
 				return
 			}
+			e.recordTTFB(s.Model.ID, now()-start)
 			e.recordLimits(s.Model.ID, res.Header)
 			for _, h := range []string{"retry-after", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-tokens-remaining", "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens"} {
 				if v := res.Header.Get(h); v != "" {
