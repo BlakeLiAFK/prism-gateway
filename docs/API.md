@@ -72,6 +72,9 @@ curl http://127.0.0.1:8080/api.json \
 | `provider.save` | `{version,id?,provider}` | 新 Config |
 | `provider.delete` | `{version,id}` | 新 Config；存在引用则拒绝 |
 | `route.stats` | `{minutes?}` | 近 N 分钟（默认 60）各路由的实际落点 share（每个候选含 attempts、success、affinity 命中次数）与运行状态 runtime |
+| `model.stats` | `{days?}` | 近 N 天（默认 7，最多 90）按模型与供应商汇总的请求、成功、失败、tokens、估算花费、未计价次数、平均耗时、最后使用时间 |
+| `model.usage` | `{id, days?, tz_offset_min?}` | 单个模型近 N 天（默认 30）的每日用量（按浏览器时区分日）与按 `agent_role` 的拆分 |
+| `request.reprice` | `{model_id?, dry_run?}` | 按当前单价补录价格确认之前的请求：只处理 `usage_mode=reported_tokens`、未计价、非演示且模型已确认价格的记录，补录后标为 `reported_tokens_repriced`；`dry_run` 只返回条数与金额 |
 | `provider.reorder` | `{version,ids:[]}` | 新 Config；按 ids 顺序整体重排供应商，未列出的保持原序号 |
 | `provider.test` | `{id}` | GET /models HTTP 状态与耗时，不调用模型生成 |
 | `provider.sync_models` | `{id}` | `job_id`，异步执行 |
@@ -166,7 +169,7 @@ curl http://127.0.0.1:8080/api.json \
 | --- | --- |
 | `priority` | 按候选顺序 |
 | `balanced` | 权重优先：`weight` 最高的先试，设了本地预算时按用量降权；没配预算时就是按权重固定排序，不做随机分流 |
-| `weighted` | 按 `weight` 比例随机抽签，备选顺序同样按剩余权重抽取。候选中不能出现同一厂商的多个供应商（内置类型按 `kind`、自定义按上游域名判断），否则保存返回 400 |
+| `weighted` | 按 `weight` 比例随机抽签，备选顺序同样按剩余权重抽取 |
 | `latency` | 按上游 2xx 响应头耗时的滑动平均升序，没有样本的先试。非流式请求的响应头要等生成结束，长回答会被算慢 |
 | `cost` | 按 `input_price + output_price` 升序，`pricing_set=false` 的排最后 |
 | `least_busy` | 按当前并发 / 并发上限升序 |
