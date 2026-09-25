@@ -8,10 +8,11 @@ import {aliasEditor,moveCandidate,routeEditor,routes} from './routes.js';
 import {bindRoutes,routeActions} from './routes.js';
 import {modelEditor,models} from './models.js';
 import {bindModels,modelActions} from './models.js';
+import {usageActions} from './usage.js';
 import {bindPages,pageActions} from './views.js';
 
 // 各页面模块自带的动作；app.js 的 switch 未命中时按名字分发到这里
-const moduleActions={...modelActions,...routeActions,...pageActions};
+const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions};
 
 export function login(){
 
@@ -71,6 +72,9 @@ export async function loadPage(animated=true){
       params={
         minutes:60
       };
+      break;
+      case 'models':case 'providers':action='model.stats';
+      params={days:state.usageDays};
       break;
       case 'jobs':action='job.list';
       break;
