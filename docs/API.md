@@ -72,6 +72,7 @@ curl http://127.0.0.1:8080/api.json \
 | `provider.save` | `{version,id?,provider}` | 新 Config |
 | `provider.delete` | `{version,id}` | 新 Config；存在引用则拒绝 |
 | `route.stats` | `{minutes?}` | 近 N 分钟（默认 60）各路由的实际落点 share（每个候选含 attempts、success、affinity 命中次数）与运行状态 runtime |
+| `route.live` | `{}` | 实时面板数据（缓存 5 秒）：全局并发；被路由引用的模型的并发、RPM、首字节、会话数、近 5 分钟请求与单请求 tok/s；各路由的并发 / 容量、近 60 秒 RPM 与输出 tok/s、近 5 分钟成功率、会话数、加权首字节 |
 | `model.stats` | `{days?}` | 近 N 天（默认 7，最多 90）按模型与供应商汇总的请求、成功、失败、tokens、估算花费、未计价次数、平均耗时、最后使用时间 |
 | `model.usage` | `{id, days?, tz_offset_min?}` | 单个模型近 N 天（默认 30）的每日用量（按浏览器时区分日）与按 `agent_role` 的拆分 |
 | `request.reprice` | `{model_id?, dry_run?}` | 按当前单价补录价格确认之前的请求：只处理 `usage_mode=reported_tokens`、未计价、非演示且模型已确认价格的记录，补录后标为 `reported_tokens_repriced`；`dry_run` 只返回条数与金额 |

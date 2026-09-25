@@ -37,7 +37,7 @@
 }
 
 @media(max-width:700px){
-  .cand-live-bar{max-width:none}
+  .cand-share-bar,.cand-live-bar{max-width:none}
   .candidate-flags{gap:4px}
   .route-live{padding:13px 17px}
 }
