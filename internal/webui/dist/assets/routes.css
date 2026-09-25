@@ -1,4 +1,21 @@
-/* 路由画布：候选状态徽章、落点占比条、模拟切换与淘汰说明。 */
+/* 路由画布：候选状态徽章、落点占比条、实时指标、模拟切换与淘汰说明。 */
+.route-live{display:flex;align-items:flex-start;gap:12px;padding:15px 22px;border-bottom:1px solid var(--line2)}
+.live-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;flex:1;min-width:0}
+.live-item{min-width:0}
+.live-val{font-size:15px;font-weight:540;font-variant-numeric:tabular-nums;color:var(--text);line-height:1.25}
+.live-val .live-unit{font-size:9px;font-weight:450;color:var(--muted);letter-spacing:0}
+.live-val .live-sep{color:var(--muted);font-weight:450}
+.live-item.warn .live-val{color:var(--warn)}
+.live-item.error .live-val{color:var(--error)}
+.live-label,.live-sub{display:block;font-size:9px;color:var(--muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-sub{opacity:.85}
+.live-tag{display:inline-flex;align-items:center;gap:5px;flex:none;font:9px var(--mono);color:var(--mint-text);background:var(--mint-soft);border-radius:20px;padding:4px 9px;white-space:nowrap}
+.cand-live{display:flex;align-items:center;gap:8px;margin-top:6px;min-width:0}
+.cand-live-bar{flex:1;min-width:24px;max-width:140px;height:3px;border-radius:2px;background:var(--line2);overflow:hidden}
+.cand-live-bar i{display:block;height:100%;background:var(--mint-text);border-radius:2px}
+.cand-live-bar.high i{background:var(--warn)}
+.cand-live-bar.full i{background:var(--error)}
+.cand-live small{font-size:9px;color:var(--muted);flex:1 1 auto;min-width:0;max-width:100%}
 .candidate.muted{opacity:.52}
 .candidate.muted:hover{opacity:.75}
 .candidate-tools{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
@@ -14,9 +31,15 @@
 .sim-out{font-size:11px;color:var(--warn);background:var(--warn-bg);border-radius:7px;padding:8px 10px;margin:7px 0}
 .sim-out b{color:inherit}
 
+@media(max-width:1180px){
+  /* 指标太多，一行放不下就折到两行 */
+  .live-grid{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:12px}
+}
+
 @media(max-width:700px){
-  .cand-share-bar{max-width:none}
+  .cand-live-bar{max-width:none}
   .candidate-flags{gap:4px}
+  .route-live{padding:13px 17px}
 }
 
 @media(max-width:420px){
@@ -24,4 +47,12 @@
   .cand-share{flex-wrap:wrap}
   .cand-share-bar{max-width:none;width:100%;order:2}
   .cand-share small{order:1}
+  /* 指标占半行、实时标记整行靠左，任何一列都不挤压内容 */
+  .live-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 12px}
+  .route-live{flex-wrap:wrap}
+  .live-tag{order:-1;flex-basis:100%}
+  .live-label,.live-sub{overflow:visible;text-overflow:clip;white-space:normal}
+  .cand-live{flex-wrap:wrap}
+  .cand-live-bar{max-width:none;width:100%;order:2}
+  .cand-live small{overflow-wrap:anywhere}
 }

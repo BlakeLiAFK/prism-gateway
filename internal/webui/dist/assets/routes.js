@@ -22,7 +22,7 @@ export function routes(){
   let r=rs.find(r=>r.id===state.routeID)||rs[0];
   if(r)state.routeID=r.id;
   const cand=state.routeDraft||r?.candidates||[];
-  return head('ROUTING STUDIO','让请求，找到合适的模型。','按优先级、权重、响应速度、价格或负载选择候选；会话优先保持亲和，不会在半截流中切换模型。',btn('创建路由','add-route','plus','','primary'))+(r?`<div class="route-layout"><div class="route-list"><p class="tiny muted" style="padding:0 2px 4px">拖动卡片调整顺序</p>${rs.map((x,i)=>`<button class="route-select ${x.id===r.id?'active':''}" draggable="true" data-drag-index="${i}" data-drag-kind="route" data-action="select-route" data-id="${E(x.id)}"><div class="between"><strong>${E(x.name||x.id)}</strong><span class="dot ${x.enabled?'positive':'muted'}"></span></div><p class="mono">${E(x.id)}</p><p>${x.candidates.length} 个候选 · ${strategyName(x.strategy)}</p></button>`).join('')}</div><section class="card"><div class="card-head"><div><h2>${E(r.name||r.id)}</h2><p class="card-sub">${E(r.description||'拖动候选调整优先级，或用上下箭头操作。')}</p></div><div class="flex">${state.routeDraft?btn('应用排序','save-route-order','check','','mint small'):''}<button class="switch ${r.enabled?'on':''}" role="switch" aria-checked="${r.enabled}" aria-label="启用路由 ${E(r.name||r.id)}" data-action="toggle-route" data-id="${E(r.id)}"></button>${btn('编辑','edit-route','settings',`data-id="${E(r.id)}"`,'small')}<button class="icon-btn" data-action="delete-route" data-id="${E(r.id)}" aria-label="删除路由">${icon('trash')}</button></div></div><div class="route-canvas"><div class="router-node">${icon('prism')}<strong class="mono">${E(r.id)}</strong><small>CLIENT REQUEST</small>${badge(r.strategy)}</div><div class="route-connector"></div><div class="route-candidates">${cand.map((x,i)=>{const m=getModel(x.model_id);const cs=candidateState(x.model_id);const flags=candidateBadges(cs);return `<div class="candidate${cs.disabled||cs.cooling?' muted':''}" draggable="true" data-drag-index="${i}" data-drag-kind="candidate">${icon('drag','drag-handle')}<span class="candidate-order">${String(i+1).padStart(2,'0')}</span><div class="candidate-info"><strong class="candidate-title"><span class="ellipsis">${E(m?.name||x.model_id)}</span>${sourceTag(m?.provider_id)}</strong><small><span class="mono">${E(x.model_id)}</span> · weight ${x.weight}</small>${flags?`<div class="candidate-flags">${flags}</div>`:''}${shareBar(r.id,x.model_id)}</div>${badge(m?.protocol||'?')}<div><button class="icon-btn" data-action="candidate-up" data-index="${i}" ${i===0?'disabled':''} aria-label="上移">${icon('up')}</button><button class="icon-btn" data-action="candidate-down" data-index="${i}" ${i===cand.length-1?'disabled':''} aria-label="下移">${icon('down')}</button></div></div>`;}).join('')||'<div class="small muted">没有候选，请编辑路由添加模型。</div>'}</div></div><p class="route-canvas-note tiny muted">状态每次刷新页面更新；流量占比统计近 ${state.data?.minutes||60} 分钟该路由的实际尝试，不是额度。「新选」是按策略挑中的，「亲和」是会话沿用上次的模型。</p><div class="route-properties"><div><small>会话亲和</small><strong>${r.affinity?'优先保持同一模型':'已关闭'}</strong></div><div><small>重试边界</small><strong>安全请求 + 上游 429 / 503</strong></div><div><small>流开始之后</small><strong>禁止中途切模型</strong></div><div class="flex" style="margin-left:auto;gap:8px"><div class="segmented">${['claude-code','simple'].map(v=>`<button type="button" class="${state.simulateMode===v?'active':''}" data-action="set-simulate-mode" data-value="${v}">${v==='claude-code'?'Claude Code 请求':'简单请求'}</button>`).join('')}</div>${btn('模拟选择','simulate-route','play',`data-id="${E(r.id)}"`,'small')}</div></div>${state.simulation?`<div class="simulation"><h3>路由模拟结果 · ${state.simulateMode==='claude-code'?'Claude Code 请求':'简单请求'}</h3><p class="tiny muted" style="margin:6px 0 14px">${E(state.simulation.note)}</p>${(state.simulation.checks||[]).filter(c=>!c.eligible).map(c=>`<p class="sim-out"><b class="mono">${E(modelName(c.model_id))}</b> 淘汰：${E(c.reason)}</p>`).join('')}${state.simulation.ranked.map((x,i)=>`<div class="sim-line"><span class="flex">${badge(String(i+1).padStart(2,'0'))}<b>${E(modelName(x.model_id))}</b>${sourceTag(getModel(x.model_id)?.provider_id)}${badge(x.protocol)}</span><span class="mono">${x.score.toFixed(1)}</span></div>`).join('')||'<p class="small negative">没有兼容候选。检查下方原因。</p>'}<details style="margin-top:14px"><summary class="small muted">查看候选判定依据</summary><pre style="margin-top:10px">${E(json(state.simulation.checks))}</pre></details></div>`:''}</section></div>`:empty('创建你的第一个路由','把多个模型组成一个稳定的客户端入口，例如 auto-coding。候选只在本账户的授权范围内使用。','add-route','创建路由','route'))+`<section class="card aliases-grid"><div class="card-head"><div><h2>模型别名</h2><p class="card-sub">客户端名称映射到真实模型或路由；实际解析结果记录在请求元数据中。</p></div>${btn('添加别名','add-alias','plus','','small')}</div>${state.config.aliases.length?`<div class="table-scroll"><table><thead><tr><th>客户端请求名称</th><th>指向目标</th><th>状态</th><th></th></tr></thead><tbody>${state.config.aliases.map(a=>`<tr><td class="mono">${E(a.id)}</td><td class="mono">${E(a.target)}</td><td>${tag(a.enabled?'已启用':'停用',a.enabled?'':'neutral')}</td><td><div class="table-actions"><button class="icon-btn" data-action="delete-alias" data-id="${E(a.id)}" aria-label="删除别名">${icon('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('别名不是必需项','你可以直接使用模型 ID 或路由 ID，也可以在这里增加一个更好记的名字。','','','link')}</section>`;
+  return head('ROUTING STUDIO','让请求，找到合适的模型。','按优先级、权重、响应速度、价格或负载选择候选；会话优先保持亲和，不会在半截流中切换模型。',btn('创建路由','add-route','plus','','primary'))+(r?`<div class="route-layout"><div class="route-list"><p class="tiny muted" style="padding:0 2px 4px">拖动卡片调整顺序</p>${rs.map((x,i)=>`<button class="route-select ${x.id===r.id?'active':''}" draggable="true" data-drag-index="${i}" data-drag-kind="route" data-action="select-route" data-id="${E(x.id)}"><div class="between"><strong>${E(x.name||x.id)}</strong><span class="dot ${x.enabled?'positive':'muted'}"></span></div><p class="mono">${E(x.id)}</p><p>${x.candidates.length} 个候选 · ${strategyName(x.strategy)}</p></button>`).join('')}</div><section class="card"><div class="card-head"><div><h2>${E(r.name||r.id)}</h2><p class="card-sub">${E(r.description||'拖动候选调整优先级，或用上下箭头操作。')}</p></div><div class="flex">${state.routeDraft?btn('应用排序','save-route-order','check','','mint small'):''}<button class="switch ${r.enabled?'on':''}" role="switch" aria-checked="${r.enabled}" aria-label="启用路由 ${E(r.name||r.id)}" data-action="toggle-route" data-id="${E(r.id)}"></button>${btn('编辑','edit-route','settings',`data-id="${E(r.id)}"`,'small')}<button class="icon-btn" data-action="delete-route" data-id="${E(r.id)}" aria-label="删除路由">${icon('trash')}</button></div></div>${routeLiveBar(r.id)}<div class="route-canvas"><div class="router-node">${icon('prism')}<strong class="mono">${E(r.id)}</strong><small>CLIENT REQUEST</small>${badge(r.strategy)}</div><div class="route-connector"></div><div class="route-candidates">${cand.map((x,i)=>{const m=getModel(x.model_id);const cs=candidateState(x.model_id);const flags=candidateBadges(cs);return `<div class="candidate${cs.disabled||cs.cooling?' muted':''}" draggable="true" data-drag-index="${i}" data-drag-kind="candidate">${icon('drag','drag-handle')}<span class="candidate-order">${String(i+1).padStart(2,'0')}</span><div class="candidate-info"><strong class="candidate-title"><span class="ellipsis">${E(m?.name||x.model_id)}</span>${sourceTag(m?.provider_id)}</strong><small><span class="mono">${E(x.model_id)}</span> · weight ${x.weight}</small>${flags?`<div class="candidate-flags">${flags}</div>`:''}${candidateLive(x.model_id)}${shareBar(r.id,x.model_id)}</div>${badge(m?.protocol||'?')}<div><button class="icon-btn" data-action="candidate-up" data-index="${i}" ${i===0?'disabled':''} aria-label="上移">${icon('up')}</button><button class="icon-btn" data-action="candidate-down" data-index="${i}" ${i===cand.length-1?'disabled':''} aria-label="下移">${icon('down')}</button></div></div>`;}).join('')||'<div class="small muted">没有候选，请编辑路由添加模型。</div>'}</div></div><p class="route-canvas-note tiny muted">状态每次刷新页面更新；流量占比统计近 ${state.data?.minutes||60} 分钟该路由的实际尝试，不是额度。「新选」是按策略挑中的，「亲和」是会话沿用上次的模型。</p><div class="route-properties"><div><small>会话亲和</small><strong>${r.affinity?'优先保持同一模型':'已关闭'}</strong></div><div><small>重试边界</small><strong>安全请求 + 上游 429 / 503</strong></div><div><small>流开始之后</small><strong>禁止中途切模型</strong></div><div class="flex" style="margin-left:auto;gap:8px"><div class="segmented">${['claude-code','simple'].map(v=>`<button type="button" class="${state.simulateMode===v?'active':''}" data-action="set-simulate-mode" data-value="${v}">${v==='claude-code'?'Claude Code 请求':'简单请求'}</button>`).join('')}</div>${btn('模拟选择','simulate-route','play',`data-id="${E(r.id)}"`,'small')}</div></div>${state.simulation?`<div class="simulation"><h3>路由模拟结果 · ${state.simulateMode==='claude-code'?'Claude Code 请求':'简单请求'}</h3><p class="tiny muted" style="margin:6px 0 14px">${E(state.simulation.note)}</p>${(state.simulation.checks||[]).filter(c=>!c.eligible).map(c=>`<p class="sim-out"><b class="mono">${E(modelName(c.model_id))}</b> 淘汰：${E(c.reason)}</p>`).join('')}${state.simulation.ranked.map((x,i)=>`<div class="sim-line"><span class="flex">${badge(String(i+1).padStart(2,'0'))}<b>${E(modelName(x.model_id))}</b>${sourceTag(getModel(x.model_id)?.provider_id)}${badge(x.protocol)}</span><span class="mono">${x.score.toFixed(1)}</span></div>`).join('')||'<p class="small negative">没有兼容候选。检查下方原因。</p>'}<details style="margin-top:14px"><summary class="small muted">查看候选判定依据</summary><pre style="margin-top:10px">${E(json(state.simulation.checks))}</pre></details></div>`:''}</section></div>`:empty('创建你的第一个路由','把多个模型组成一个稳定的客户端入口，例如 auto-coding。候选只在本账户的授权范围内使用。','add-route','创建路由','route'))+`<section class="card aliases-grid"><div class="card-head"><div><h2>模型别名</h2><p class="card-sub">客户端名称映射到真实模型或路由；实际解析结果记录在请求元数据中。</p></div>${btn('添加别名','add-alias','plus','','small')}</div>${state.config.aliases.length?`<div class="table-scroll"><table><thead><tr><th>客户端请求名称</th><th>指向目标</th><th>状态</th><th></th></tr></thead><tbody>${state.config.aliases.map(a=>`<tr><td class="mono">${E(a.id)}</td><td class="mono">${E(a.target)}</td><td>${tag(a.enabled?'已启用':'停用',a.enabled?'':'neutral')}</td><td><div class="table-actions"><button class="icon-btn" data-action="delete-alias" data-id="${E(a.id)}" aria-label="删除别名">${icon('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('别名不是必需项','你可以直接使用模型 ID 或路由 ID，也可以在这里增加一个更好记的名字。','','','link')}</section>`;
 
 }
 
@@ -236,6 +236,67 @@ function shareBar(routeId,modelId){
   return `<div class="cand-share${sh.attempts?'':' zero'}"><span class="cand-share-bar"><i style="width:${sh.attempts?Math.max(pct,3):0}%"></i></span><small>流量占比 ${pct}% · ${sh.attempts} 次${sh.attempts?`（新选 ${sh.attempts-sh.affinity} · 亲和 ${sh.affinity}）`:''}</small></div>`;
 }
 
+// ===== 路由画布实时数据 =====
+// 数据来自 route.live（与页面数据的 route.stats 不同源），放在 state.live，每 5 秒刷新一次：
+//   {now, global:{active,limit},
+//    models:{模型ID:{active,concurrency,rpm,rpm_limit,ttfb_ms,cooldown_until,limits,sessions,requests_5m,success_5m,tok_s}},
+//    routes:{路由ID:{active,capacity,rpm,tok_s,requests_5m,success_5m,sessions,ttfb_ms}}}
+// 轮询每个页面模块各自持有，这里只存自己的 interval，避免重复启动。
+
+let liveTimer=null;
+
+const LIVE_INTERVAL=5000;
+
+// 数字缺省显示 —，0 是有效值，所以只认 null/undefined
+const lv=(v,fmt=number)=>v==null?'—':fmt(v);
+
+// 输出速度：路由的 tok/s 可能是 0.17 这种小数，直接用 number() 会抹成 0
+const tokRate=v=>Number(v)>=10?number(v):Number(v).toFixed(2);
+
+// 成功率：没有请求时显示 —，不显示 0%
+function rateText(requests,success){
+  if(!requests)return '—';
+  return Math.round((success||0)/requests*100)+'%';
+}
+
+// 单个指标格
+function liveItem(value,label,lead='',sub=''){
+  return `<div class="live-item${lead?' '+lead:''}"><div class="live-val">${value}</div><small class="live-label">${label}</small>${sub?`<small class="live-sub">${sub}</small>`:''}</div>`;
+}
+
+// 画布上方的路由实时指标；state.live 还没有数据时用同样布局显示占位
+export function routeLiveBar(routeId){
+  const g=state.live?.global;
+  const r=state.live?.routes?.[routeId];
+  const pct=r?.capacity?Math.round((r.active||0)/r.capacity*100):0;
+  const lead=r?.capacity&&pct>=80?(pct>=100?'error':'warn'):'';
+  const sub=`全局 ${g?number(g.active||0):'—'} / ${g?number(g.limit||0):'—'}`;
+  return `<div class="route-live"><div class="live-grid">${liveItem(`${lv(r?.active)} <span class="live-sep">/</span> ${lv(r?.capacity)}`,'并发 active / capacity',lead,sub)}${liveItem(`${lv(r?.tok_s,tokRate)} <span class="live-unit">tok/s</span>`,'输出 tok_s')}${liveItem(lv(r?.rpm),'RPM')}${liveItem(rateText(r?.requests_5m,r?.success_5m),'成功率')}${liveItem(lv(r?.sessions),'会话')}${liveItem(lv(r?.ttfb_ms,v=>v>0?ms(v):'—'),'首字节 ttfb_ms')}</div><span class="live-tag" title="每 ${LIVE_INTERVAL/1000} 秒自动刷新路由与候选的实时数据"><i class="dot"></i>实时 · ${LIVE_INTERVAL/1000}s</span></div>`;
+}
+
+// 候选卡片上的一行实时指标：并发条 + 并发 / RPM / 速度 / 首字节 / 会话。
+// 冷却倒计时已由 candidateBadges 显示，这里不重复；没有数据的项直接省略。
+function candidateLive(modelId){
+  const m=state.live?.models?.[modelId];
+  if(!m)return '';
+  const parts=[];
+  if(m.active!=null&&m.concurrency)parts.push(`并发 ${number(m.active)}/${number(m.concurrency)}`);
+  if(m.rpm!=null)parts.push(m.rpm_limit?`RPM ${number(m.rpm)} / ${number(m.rpm_limit)}`:`RPM ${number(m.rpm)}`);
+  if(m.tok_s!=null)parts.push(`${tokRate(m.tok_s)} tok/s`);
+  if(m.ttfb_ms>0)parts.push(`TTFB ${ms(m.ttfb_ms)}`);
+  if(m.sessions!=null)parts.push(`${number(m.sessions)} 会话`);
+  if(!parts.length)return '';
+  const bar=m.concurrency?`<span class="cand-live-bar ${liveLevel(m.active,m.concurrency)}"><i style="width:${Math.min(100,Math.round(m.active/m.concurrency*100))}%"></i></span>`:'';
+  return `<div class="cand-live">${bar}<small>${E(parts.join(' · '))}</small></div>`;
+}
+
+// 并发占用达到 80% 提醒、满了标红
+function liveLevel(active,capacity){
+  if(!capacity)return '';
+  if(active>=capacity)return 'full';
+  return active/capacity>=.8?'high':'';
+}
+
 export const routeActions={
   'simulate-route':async(el,id)=>{
     const {protocol,request}=simulationRequest(id,state.simulateMode);
@@ -249,4 +310,27 @@ export const routeActions={
   }
 };
 
-export function bindRoutes(){}
+// 实时数据轮询：只在路由页且没有对话框、没有拖动、页面可见时刷新。
+// 离开路由页清掉 interval，回来时 bindRoutes 立刻取一次；已有 interval 就不再启动，避免叠加。
+export function bindRoutes(){
+  if(state.page!=='routes'){stopLive();return;}
+  if(liveTimer)return;
+  refreshLive();
+  liveTimer=setInterval(refreshLive,LIVE_INTERVAL);
+}
+
+function stopLive(){
+  clearInterval(liveTimer);
+  liveTimer=null;
+}
+
+function refreshLive(){
+  // #main 消失说明已经退出登录，路由页不会再回来，继续轮询只是白打接口
+  if(state.page!=='routes'||!$('#main')){stopLive();return;}
+  if($('dialog')||state.routeDraft||document.visibilityState!=='visible')return;
+  // 失败静默：下一次轮询再试，不打断页面上的操作
+  rpc('route.live').then(d=>{
+    state.live=d;
+    if(state.page==='routes'&&!$('dialog')&&!state.routeDraft)renderPage(false);
+  }).catch(()=>{});
+}
