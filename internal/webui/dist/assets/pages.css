@@ -1,0 +1,26 @@
+/* 总览「需要关注」、额度页筛选、会话页筛选的样式；只用 app.css 里已定义的变量。 */
+
+.attention-list{display:flex;flex-direction:column;gap:8px}
+.attention-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:1px solid var(--line);background:var(--panel2);border-radius:10px;padding:11px 13px;font-size:11px;color:var(--sub)}
+.attention-item:hover{background:var(--line2)}
+.attention-item .icon{flex-shrink:0;width:15px;height:15px}
+.attention-item span{flex:1;color:var(--text);line-height:1.6}
+.attention-item .icon:last-child{color:var(--muted);width:13px;height:13px}
+.attention-item.error{border-color:#e2a89e55;background:var(--error-bg)}
+.attention-item.error .icon:first-child{color:var(--error)}
+.attention-item.error span{color:var(--error)}
+.attention-item.warning{border-color:#d8bd7f55;background:var(--warn-bg)}
+.attention-item.warning .icon:first-child{color:var(--warn)}
+.attention-calm{display:flex;align-items:center;gap:12px;padding:16px 2px 22px}
+.attention-calm>.icon{color:var(--mint-text);width:22px;height:22px;flex-shrink:0}
+.attention-calm strong{font-size:12px;display:block;margin-bottom:3px}
+
+.usage-hidden-note{display:flex;align-items:center;gap:10px;padding:12px 22px;border-top:1px solid var(--line2)}
+
+@media(max-width:480px){
+  .attention-item{align-items:flex-start}
+  .attention-item span{line-height:1.7}
+  /* 窄屏放不下标题 + 切换按钮 + 徽章，换行到第二排，不挤压也不横向溢出 */
+  .usage-card-head{flex-wrap:wrap}
+  .usage-head-tools{flex-basis:100%;justify-content:flex-end}
+}

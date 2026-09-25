@@ -1,0 +1,18 @@
+/* 模型库页：筛选标签条与路由徽章 */
+.filter-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:-4px 0 18px}
+.filter-group{display:flex;gap:6px;flex-wrap:wrap}
+.filter-chip{border:1px solid var(--line);background:var(--panel);color:var(--sub);border-radius:20px;padding:6px 12px;font-size:11px;display:inline-flex;align-items:center;gap:7px;transition:background .15s,border-color .15s,color .15s}
+.filter-chip:hover{background:var(--panel2)}
+.filter-chip.active{background:var(--mint-soft);border-color:transparent;color:var(--mint-text)}
+.filter-chip.warn.active{background:var(--warn-bg);color:var(--warn)}
+.filter-count{font:9px var(--mono);color:var(--muted);background:var(--panel2);border-radius:8px;padding:1px 6px}
+.filter-chip.active .filter-count{background:var(--panel);color:inherit}
+
+.route-tags{display:flex;gap:4px;flex-wrap:wrap;max-width:230px}
+.route-tags .badge{white-space:nowrap}
+
+@media(max-width:480px){
+  .filter-bar{gap:8px}
+  .filter-group{gap:5px}
+  .filter-chip{padding:5px 10px;font-size:10px}
+}

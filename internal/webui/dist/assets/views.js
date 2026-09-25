@@ -1,9 +1,9 @@
 // 各页面与编辑抽屉的渲染。
 import {rpc} from './api.js';
-import {renderPage} from './app.js';
+import {loadPage,renderPage} from './app.js';
 import {$,$$,E,compact,dateTime,dateTimeSec,json,money,ms,number,state} from './core.js';
 import {icon} from './icons.js';
-import {avatar,badge,btn,chart,check,checked,closeDialog,copy,empty,field,flowMini,getModel,getProvider,head,headerValue,modelName,nval,pillStatus,quotaBars,rangeTools,save,selectField,selectRow,showDialog,spark,tag,toast,val} from './ui.js';
+import {avatar,badge,btn,chart,check,checked,closeDialog,confirm,copy,empty,field,getModel,getProvider,head,headerValue,modelName,nval,pillStatus,quotaBars,rangeTools,save,selectField,selectRow,showDialog,sourceTag,spark,tag,toast,val} from './ui.js';
 
 // 客户端名称：认得出的给正式名，认不出的退回 UA 第一段，至少看得出是什么在调。
 const agentNames=[['claude-code','Claude Code'],['opencode','OpenCode'],['codex','Codex'],['cursor','Cursor'],['openai-python','OpenAI Python'],['openai/python','OpenAI Python'],['openai-node','OpenAI Node'],['openai/node','OpenAI Node'],['anthropic-sdk','Anthropic SDK'],['python-requests','Python requests'],['node-fetch','node-fetch'],['axios','axios'],['curl','curl'],['go-http-client','Go HTTP'],['postman','Postman'],['prism-gateway','Prism 调试台']];
@@ -18,7 +18,22 @@ export function agentName(ua){
 function sourceCell(r){
   if(!r.client_ip&&!r.user_agent)return '<span class="muted">—</span>';
   const name=agentName(r.user_agent);
-  return `<div class="cell-title mono tiny">${E(r.client_ip||'—')}</div>${name?`<div class="cell-sub" title="${E(r.user_agent)}">${E(name)}</div>`:''}`;
+  const role=roleName(r.agent_role);
+  return `<div class="cell-title mono tiny">${E(r.client_ip||'—')}</div>${name?`<div class="cell-sub" title="${E(r.user_agent)}">${E(name)}${role?` <span class="role-tag" title="${E(r.agent_role)}">${E(role)}</span>`:''}</div>`:''}`;
+}
+
+// Claude Code 声明的请求角色，形如 subagent:Explore
+const roleNames={main:'主线程',subagent:'子代理',auxiliary:'后台',compaction:'压缩',workflow:'工作流'};
+function roleName(v){
+  if(!v)return '';
+  const[c,t]=v.split(':');
+  return [roleNames[c]||c,t].filter(Boolean).join(' · ');
+}
+
+// 输出速度 = 输出 tokens / 总耗时，含首字延迟；没有输出或耗时的记录不显示
+function tps(r){
+  const n=Number(r.output_tokens),d=Number(r.duration_ms);
+  return n>0&&d>0?(n*1000/d).toFixed(1)+' tok/s':'';
 }
 
 // 输入输出分开看才有意义：输入贵在量大、输出贵在单价，混成一个数就都看不出来了。
@@ -28,7 +43,7 @@ function tokenCell(main,sub,label){
 
 export function requestRows(items,short=false){
   if(!items?.length)return empty('请求记录会出现在这里','每次真实转发或本地演示都会记录元数据；不保存你的提示词和回答。','go-playground','发起测试','request');
-  return `<div class="table-scroll"><table><thead><tr><th>时间</th><th>模型 / 请求</th>${short?'':'<th>协议</th>'}<th>状态</th><th>耗时</th>${short?'':'<th>输入</th><th>输出</th><th>估算价值</th><th class="col-source">来源</th>'}</tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono tiny nowrap">${E(dateTimeSec(r.started_at))}</td><td><div class="cell-title flex">${E(modelName(r.model_id))}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td>${short?'':`<td>${badge(r.protocol)}</td>`}<td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}</td>${short?'':`${tokenCell(r.input_tokens,r.cache_tokens,'缓存')}${tokenCell(r.output_tokens,r.write_tokens,'写入')}<td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'?'—':'待确认'}</td><td class="col-source">${sourceCell(r)}</td>`}</tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr><th>时间</th><th>模型 / 请求</th>${short?'':'<th>协议</th>'}<th>状态</th><th>耗时</th>${short?'':'<th>输入</th><th>输出</th><th>估算价值</th><th class="col-source">来源</th>'}</tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono tiny nowrap">${E(dateTimeSec(r.started_at))}</td><td><div class="cell-title flex">${E(modelName(r.model_id))}${sourceTag(r.provider_id)}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td>${short?'':`<td>${badge(r.protocol)}</td>`}<td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}${tps(r)?`<div class="cell-sub">${tps(r)}</div>`:''}</td>${short?'':`${tokenCell(r.input_tokens,r.cache_tokens,'缓存')}${tokenCell(r.output_tokens,r.write_tokens,'写入')}<td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'?'—':'待确认'}</td><td class="col-source">${sourceCell(r)}</td>`}</tr>`).join('')}</tbody></table></div>`;
 
 }
 
@@ -39,6 +54,7 @@ export function requestDetail(r){
     ['客户端',r.user_agent?`${agentName(r.user_agent)} · ${r.user_agent}`:'—'],
     ['开始时间',dateTimeSec(r.started_at),true],
     ['耗时',ms(r.duration_ms),true],
+    ['输出速度',tps(r)?tps(r)+'（含首字延迟）':'—',true],
     ['客户端请求名',r.requested_model,true],
     ['实际模型',modelName(r.model_id),false],
     ['供应商',getProvider(r.provider_id)?.name||r.provider_id],
@@ -72,8 +88,19 @@ export function overview(){
  (!realProviders.length?`<div class="banner">${icon('info')}<span>工作空间已就绪。添加真实供应商开始接入，或先用本地演示验证完整链路。</span><span class="right">${btn(hasDemo?'进入调试台':'启用演示',hasDemo?'go-playground':'enable-demo','play','','small')}</span></div>`:'')+
  (!total?`<div class="quickstart">${[['连接供应商','填入上游地址与凭证','add-provider',realProviders.length>0],['选择模型与路由','同步、确认能力后启用','go-models',enabled.length>0],['创建客户端 Key','隔离管理员与调用凭证','new-key',false]].map((x,i)=>`<div class="quickstep ${x[3]?'done':''}"><span class="quickstep-num">${x[3]?icon('check'):String(i+1).padStart(2,'0')}</span><div><h3>${x[0]}</h3><p>${x[1]}</p><br><button class="action-link" data-action="${x[2]}">${x[3]?'管理':'开始设置'} ${icon('arrow')}</button></div></div>`).join('')}</div>`:'')+
  `<section class="stats-grid"><article class="stat"><div class="stat-top">模型请求 <span class="stat-icon">${icon('route')}</span></div><div class="stat-value">${number(total)}</div><div class="stat-foot"><span><span class="positive">${success}</span> 成功率</span>${spark(d.series)}</div></article><article class="stat"><div class="stat-top">Tokens 用量 <span class="stat-icon">${icon('bolt')}</span></div><div class="stat-value">${compact(tokens)}</div><div class="stat-foot"><span><span class="positive">${cache}</span> 输入缓存占比</span>${spark(d.series)}</div></article><article class="stat"><div class="stat-top">估算用量价值 <span class="stat-icon">${icon('usage')}</span></div><div class="stat-value">${money(s.cost_nano/1e9)}</div><div class="stat-foot"><span>不等于订阅实付或官方账单</span></div></article><article class="stat"><div class="stat-top">平均请求耗时 <span class="stat-icon">${icon('clock')}</span></div><div class="stat-value">${s.latency_ms>=1000?(s.latency_ms/1000).toFixed(2):Math.round(s.latency_ms)}<span class="unit">${s.latency_ms>=1000?'s':'ms'}</span></div><div class="stat-foot"><span>完整响应 · 非首 Token 延迟</span></div></article></section>
- <div class="overview-grid"><div class="stack"><section class="card"><div class="card-head"><div><h2>请求趋势</h2><p class="card-sub">24 个时间桶 · 包含重试尝试与本地演示</p></div><div class="chart-legend"><span class="flex" style="gap:6px"><span class="legend-key"></span>请求量</span>${badge('LIVE')}</div></div>${chart(d.series)}<div class="chart-summary"><div><strong>${number(s.success)}</strong><small>成功尝试</small></div><div><strong>${number(s.errors)}</strong><small>失败 / 待确认</small></div><div><strong>${number(s.demo_requests)}</strong><small>本地演示</small></div><div><strong>${d.runtime.active}</strong><small>当前并发</small></div></div></section><section class="card"><div class="card-head"><div><h2>最近请求</h2><p class="card-sub">仅记录路由、耗时和用量元数据</p></div><a class="action-link" href="#requests">查看全部 ${icon('arrow')}</a></div>${requestRows(d.recent,true)}</section></div><div class="stack"><section class="card"><div class="card-head"><div><h2>一个入口，多种能力</h2><p class="card-sub">管理面与模型调用面分离</p></div>${icon('route')}</div>${flowMini()}<div class="card-foot between"><span>原生优先 · 显式协议转换</span><a class="action-link" href="#routes">管理路由 ${icon('arrow')}</a></div></section><section class="card"><div class="card-head"><div><h2>本地预算水位</h2><p class="card-sub">包含在途预留 · 不是上游剩余额度</p></div><a class="icon-btn" href="#usage" aria-label="查看预算">${icon('arrow')}</a></div><div class="card-body">${d.quotas.slice(0,4).map(q=>`<div class="quota-item"><div class="quota-name"><span class="ellipsis">${E(q.name||q.id)}</span><span class="tiny muted mono">${money(q.used_30d)}</span></div>${quotaBars(q)}</div>`).join('')||`<div class="small muted" style="padding:12px 0 25px">添加模型并确认计价后，可以设置滚动安全预算。</div>`}<div class="quota-note">5 小时 / 7 天 / 30 天滚动统计。上游账单与重置时间以供应商为准。</div></div></section></div></div>`;
+ <div class="overview-grid"><div class="stack"><section class="card"><div class="card-head"><div><h2>请求趋势</h2><p class="card-sub">24 个时间桶 · 包含重试尝试与本地演示</p></div><div class="chart-legend"><span class="flex" style="gap:6px"><span class="legend-key"></span>请求量</span>${badge('LIVE')}</div></div>${chart(d.series)}<div class="chart-summary"><div><strong>${number(s.success)}</strong><small>成功尝试</small></div><div><strong>${number(s.errors)}</strong><small>失败 / 待确认</small></div><div><strong>${number(s.demo_requests)}</strong><small>本地演示</small></div><div><strong>${d.runtime.active}</strong><small>当前并发</small></div></div></section><section class="card"><div class="card-head"><div><h2>最近请求</h2><p class="card-sub">仅记录路由、耗时和用量元数据</p></div><a class="action-link" href="#requests">查看全部 ${icon('arrow')}</a></div>${requestRows(d.recent,true)}</section></div><div class="stack">${attentionCard()}<section class="card"><div class="card-head"><div><h2>本地预算水位</h2><p class="card-sub">包含在途预留 · 不是上游剩余额度</p></div><a class="icon-btn" href="#usage" aria-label="查看预算">${icon('arrow')}</a></div><div class="card-body">${pickQuotas(d.quotas).map(q=>`<div class="quota-item"><div class="quota-name"><span class="ellipsis">${E(q.name||q.id)}</span><span class="tiny muted mono">${money(q.used_30d)}</span></div>${quotaBars(q)}</div>`).join('')||`<div class="small muted" style="padding:12px 0 25px">添加模型并确认计价后，可以设置滚动安全预算。</div>`}<div class="quota-note">5 小时 / 7 天 / 30 天滚动统计。上游账单与重置时间以供应商为准。</div></div></section></div></div>`;
 
+}
+
+// 总览「本地预算水位」优先展示有信息量的模型：已启用且有用量或设了限额的，
+// 没有的话退而展示已启用模型，再退而展示原始顺序，不让新装的空模型占位。
+function pickQuotas(quotas){
+  const enabledIds=new Set(state.config.models.filter(m=>m.enabled).map(m=>m.id));
+  const active=q=>q.used_5h>0||q.used_7d>0||q.used_30d>0||q.limit_5h>0||q.limit_7d>0||q.limit_30d>0;
+  const relevant=quotas.filter(q=>enabledIds.has(q.id)&&active(q));
+  if(relevant.length)return relevant.slice(0,4);
+  const enabled=quotas.filter(q=>enabledIds.has(q.id));
+  return (enabled.length?enabled:quotas).slice(0,4);
 }
 
 // 上游额度：只有少数供应商提供按 Key 可查的接口，不支持的直接写明原因，
@@ -96,42 +123,40 @@ function providerUsageBlock(p){
 
 export function providers(){
   const ps=state.config.providers;
-  return head('PROVIDERS','把你的模型，连接进来。','凭证加密保存在 SQLite；只有网关会向上游发送真实 API Key。',btn('添加供应商','add-provider','plus','','primary'))+`<div class="provider-grid">${ps.map(p=>{const models=state.config.models.filter(m=>m.provider_id===p.id);return `<article class="card provider-card"><div class="provider-card-head">${avatar(p)}<div style="min-width:0"><h3 class="ellipsis">${E(p.name)}</h3><span class="tiny muted mono">${E(p.kind)}</span></div>${tag(p.enabled?'已启用':'已停用',p.enabled?'':'neutral')}</div><p class="small sub">${E(p.description||'独立凭证、协议和网络边界。')}</p><div class="provider-url">${E(p.kind==='mock'?'LOCAL ONLY · NO CLOUD TRAFFIC':p.base_url)}</div><div class="provider-meta"><div><strong>${models.length} <span class="tiny muted">models</span></strong><small>${models.filter(m=>m.enabled).length} 个已启用</small></div><div><strong>${p.kind==='mock'?'本地演示':p.has_key?'已加密':'无凭证'}</strong><small>${p.kind==='mock'?'非真实推理':`鉴权方式 ${E(p.auth)}`}</small></div></div>${providerUsageBlock(p)}<div class="provider-buttons"><button class="switch ${p.enabled?'on':''}" role="switch" aria-checked="${p.enabled}" aria-label="启用供应商 ${E(p.name)}" data-action="toggle-provider" data-id="${E(p.id)}"></button>${btn('编辑','edit-provider','edit',`data-id="${E(p.id)}"`,'small')}${btn('测试连接','test-provider','bolt',`data-id="${E(p.id)}"`,'small')}${p.kind!=='mock'?btn('同步模型','sync-provider','refresh',`data-id="${E(p.id)}"`,'small'):''}<button class="icon-btn" data-action="delete-provider" data-id="${E(p.id)}" aria-label="删除供应商">${icon('trash')}</button></div></article>`;}).join('')}<button class="add-card" data-action="add-provider">${icon('plus')}<span>连接新的供应商</span><small class="tiny">OpenCode / Command Code / Z.AI / DeepSeek / OpenAI / Anthropic / 自定义</small></button></div><div class="banner" style="margin-top:22px">${icon('shield')}<span>默认禁止访问私有网络。连接 Ollama、内网 vLLM 等服务时，需在供应商设置中明确授权。</span></div>`;
+  return head('PROVIDERS','把你的模型，连接进来。','凭证加密保存在 SQLite；只有网关会向上游发送真实 API Key。拖动卡片调整顺序。',btn('添加供应商','add-provider','plus','','primary'))+`<div class="provider-grid">${ps.map((p,i)=>{const models=state.config.models.filter(m=>m.provider_id===p.id);return `<article class="card provider-card" draggable="true" data-drag-index="${i}" data-drag-kind="provider"><div class="provider-card-head">${avatar(p)}<div style="min-width:0"><h3 class="ellipsis">${E(p.name)}</h3><span class="tiny muted mono">${E(p.kind)}</span></div>${tag(p.enabled?'已启用':'已停用',p.enabled?'':'neutral')}</div><p class="small sub">${E(p.description||'独立凭证、协议和网络边界。')}</p><div class="provider-url">${E(p.kind==='mock'?'LOCAL ONLY · NO CLOUD TRAFFIC':p.base_url)}</div><div class="provider-meta"><div><strong>${models.length} <span class="tiny muted">models</span></strong><small>${models.filter(m=>m.enabled).length} 个已启用</small></div><div><strong>${p.kind==='mock'?'本地演示':p.has_key?'已加密':'无凭证'}</strong><small>${p.kind==='mock'?'非真实推理':`鉴权方式 ${E(p.auth)}`}</small></div></div>${providerUsageBlock(p)}<div class="provider-buttons"><button class="switch ${p.enabled?'on':''}" role="switch" aria-checked="${p.enabled}" aria-label="启用供应商 ${E(p.name)}" data-action="toggle-provider" data-id="${E(p.id)}"></button>${btn('编辑','edit-provider','edit',`data-id="${E(p.id)}"`,'small')}${btn('测试连接','test-provider','bolt',`data-id="${E(p.id)}"`,'small')}${p.kind!=='mock'?btn('同步模型','sync-provider','refresh',`data-id="${E(p.id)}"`,'small'):''}<button class="icon-btn" data-action="delete-provider" data-id="${E(p.id)}" aria-label="删除供应商">${icon('trash')}</button></div></article>`;}).join('')}<button class="add-card" data-action="add-provider">${icon('plus')}<span>连接新的供应商</span><small class="tiny">OpenCode / Command Code / Z.AI / DeepSeek / OpenAI / Anthropic / 自定义</small></button></div><div class="banner" style="margin-top:22px">${icon('shield')}<span>默认禁止访问私有网络。连接 Ollama、内网 vLLM 等服务时，需在供应商设置中明确授权。</span></div>`;
 
 }
 
-export function models(){
-  let models=state.config.models.filter(m=>(!state.modelQ||(m.id+' '+m.name+' '+m.upstream).toLowerCase().includes(state.modelQ.toLowerCase()))&&(!state.modelProtocol||m.protocol===state.modelProtocol)&&(!state.providerFilter||m.provider_id===state.providerFilter));
-  // 选中某个供应商时，直接在这里同步它的模型；否则同步入口只在供应商页面，找起来绕
-  const syncable=state.config.providers.find(p=>p.id===state.providerFilter&&p.kind!=='mock');
-  return head('MODEL LIBRARY','每个模型，各司其职。','按模型指定上游协议、能力、价格和限额；新同步模型默认禁用，确认后再投入使用。',(syncable?btn(`同步 ${syncable.name} 的模型`,'sync-provider','refresh',`data-id="${E(syncable.id)}"`,'small'):'')+btn('添加模型','add-model','plus','','primary'))+`<div class="toolbar"><div class="search-field">${icon('search')}<input id="model-search" placeholder="搜索模型、ID 或上游名称" value="${E(state.modelQ)}" aria-label="搜索模型"></div><select id="model-protocol" aria-label="协议过滤"><option value="">全部协议</option>${['chat','messages','responses','systemone'].map(v=>`<option value="${v}" ${v===state.modelProtocol?'selected':''}>${v}</option>`).join('')}</select><select id="model-provider" aria-label="供应商过滤"><option value="">全部供应商</option>${state.config.providers.map(p=>`<option value="${E(p.id)}" ${p.id===state.providerFilter?'selected':''}>${E(p.name)}</option>`).join('')}</select><span class="small muted" style="margin-left:auto">${models.length} 个模型</span></div><section class="card">${models.length?`<div class="table-scroll"><table><thead><tr><th>模型 / 上游 ID</th><th>供应商</th><th>原生协议</th><th>能力</th><th>Input / Output · $/M</th><th>并发</th><th>启用</th><th></th></tr></thead><tbody>${models.map(m=>`<tr><td><div class="cell-title">${E(m.name||m.id)}</div><div class="cell-sub mono">${E(m.upstream)}</div></td><td class="small">${E(getProvider(m.provider_id)?.name||m.provider_id)}</td><td>${badge(m.protocol)}</td><td><div class="flex" style="gap:4px">${m.tools?badge('TOOLS'):''}${m.vision?badge('VISION'):''}${badge(compact(m.context_window))}</div></td><td class="mono">${m.pricing_set?`${money(m.input_price)} / ${money(m.output_price)}`:'未确认价格'}</td><td class="mono">${m.concurrency}${m.rpm?` <span class="tiny muted">/ ${m.rpm} RPM</span>`:''}</td><td><button class="switch ${m.enabled?'on':''}" role="switch" aria-checked="${m.enabled}" aria-label="启用 ${E(m.name)}" data-action="toggle-model" data-id="${E(m.id)}"></button></td><td><div class="table-actions"><button class="icon-btn" data-action="edit-model" data-id="${E(m.id)}" aria-label="编辑模型">${icon('edit')}</button><button class="icon-btn" data-action="delete-model" data-id="${E(m.id)}" aria-label="删除模型">${icon('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('让模型库准备就绪','先添加供应商，再同步或手动添加模型。供应商模型列表不会自动确认协议能力与计价。','add-model','添加第一个模型')}</section>`;
-
-}
-
-export function routes(){
-  const rs=state.config.routes;
-  let r=rs.find(r=>r.id===state.routeID)||rs[0];
-  if(r)state.routeID=r.id;
-  const cand=state.routeDraft||r?.candidates||[];
-  return head('ROUTING STUDIO','让请求，找到合适的模型。','按优先级或预算压力选择候选；会话优先保持亲和，不会在半截流中切换模型。',btn('创建路由','add-route','plus','','primary'))+(r?`<div class="route-layout"><div class="route-list"><p class="tiny muted" style="padding:0 2px 4px">拖动卡片调整顺序</p>${rs.map((x,i)=>`<button class="route-select ${x.id===r.id?'active':''}" draggable="true" data-drag-index="${i}" data-drag-kind="route" data-action="select-route" data-id="${E(x.id)}"><div class="between"><strong>${E(x.name||x.id)}</strong><span class="dot ${x.enabled?'positive':'muted'}"></span></div><p class="mono">${E(x.id)}</p><p>${x.candidates.length} 个候选 · ${x.strategy==='balanced'?'预算均衡':'优先级'}</p></button>`).join('')}</div><section class="card"><div class="card-head"><div><h2>${E(r.name||r.id)}</h2><p class="card-sub">${E(r.description||'拖动候选调整优先级，或用上下箭头操作。')}</p></div><div class="flex">${state.routeDraft?btn('应用排序','save-route-order','check','','mint small'):''}<button class="switch ${r.enabled?'on':''}" role="switch" aria-checked="${r.enabled}" aria-label="启用路由 ${E(r.name||r.id)}" data-action="toggle-route" data-id="${E(r.id)}"></button>${btn('编辑','edit-route','settings',`data-id="${E(r.id)}"`,'small')}<button class="icon-btn" data-action="delete-route" data-id="${E(r.id)}" aria-label="删除路由">${icon('trash')}</button></div></div><div class="route-canvas"><div class="router-node">${icon('prism')}<strong class="mono">${E(r.id)}</strong><small>CLIENT REQUEST</small>${badge(r.strategy)}</div><div class="route-connector"></div><div class="route-candidates">${cand.map((x,i)=>{const m=getModel(x.model_id);return `<div class="candidate" draggable="true" data-drag-index="${i}" data-drag-kind="candidate">${icon('drag','drag-handle')}<span class="candidate-order">${String(i+1).padStart(2,'0')}</span><div class="candidate-info"><strong class="ellipsis">${E(m?.name||x.model_id)}</strong><small>${E(getProvider(m?.provider_id)?.name||'')} · weight ${x.weight}</small></div>${badge(m?.protocol||'?')}<div><button class="icon-btn" data-action="candidate-up" data-index="${i}" ${i===0?'disabled':''} aria-label="上移">${icon('up')}</button><button class="icon-btn" data-action="candidate-down" data-index="${i}" ${i===cand.length-1?'disabled':''} aria-label="下移">${icon('down')}</button></div></div>`;}).join('')||'<div class="small muted">没有候选，请编辑路由添加模型。</div>'}</div></div><div class="route-properties"><div><small>会话亲和</small><strong>${r.affinity?'优先保持同一模型':'已关闭'}</strong></div><div><small>重试边界</small><strong>安全请求 + 上游 429 / 503</strong></div><div><small>流开始之后</small><strong>禁止中途切模型</strong></div><div style="margin-left:auto">${btn('模拟选择','simulate-route','play',`data-id="${E(r.id)}"`,'small')}</div></div>${state.simulation?`<div class="simulation"><h3>路由模拟结果</h3><p class="tiny muted" style="margin:6px 0 14px">${E(state.simulation.note)}</p>${state.simulation.ranked.map((x,i)=>`<div class="sim-line"><span class="flex">${badge(String(i+1).padStart(2,'0'))}<b>${E(modelName(x.model_id))}</b>${badge(x.protocol)}</span><span class="mono">${x.score.toFixed(1)}</span></div>`).join('')||'<p class="small negative">没有兼容候选。检查下方原因。</p>'}<details style="margin-top:14px"><summary class="small muted">查看候选判定依据</summary><pre style="margin-top:10px">${E(json(state.simulation.checks))}</pre></details></div>`:''}</section></div>`:empty('创建你的第一个路由','把多个模型组成一个稳定的客户端入口，例如 auto-coding。候选只在本账户的授权范围内使用。','add-route','创建路由','route'))+`<section class="card aliases-grid"><div class="card-head"><div><h2>模型别名</h2><p class="card-sub">客户端名称映射到真实模型或路由；实际解析结果记录在请求元数据中。</p></div>${btn('添加别名','add-alias','plus','','small')}</div>${state.config.aliases.length?`<div class="table-scroll"><table><thead><tr><th>客户端请求名称</th><th>指向目标</th><th>状态</th><th></th></tr></thead><tbody>${state.config.aliases.map(a=>`<tr><td class="mono">${E(a.id)}</td><td class="mono">${E(a.target)}</td><td>${tag(a.enabled?'已启用':'停用',a.enabled?'':'neutral')}</td><td><div class="table-actions"><button class="icon-btn" data-action="delete-alias" data-id="${E(a.id)}" aria-label="删除别名">${icon('trash')}</button></div></td></tr>`).join('')}</tbody></table></div>`:empty('别名不是必需项','你可以直接使用模型 ID 或路由 ID，也可以在这里增加一个更好记的名字。','','','link')}</section>`;
-
+// 每模型安全预算的相关模型：已启用，或者有用量/限额历史——632 个模型全列出来
+// 大多是从没调用过的空行，找不到重点。
+function relevantQuotas(quotas){
+  const enabledIds=new Set(state.config.models.filter(m=>m.enabled).map(m=>m.id));
+  const active=q=>q.used_5h>0||q.used_7d>0||q.used_30d>0||q.limit_5h>0||q.limit_7d>0||q.limit_30d>0;
+  return quotas.filter(q=>enabledIds.has(q.id)||active(q));
 }
 
 export function usage(){
   const d=state.data;
-  return head('BUDGET & USAGE','看清消耗，不盲目刷量。','本地滚动窗口用于安全预算；不能代表供应商的账单周期、剩余额度或实际重置时间。',rangeTools())+`<div class="banner warning">${icon('info')}<span>预算包含在途预留和异常请求的保守预留。计费价格为手动配置；分层价格、活动和额外工具费用需要自行核对。</span></div><section class="card"><div class="card-head"><div><h2>每模型安全预算</h2><p class="card-sub">5 小时 / 7 天 / 30 天滚动窗口 · 0 表示本地不设金额上限</p></div>${badge('LOCAL ESTIMATE')}</div>${d.quotas.length?`<div class="table-scroll"><table><thead><tr><th>模型</th><th>5 小时 · 已用 / 限额</th><th>7 天 · 已用 / 限额</th><th>30 天 · 已用 / 限额</th><th>计价</th><th></th></tr></thead><tbody>${d.quotas.map(q=>`<tr><td><div class="cell-title">${E(q.name||q.id)}</div><div style="width:165px;margin-top:10px">${quotaBars(q)}</div></td>${['5h','7d','30d'].map(k=>`<td class="mono">${money(q['used_'+k])} <span class="muted">/ ${q['limit_'+k]?money(q['limit_'+k]):'不限'}</span></td>`).join('')}<td>${q.pricing_set?tag('已配置'):tag('需确认','warning')}</td><td>${btn('编辑预算','edit-model','settings',`data-id="${E(q.id)}"`,'small')}</td></tr>`).join('')}</tbody></table></div>`:empty('还没有模型预算','添加模型、确认 token 单价后，再设置本地安全预算。','add-model','添加模型','usage')}</section><section class="card" style="margin-top:22px"><div class="card-head"><div><h2>模型用量分布</h2><p class="card-sub">所选范围内的实际尝试记录，含演示流量；估算金额不等于实付费用。</p></div></div>${d.top_models.length?`<div class="table-scroll"><table><thead><tr><th>模型</th><th>请求数</th><th>Tokens</th><th>估算 / 预留价值</th><th>平均耗时</th></tr></thead><tbody>${d.top_models.map(m=>`<tr><td class="cell-title">${E(modelName(m.model_id))}</td><td class="mono">${number(m.requests)}</td><td class="mono">${compact(m.tokens)}</td><td class="mono">${money(m.cost_nano/1e9)}</td><td class="mono">${ms(m.latency_ms)}</td></tr>`).join('')}</tbody></table></div>`:empty('暂无用量','成功、失败与在途请求都会留下元数据记录。','','','usage')}</section>`;
+  const list=state.usageShowAll?d.quotas:relevantQuotas(d.quotas);
+  const hiddenCount=d.quotas.length-list.length;
+  return head('BUDGET & USAGE','看清消耗，不盲目刷量。','本地滚动窗口用于安全预算；不能代表供应商的账单周期、剩余额度或实际重置时间。',rangeTools())+`<div class="banner warning">${icon('info')}<span>预算包含在途预留和异常请求的保守预留。计费价格为手动配置；分层价格、活动和额外工具费用需要自行核对。</span></div><section class="card"><div class="card-head usage-card-head"><div><h2>每模型安全预算</h2><p class="card-sub">5 小时 / 7 天 / 30 天滚动窗口 · 0 表示本地不设金额上限</p></div><div class="flex usage-head-tools">${d.quotas.length?btn(state.usageShowAll?'只看相关':`显示全部 ${d.quotas.length} 个`,'toggle-usage-all','','','small'):''}${badge('LOCAL ESTIMATE')}</div></div>${list.length?`<div class="table-scroll"><table><thead><tr><th>模型</th><th>5 小时 · 已用 / 限额</th><th>7 天 · 已用 / 限额</th><th>30 天 · 已用 / 限额</th><th>计价</th><th></th></tr></thead><tbody>${list.map(q=>`<tr><td><div class="cell-title">${E(q.name||q.id)}</div><div style="width:165px;margin-top:10px">${quotaBars(q)}</div></td>${['5h','7d','30d'].map(k=>`<td class="mono">${money(q['used_'+k])} <span class="muted">/ ${q['limit_'+k]?money(q['limit_'+k]):'不限'}</span></td>`).join('')}<td>${q.pricing_set?tag('已配置'):tag('需确认','warning')}</td><td>${btn('编辑预算','edit-model','settings',`data-id="${E(q.id)}"`,'small')}</td></tr>`).join('')}</tbody></table></div>${!state.usageShowAll&&hiddenCount>0?`<div class="usage-hidden-note small muted">已隐藏 ${hiddenCount} 个未启用且无用量的模型 · ${btn('显示全部','toggle-usage-all','','','ghost small')}</div>`:''}`:empty('还没有模型预算','添加模型、确认 token 单价后，再设置本地安全预算。','add-model','添加模型','usage')}</section><section class="card" style="margin-top:22px"><div class="card-head"><div><h2>模型用量分布</h2><p class="card-sub">所选范围内的实际尝试记录，含演示流量；估算金额不等于实付费用。</p></div></div>${d.top_models.length?`<div class="table-scroll"><table><thead><tr><th>模型</th><th>请求数</th><th>Tokens</th><th>估算 / 预留价值</th><th>平均耗时</th></tr></thead><tbody>${d.top_models.map(m=>`<tr><td class="cell-title">${E(modelName(m.model_id))}</td><td class="mono">${number(m.requests)}</td><td class="mono">${compact(m.tokens)}</td><td class="mono">${money(m.cost_nano/1e9)}</td><td class="mono">${ms(m.latency_ms)}</td></tr>`).join('')}</tbody></table></div>`:empty('暂无用量','成功、失败与在途请求都会留下元数据记录。','','','usage')}</section>`;
 
 }
 
 export function requests(){
   const d=state.data;
-  return head('REQUEST EXPLORER','每一次调用，都有迹可循。','查看真实选模、协议转换、用量与调用来源。日志记录来源 IP 与客户端标识，不保存 Prompt、模型回答和 API Key。',btn('刷新','refresh','refresh'))+`<form id="request-filter" class="toolbar"><div class="search-field">${icon('search')}<input name="q" placeholder="搜索模型、请求 ID 或来源 IP" value="${E(state.requestQ)}" aria-label="搜索请求"></div><select name="status" aria-label="筛选请求状态"><option value="">全部状态</option>${[['success','成功'],['error','失败'],['unknown','待确认'],['running','进行中']].map(([v,l])=>`<option value="${v}" ${state.requestStatus===v?'selected':''}>${l}</option>`).join('')}</select><button class="btn" type="submit">筛选</button><span class="small muted" style="margin-left:auto">${number(d.total)} 条尝试记录</span></form><section class="card">${requestRows(d.items)}<div class="list-foot"><span>第 ${d.page} 页 · 每页 ${d.page_size} 条</span><div class="flex">${btn('上一页','request-prev','',d.page<=1?'disabled':'','small')}${btn('下一页','request-next','',d.page*d.page_size>=d.total?'disabled':'','small')}</div></div></section>`;
+  return head('REQUEST EXPLORER','每一次调用，都有迹可循。','查看真实选模、协议转换、用量与调用来源。日志记录来源 IP 与客户端标识，不保存 Prompt、模型回答和 API Key。',btn('刷新','refresh','refresh'))+`<form id="request-filter" class="toolbar"><div class="search-field">${icon('search')}<input name="q" placeholder="搜索模型、请求 ID 或来源 IP" value="${E(state.requestQ)}" aria-label="搜索请求"></div><select name="status" aria-label="筛选请求状态"><option value="">全部状态</option>${[['success','成功'],['error','失败'],['unknown','待确认'],['running','进行中']].map(([v,l])=>`<option value="${v}" ${state.requestStatus===v?'selected':''}>${l}</option>`).join('')}</select><select name="provider" aria-label="筛选供应商"><option value="">全部供应商</option>${state.config.providers.map(p=>`<option value="${E(p.id)}" ${state.requestProvider===p.id?'selected':''}>${E(p.name||p.id)}</option>`).join('')}</select><button class="btn" type="submit">筛选</button><span class="small muted" style="margin-left:auto">${number(d.total)} 条尝试记录</span></form><section class="card">${requestRows(d.items)}<div class="list-foot"><span>第 ${d.page} 页 · 每页 ${d.page_size} 条</span><div class="flex">${btn('上一页','request-prev','',d.page<=1?'disabled':'','small')}${btn('下一页','request-next','',d.page*d.page_size>=d.total?'disabled':'','small')}</div></div></section>`;
 
 }
 
 export function sessions(){
   const d=state.data;
-  return head('SESSION AFFINITY','让同一段对话，保持连续。','只保存匿名会话映射。稳定 session 有助于上游亲和路由，但不保证缓存命中或永久记忆。',btn('刷新','refresh','refresh'))+`<section class="card">${d.length?`<div class="table-scroll"><table><thead><tr><th>会话 ID（匿名）</th><th>绑定模型</th><th>供应商</th><th>成功请求</th><th>最近活动</th><th></th></tr></thead><tbody>${d.map(x=>`<tr><td class="mono tiny">${E(x.id.slice(0,25))}…</td><td class="cell-title">${E(modelName(x.model_id))}</td><td>${E(getProvider(x.provider_id)?.name||x.provider_id)}</td><td class="mono">${number(x.requests)}</td><td class="mono tiny">${dateTime(x.updated_at)}</td><td>${btn('解除绑定','unbind-session','link',`data-id="${E(x.id)}"`,'small')}</td></tr>`).join('')}</tbody></table></div>`:empty('暂无会话绑定','请求中保留 x-opencode-session 或发送 X-Prism-Session，后续请求使用相同值。','','','session')}</section><div class="banner" style="margin-top:20px">${icon('info')}<span>解除绑定仅删除本地路由亲和记录；不会删除或重置上游的对话、缓存、额度。</span></div>`;
+  const counts={};
+  d.forEach(x=>{counts[x.model_id]=(counts[x.model_id]||0)+1;});
+  const modelIds=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]);
+  const filtered=state.sessionModel?d.filter(x=>x.model_id===state.sessionModel):d;
+  const filterBar=modelIds.length?`<div class="toolbar"><select id="session-model" aria-label="按绑定模型筛选"><option value="">全部绑定模型（${d.length}）</option>${modelIds.map(id=>`<option value="${E(id)}" ${state.sessionModel===id?'selected':''}>${E(modelName(id))}（${counts[id]}）</option>`).join('')}</select>${state.sessionModel?btn(`解除该模型的全部 ${counts[state.sessionModel]} 个绑定`,'unbind-session-model','link',`data-id="${E(state.sessionModel)}"`,'danger small'):''}</div>`:'';
+  return head('SESSION AFFINITY','让同一段对话，保持连续。','只保存匿名会话映射。稳定 session 有助于上游亲和路由，但不保证缓存命中或永久记忆。',btn('刷新','refresh','refresh'))+filterBar+`<section class="card">${filtered.length?`<div class="table-scroll"><table><thead><tr><th>会话 ID（匿名）</th><th>绑定模型</th><th>供应商</th><th>成功请求</th><th>最近活动</th><th></th></tr></thead><tbody>${filtered.map(x=>`<tr><td class="mono tiny">${E(x.id.slice(0,25))}…</td><td><span class="cell-title flex" style="gap:6px">${E(modelName(x.model_id))}${sourceTag(x.provider_id)}</span></td><td>${E(getProvider(x.provider_id)?.name||x.provider_id)}</td><td class="mono">${number(x.requests)}</td><td class="mono tiny">${dateTime(x.updated_at)}</td><td>${btn('解除绑定','unbind-session','link',`data-id="${E(x.id)}"`,'small')}</td></tr>`).join('')}</tbody></table></div>`:empty('暂无会话绑定','请求中保留 x-opencode-session 或发送 X-Prism-Session，后续请求使用相同值。','','','session')}</section><div class="banner" style="margin-top:20px">${icon('info')}<span>解除绑定仅删除本地路由亲和记录；不会删除或重置上游的对话、缓存、额度。</span></div>`;
 
 }
 
@@ -308,7 +333,7 @@ export function providerEditor(id=''){
     name:'',kind:'opencode',base_url:'https://opencode.ai/zen/go/v1',auth:'auto',enabled:true,allow_private:false,timeout_sec:300,description:''
   };
 
- const d=showDialog(old?'编辑供应商':'连接新的供应商','设置上游地址与独立凭证；密钥不会返回给浏览器。',`<div class="form-section"><h3>连接信息</h3>${field('显示名称','name',p.name,'text','','required placeholder="例如：OpenCode Go"')}${selectField('供应商类型','kind',p.kind,[['opencode','OpenCode Go'],['commandcode','Command Code'],['zai','Z.AI'],['deepseek','DeepSeek'],['openai','OpenAI'],['anthropic','Anthropic'],['custom','自定义兼容接口'],...(p.kind==='mock'?[['mock','本地演示']]:[])])}${field('API Base URL','base_url',p.base_url,'url','包含上游 /v1 前缀；不要包含 /chat/completions 等操作路径。',p.kind==='mock'?'':'required')}${field('上游 API Key','api_key','','password',p.has_key?'已保存加密凭证。留空保持原密钥；勾选下方选项可清除。':'只会加密持久化，不在日志与配置接口中回显。','autocomplete="new-password" placeholder="sk-…"')}${p.has_key?check('清除现有上游凭证','clear_key',false):''}<div id="admin-key-row" class="${['openai','anthropic'].includes(p.kind)?'':'hidden'}">${field('组织 Admin Key · 可选','admin_key','','password',p.has_admin_key?'已保存加密凭证。留空保持原密钥。只用于查询本月花费，不参与推理转发。':'只用于在供应商卡片上查询本月官方花费，不参与推理转发。','autocomplete="new-password" placeholder="sk-admin-…"')}${p.has_admin_key?check('清除现有 Admin Key','clear_admin_key',false):''}</div>${selectField('鉴权方式','auth',p.auth,[['auto','自动（根据目标协议）'],['bearer','Authorization: Bearer'],['x-api-key','x-api-key'],['none','不使用凭证']])}</div><div class="form-section"><h3>行为与安全</h3>${field('超时 · 秒','timeout_sec',p.timeout_sec,'number','包含完整响应和流式生成时间。','min="5" max="1800" required')}${field('备注','description',p.description)}${check('启用供应商','enabled',p.enabled)}${check('允许私有网络 / 明文 HTTP','allow_private',p.allow_private,'仅连接你信任的本地或内网模型服务时开启。开启后可访问回环与私网 IP。')}<div class="dialog-note">连接测试只调用 GET /models。同步模型不会自动确认价格、额度与全部能力，新模型默认禁用。</div></div>`,async f=>{
+ const d=showDialog(old?'编辑供应商':'连接新的供应商','设置上游地址与独立凭证；密钥不会返回给浏览器。',`<div class="form-section"><h3>连接信息</h3>${field('显示名称','name',p.name,'text','','required placeholder="例如：OpenCode Go"')}${selectField('供应商类型','kind',p.kind,[['opencode','OpenCode Go'],['commandcode','Command Code'],['zai','Z.AI'],['deepseek','DeepSeek'],['openai','OpenAI'],['anthropic','Anthropic'],['custom','自定义兼容接口'],...(p.kind==='mock'?[['mock','本地演示']]:[])])}${field('API Base URL','base_url',p.base_url,'url','包含上游 /v1 前缀；不要包含 /chat/completions 等操作路径。',p.kind==='mock'?'':'required')}${field('上游 API Key','api_key','','password',p.has_key?'已保存加密凭证。留空保持原密钥；勾选下方选项可清除。':'只会加密持久化，不在日志与配置接口中回显。','autocomplete="new-password" placeholder="sk-…"')}${p.has_key?check('清除现有上游凭证','clear_key',false):''}<div id="admin-key-row" class="${['openai','anthropic'].includes(p.kind)?'':'hidden'}">${field('组织 Admin Key · 可选','admin_key','','password',p.has_admin_key?'已保存加密凭证。留空保持原密钥。只用于查询本月花费，不参与推理转发。':'只用于在供应商卡片上查询本月官方花费，不参与推理转发。','autocomplete="new-password" placeholder="sk-admin-…"')}${p.has_admin_key?check('清除现有 Admin Key','clear_admin_key',false):''}</div>${selectField('鉴权方式','auth',p.auth,[['auto','自动（根据目标协议）'],['bearer','Authorization: Bearer'],['x-api-key','x-api-key'],['none','不使用凭证']])}</div><div class="form-section"><h3>行为与安全</h3>${field('超时 · 秒','timeout_sec',p.timeout_sec,'number','包含完整响应和流式生成时间。','min="5" max="1800" required')}${field('备注','description',p.description)}${check('启用供应商','enabled',p.enabled)}${check('允许私有网络 / 明文 HTTP','allow_private',p.allow_private,'仅连接你信任的本地或内网模型服务时开启。开启后可访问回环与私网 IP。')}<div class="dialog-note">连接测试只调用 GET /models。同步的新模型默认启用，能力取自上游声明；价格与额度需在模型库确认。</div></div>`,async f=>{
   const v={name:val(f,'name').trim(),kind:val(f,'kind'),base_url:val(f,'base_url').trim(),auth:val(f,'auth'),timeout_sec:nval(f,'timeout_sec'),enabled:checked(f,'enabled'),allow_private:checked(f,'allow_private'),description:val(f,'description')};
   if(val(f,'api_key'))v.api_key=val(f,'api_key');else if(checked(f,'clear_key'))v.api_key='';
   if(val(f,'admin_key'))v.admin_key=val(f,'admin_key');else if(checked(f,'clear_admin_key'))v.admin_key='';
@@ -319,97 +344,9 @@ export function providerEditor(id=''){
 
 }
 
-export function modelEditor(id=''){
-
- if(!state.config.providers.length){
-    toast('请先添加一个供应商',true);
-    providerEditor();
-    return;
-
-  }
-
- const old=getModel(id);
-  const m=old||{
-    id:'',name:'',provider_id:state.config.providers[0].id,upstream:'',protocol:'chat',enabled:true,tools:true,vision:false,native_count:false,drop_reasoning:false,context_window:128000,max_output_tokens:4096,concurrency:2,rpm:0,pricing_set:false,input_price:0,output_price:0,cache_price:0,write_price:0,limit_5h:0,limit_7d:0,limit_30d:0
-  };
-
- showDialog(old?'编辑模型':'添加模型','配置真实能力；不把同一家供应商的所有模型假定为相同协议。',`<div class="form-section"><h3>身份与协议</h3><div class="form-grid">${field('客户端模型 ID','id',m.id,'text','由你指定，客户端请求 model 使用此值。',`${old?'readonly':''} required placeholder="my-coding-model"`)}${field('显示名称','name',m.name,'text','','required')}${selectField('供应商','provider_id',m.provider_id,state.config.providers.map(p=>[p.id,p.name]))}${selectField('上游原生协议','protocol',m.protocol,[['chat','OpenAI Chat Completions'],['messages','Anthropic Messages'],['responses','OpenAI Responses'],['systemone','TypeSafe System One']])}</div>${field('上游模型 ID','upstream',m.upstream,'text','与供应商接受的 model 字段完全一致。','required')}<div class="form-grid">${field('上下文窗口','context_window',m.context_window,'number','能力元数据，不是精确 tokenizer 验证。','min="128" required')}${field('最大输出 Tokens','max_output_tokens',m.max_output_tokens,'number','','min="1" required')}</div>${check('启用模型','enabled',m.enabled)}${check('支持工具调用','tools',m.tools)}${check('支持图像输入','vision',m.vision)}${check('有原生 Messages Token Count 接口','native_count',m.native_count,'只适用于消息协议且上游确实提供 /messages/count_tokens。')}${check('跨协议时丢弃推理内容','drop_reasoning',m.drop_reasoning,'仅当上游返回 reasoning 且你需要跨协议调用时开启。丢弃会在响应头 X-Prism-Dropped 标注；关闭时这类响应被明确拒绝，而不是悄悄截断。')}</div><div class="form-section"><h3>速率与并发</h3><div class="form-grid">${field('最大并发','concurrency',m.concurrency,'number','网关本地限制，不代表上游允许并发。','min="1" max="128" required')}${field('每分钟请求数 RPM','rpm',m.rpm,'number','0 = 不额外限制；仍受上游限制。','min="0" required')}</div></div><div class="form-section"><h3>计价 · USD / 百万 Tokens</h3><div class="dialog-note">费用仅按你填写的单价与上游 usage 计算，不代表订阅实付。价格未确认时不显示为真实已知费用。</div>${check('我已确认以下计价','pricing_set',m.pricing_set)}<div class="form-grid">${[['普通输入','input_price'],['输出','output_price'],['缓存读取','cache_price'],['缓存写入','write_price']].map(([label,k])=>field(label,k,m[k],'number','','min="0" max="1000000" step="any" required')).join('')}</div></div><div class="form-section"><h3>本地滚动预算 · USD</h3><p class="small muted" style="margin-bottom:14px">不是供应商的账期额度。0 = 不额外限制；启用金额限制必须先确认计价。</p><div class="form-grid">${[['过去 5 小时','limit_5h'],['过去 7 天','limit_7d'],['过去 30 天','limit_30d']].map(([label,k])=>field(label,k,m[k],'number','','min="0" step="any" required')).join('')}</div></div>`,async f=>{const v={};for(const k of ['id','name','provider_id','upstream','protocol'])v[k]=val(f,k).trim();for(const k of ['enabled','tools','vision','native_count','drop_reasoning','pricing_set'])v[k]=checked(f,k);for(const k of ['context_window','max_output_tokens','concurrency','rpm','input_price','output_price','cache_price','write_price','limit_5h','limit_7d','limit_30d'])v[k]=nval(f,k);await save('model.save',{id,model:v},f);},'保存模型',true);
-
-}
-
-// 候选池可能有几百个模型，没有搜索就翻不动。
-// 已勾选的行任何时候都保持可见：搜索把自己已经选中的东西藏起来，
-// 会让人以为选择丢了。
-export function bindCandidateSearch(){
-  const box=$('#candidate-search');
-  if(!box)return;
-  const rows=$$('.candidate-row');
-  const count=$('#candidate-count');
-  const apply=()=>{
-    const q=box.value.trim().toLowerCase();
-    let shown=0;
-    rows.forEach(row=>{
-      const checked=$('input[name=candidate]',row)?.checked;
-      const hit=!q||row.dataset.search.includes(q);
-      row.hidden=!(hit||checked);
-      if(!row.hidden)shown++;
-    });
-    if(count)count.textContent=q?`显示 ${shown} / ${rows.length} 个（含已选中）`:`共 ${rows.length} 个模型`;
-  };
-  box.addEventListener('input',apply);
-  // 勾选状态变化后要重算，否则取消勾选的行在搜索状态下不会隐藏
-  rows.forEach(row=>$('input[name=candidate]',row)?.addEventListener('change',apply));
-  apply();
-}
-
-export function routeEditor(id=''){
-
- if(!state.config.models.length){
-    toast('请先添加模型',true);
-    modelEditor();
-    return;
-
-  }
-
- const old=state.config.routes.find(x=>x.id===id);
-  const r=old||{
-    id:'',name:'',strategy:'priority',enabled:true,affinity:true,candidates:[],description:''
-  };
-
- const order=[...r.candidates.map(x=>getModel(x.model_id)).filter(Boolean),...state.config.models.filter(m=>!r.candidates.some(c=>c.model_id===m.id))];
-
- showDialog(old?'编辑路由':'创建智能路由','明确候选池；会话亲和优先，安全失败后才尝试备用。',`<div class="form-grid">${field('路由 ID','id',r.id,'text','客户端可直接将其作为 model。',`${old?'readonly':''} required placeholder="auto-coding"`)}${field('显示名称','name',r.name,'text','','required')}${selectField('选择策略','strategy',r.strategy,[['priority','优先级（按候选顺序）'],['balanced','本地预算压力均衡']])}</div>${field('路由描述','description',r.description)}${check('启用路由','enabled',r.enabled)}${check('启用会话亲和','affinity',r.affinity)}<div class="form-section"><h3>候选模型</h3><p class="small muted" style="margin:8px 0 14px">选中加入路由，权重参与均衡评分。保存后可在路由画布拖动排序。</p><div class="search-field" style="margin-bottom:12px">${icon('search')}<input id="candidate-search" placeholder="搜索模型、ID、协议或供应商" autocomplete="off" aria-label="搜索候选模型"></div><p class="tiny muted" id="candidate-count"></p><div class="candidate-list">${order.map(m=>{const c=r.candidates.find(x=>x.model_id===m.id);const hay=[m.id,m.name,m.upstream,m.protocol,getProvider(m.provider_id)?.name].filter(Boolean).join(' ').toLowerCase();return `<div class="candidate-row" data-search="${E(hay)}"><label class="checkline" style="flex:1"><input name="candidate" type="checkbox" value="${E(m.id)}" ${c?'checked':''}><span>${E(m.name||m.id)}<small>${E(m.protocol)} · ${E(getProvider(m.provider_id)?.name)}${m.enabled?'':' · 未启用'}</small></span></label><input class="weight-field" type="number" min="1" max="1000" value="${c?.weight||10}" data-weight="${E(m.id)}" style="width:80px" aria-label="候选权重"></div>`}).join('')}</div></div>`,async f=>{const candidates=$$('input[name=candidate]:checked',f).map(el=>({model_id:el.value,weight:Number($$('[data-weight]',f).find(x=>x.dataset.weight===el.value).value)}));await save('route.save',{id,route:{id:val(f,'id').trim(),name:val(f,'name').trim(),strategy:val(f,'strategy'),description:val(f,'description'),enabled:checked(f,'enabled'),affinity:checked(f,'affinity'),sort:Number(val(f,'sort'))||0,candidates}},f);});
-  bindCandidateSearch();
-
-}
-
-export function aliasEditor(){
-  const opts=[...state.config.routes.map(x=>[x.id,`${x.name||x.id} · 路由`]),...state.config.models.map(x=>[x.id,x.name||x.id])];
-  if(!opts.length){
-    toast('请先添加模型或路由',true);
-    return;
-
-  }
-  showDialog('添加模型别名','别名必须指向现有模型或路由，不允许多级别名环。',`${field('客户端名称','id','','text','','required placeholder="coding"')}${selectField('目标','target',opts[0][0],opts)}${check('启用别名','enabled',true)}`,f=>save('alias.save',{alias:{id:val(f,'id').trim(),target:val(f,'target'),enabled:checked(f,'enabled')}},f));
-
-}
-
 export function keyEditor(){
   const opts=[...state.config.routes.map(x=>[x.id,x.name||x.id]),...state.config.models.map(x=>[x.id,x.name||x.id]),...state.config.aliases.map(x=>[x.id,x.id])];
   showDialog('创建客户端 API Key','按项目或客户端独立创建，可随时撤销。',`${field('密钥名称','name','','text','','required placeholder="例如：我的 Claude Code"')}<div class="form-section"><h3>可请求模型 / 路由</h3><p class="small muted" style="margin:10px 0">不选表示允许全部。范围限制针对客户端请求的模型、路由或别名 ID。</p>${opts.map(([v,l])=>`<label class="checkline"><input type="checkbox" name="allowed" value="${E(v)}"><span>${E(l)}<small class="mono">${E(v)}</small></span></label>`).join('')}</div>`,async f=>{const k=await rpc('apikey.create',{name:val(f,'name'),allowed:$$('[name=allowed]:checked',f).map(x=>x.value)});closeDialog();showDialog('密钥已创建','这是唯一一次显示完整密钥。关闭前请安全保存。',`<div class="banner">请不要将此 Key 放进公开仓库、截图或前端源代码。</div><pre class="secret-box">${E(k.key)}</pre>${btn('复制完整密钥','copy-secret','copy','','primary')}${connectionGuide()}`);state.secretValue=k.key;state.data=await rpc('apikey.list');if(state.page==='keys')renderPage(false);},'创建密钥');
-
-}
-
-export function moveCandidate(from,to){
-  const r=state.config.routes.find(x=>x.id===state.routeID);
-  if(!r)return;
-  const xs=structuredClone(state.routeDraft||r.candidates);
-  if(from<0||to<0||from>=xs.length||to>=xs.length)return;
-  const [x]=xs.splice(from,1);
-  xs.splice(to,0,x);
-  state.routeDraft=xs;
-  state.simulation=null;
-  renderPage(false);
 
 }
 
@@ -429,4 +366,90 @@ export function preservePlayground(){
   }else{
     state.lastPrompt=val(f,'prompt');
   }
+}
+
+// ===== 总览、额度、会话页的增强 =====
+
+// 把毫秒时间戳写成「今天/明天 HH:mm」，更晚的退回完整日期；比一串数字更看得懂恢复时间。
+function untilText(ts){
+  const d=new Date(ts),base=new Date();
+  const days=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-new Date(base.getFullYear(),base.getMonth(),base.getDate()))/86400000);
+  const hm=d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});
+  if(days===0)return `今天 ${hm}`;
+  if(days===1)return `明天 ${hm}`;
+  return dateTime(ts);
+}
+
+// 总览「需要关注」：state.providerUsage（异步加载，可能为 null）、state.data.runtime、state.config
+// 条目：额度用完的供应商、冷却中的模型（按供应商聚合）、可用候选不足 2 个的已启用路由。
+export function attentionItems(){
+  const items=[],now=Date.now();
+  const runtimeModels=state.data?.runtime?.models||{};
+  // 额度用完的供应商
+  if(state.providerUsage){
+    for(const p of state.config.providers){
+      const u=state.providerUsage[p.id];
+      if(!u)continue;
+      const until=Number(u.exhausted_until)||0;
+      if(!(until>now)&&!/已用完/.test(u.headline||''))continue;
+      items.push({level:'error',action:'go-providers',
+        text:`${p.name||p.id} 额度已用完${until>now?`，${untilText(until)}恢复`:''}`});
+    }
+  }
+  // 冷却中的模型，同一供应商聚合成一条，避免刷屏
+  const cooling={};
+  for(const[id,v]of Object.entries(runtimeModels)){
+    if(!(Number(v.cooldown_until)>now))continue;
+    const m=getModel(id);
+    if(!m)continue;
+    (cooling[m.provider_id]=cooling[m.provider_id]||[]).push({m,until:Number(v.cooldown_until)});
+  }
+  for(const[pid,list]of Object.entries(cooling)){
+    const name=getProvider(pid)?.name||pid,until=Math.max(...list.map(x=>x.until));
+    const text=list.length>3
+      ?`${name} 的 ${list.length} 个模型冷却中，${untilText(until)}恢复`
+      :`${name} 的 ${list.map(x=>x.m.name||x.m.id).join('、')} 冷却中，${untilText(until)}恢复`;
+    items.push({level:'warning',action:'go-models',text});
+  }
+  // 可用候选不足 2 个的已启用路由：模型与供应商都启用、且未冷却才算可用候选
+  for(const r of state.config.routes){
+    if(!r.enabled)continue;
+    const viable=(r.candidates||[]).filter(c=>{
+      const m=getModel(c.model_id);
+      if(!m?.enabled)return false;
+      const p=getProvider(m.provider_id);
+      if(!p?.enabled)return false;
+      return!(Number(runtimeModels[m.id]?.cooldown_until)>now);
+    }).length;
+    if(viable<2)items.push({level:viable===0?'error':'warning',action:'go-routes',
+      text:`路由「${r.name||r.id}」可用候选仅 ${viable} 个，请求可能失败或无法切换`});
+  }
+  return items;
+}
+
+function attentionCard(){
+  const items=attentionItems();
+  const body=items.length
+    ?`<div class="attention-list">${items.map(it=>`<button type="button" class="attention-item ${it.level}" data-action="${it.action}">${icon(it.level==='error'?'warning':'clock')}<span>${E(it.text)}</span>${icon('arrow')}</button>`).join('')}</div>`
+    :`<div class="attention-calm">${icon('check')}<div><strong>一切正常</strong><p class="small muted">供应商额度充足，模型未冷却，路由候选充分。</p></div></div>`;
+  return `<section class="card"><div class="card-head"><div><h2>需要关注</h2><p class="card-sub">额度、冷却与路由候选的实时检查</p></div>${icon('shield')}</div><div class="card-body">${body}</div><div class="card-foot between"><span>${items.length?`${items.length} 项待处理`:'常规巡检'}</span><a class="action-link" href="#routes">管理路由 ${icon('arrow')}</a></div></section>`;
+}
+
+export const pageActions={
+  'toggle-usage-all':()=>{
+    state.usageShowAll=!state.usageShowAll;
+    renderPage(false);
+  },
+  'unbind-session-model':async(el,id)=>{
+    const n=(state.data||[]).filter(x=>x.model_id===id).length;
+    if(!await confirm('解除该模型的全部绑定？',`将解除 ${modelName(id)} 的 ${n} 个会话绑定，不会清除供应商缓存，也不会重置上游额度。`,'解除绑定'))return;
+    const r=await rpc('session.delete',{model_id:id});
+    state.sessionModel='';
+    toast(`已解除 ${r.unbound} 个绑定`);
+    await loadPage(false);
+  }
+};
+
+export function bindPages(){
+  $('#session-model')?.addEventListener('change',ev=>{state.sessionModel=ev.target.value;renderPage(false);});
 }

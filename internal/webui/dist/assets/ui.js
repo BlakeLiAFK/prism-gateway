@@ -90,6 +90,14 @@ export function getProvider(id){
 
 }
 
+// 来源供应商标签：按供应商序号用黄金角取色相，同类供应商也能一眼区分
+export function sourceTag(id){
+  const i=state.config.providers.findIndex(p=>p.id===id);
+  if(i<0)return '';
+  return `<span class="source-tag" style="--h:${Math.round(i*137.5)%360}" title="供应商 ${E(id)}">${E(state.config.providers[i].name||id)}</span>`;
+
+}
+
 export function getModel(id){
   return state.config.models.find(m=>m.id===id);
 

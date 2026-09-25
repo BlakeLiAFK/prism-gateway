@@ -25,7 +25,7 @@ export const uid=()=>crypto.randomUUID?.()||Math.random().toString(36).slice(2);
 export const pages=[['overview','总览','grid','WORKSPACE'],['providers','供应商','provider'],['models','模型库','model'],['routes','智能路由','route'],['playground','调试台','play'],['usage','额度与用量','usage','OBSERVABILITY'],['requests','请求记录','request'],['sessions','会话亲和','session'],['jobs','后台任务','job'],['keys','访问密钥','key','SYSTEM'],['settings','系统设置','settings']];
 
 export const state={refreshTimer:null,dialogSubmit:null,formError:null,secretValue:'',renderGeneration:0,
-  page:'overview',version:'',config:null,data:null,range:'24h',paused:false,loading:false,routeID:'',routeDraft:null,simulation:null,requestPage:1,requestQ:'',requestStatus:'',modelQ:'',modelProtocol:'',providerFilter:'',providerUsage:null,playProtocol:'chat',playResult:null,playBusy:false,playSession:uid(),lastSync:0
+  page:'overview',version:'',config:null,data:null,range:'24h',paused:false,loading:false,routeID:'',routeDraft:null,simulation:null,requestPage:1,requestQ:'',requestStatus:'',requestProvider:'',modelFilters:{},simulateMode:'claude-code',usageShowAll:false,sessionModel:'',modelQ:'',modelProtocol:'',providerFilter:'',providerUsage:null,playProtocol:'chat',playResult:null,playBusy:false,playSession:uid(),lastSync:0
 };
 
 

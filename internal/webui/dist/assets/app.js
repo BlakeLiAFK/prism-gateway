@@ -3,7 +3,15 @@ import {rpc,setCSRF} from './api.js';
 import {$,$$,E,json,ms,pages,state} from './core.js';
 import {icon} from './icons.js';
 import {avatar,badge,btn,checked,closeDialog,confirm,copy,empty,field,footer,getModel,getProvider,nval,pillStatus,report,save,showDialog,tag,toast,val} from './ui.js';
-import {aliasEditor,buildQuestions,connectionGuide,defaultQuestions,jobs,keyEditor,keys,modelEditor,models,moveCandidate,overview,playground,preservePlayground,providerEditor,providers,requestDetail,requests,routeEditor,routes,sessions,settings,usage} from './views.js';
+import {buildQuestions,connectionGuide,defaultQuestions,jobs,keyEditor,keys,overview,playground,preservePlayground,providerEditor,providers,requestDetail,requests,sessions,settings,usage} from './views.js';
+import {aliasEditor,moveCandidate,routeEditor,routes} from './routes.js';
+import {bindRoutes,routeActions} from './routes.js';
+import {modelEditor,models} from './models.js';
+import {bindModels,modelActions} from './models.js';
+import {bindPages,pageActions} from './views.js';
+
+// 各页面模块自带的动作；app.js 的 switch 未命中时按名字分发到这里
+const moduleActions={...modelActions,...routeActions,...pageActions};
 
 export function login(){
 
@@ -54,10 +62,15 @@ export async function loadPage(animated=true){
       break;
       case 'requests':action='request.list';
       params={
-        page:state.requestPage,page_size:30,q:state.requestQ,status:state.requestStatus
+        page:state.requestPage,page_size:30,q:state.requestQ,status:state.requestStatus,provider_id:state.requestProvider
       };
       break;
       case 'sessions':action='session.list';
+      break;
+      case 'routes':action='route.stats';
+      params={
+        minutes:60
+      };
       break;
       case 'jobs':action='job.list';
       break;
@@ -75,7 +88,7 @@ export async function loadPage(animated=true){
     state.lastSync=Date.now();
     renderPage(animated);
     // 上游额度要打外网，慢且可能超时，单独异步取，不挡页面渲染
-    if(state.page==='providers')loadProviderUsage();
+    if(state.page==='providers'||state.page==='overview')loadProviderUsage();
 
   }
   finally{
@@ -92,7 +105,7 @@ async function loadProviderUsage(){
   try{
     const list=await rpc('provider.usage');
     state.providerUsage=Object.fromEntries(list.map(u=>[u.id,u]));
-    if(state.page==='providers')renderPage(false);
+    if(state.page==='providers'||state.page==='overview')renderPage(false);
 
   }
   catch{
@@ -136,6 +149,11 @@ export async function navigate(page){
 
 export function bindPage(){
 
+  // 各页面模块自己的输入框、下拉框等事件
+  bindModels();
+  bindRoutes();
+  bindPages();
+
  $('#model-search')?.addEventListener('input',ev=>{const pos=ev.target.selectionStart;state.modelQ=ev.target.value;renderPage(false);const x=$('#model-search');x.focus();x.setSelectionRange(pos,pos);});
 
  $('#model-protocol')?.addEventListener('change',ev=>{state.modelProtocol=ev.target.value;renderPage(false);});
@@ -144,7 +162,7 @@ export function bindPage(){
 
  $('#model-provider')?.addEventListener('change',ev=>{state.providerFilter=ev.target.value;renderPage(false);});
 
- $('#request-filter')?.addEventListener('submit',ev=>{ev.preventDefault();state.requestQ=val(ev.currentTarget,'q');state.requestStatus=val(ev.currentTarget,'status');state.requestPage=1;loadPage(false).catch(report);});
+ $('#request-filter')?.addEventListener('submit',ev=>{ev.preventDefault();state.requestQ=val(ev.currentTarget,'q');state.requestStatus=val(ev.currentTarget,'status');state.requestProvider=val(ev.currentTarget,'provider');state.requestPage=1;loadPage(false).catch(report);});
 
  $('#request-search')?.addEventListener('change',ev=>{state.requestQ=ev.target.value;state.requestPage=1;loadPage(false).catch(report);});
 
@@ -158,12 +176,13 @@ export function bindPage(){
   state.playResult=await rpc('playground.run',args);}catch(e){report(e);}finally{state.playBusy=false;if(state.page==='playground')renderPage(false);}});
 
 // 拖完立刻落库：这里没有「应用排序」按钮，改完不存等于没改。
-async function reorderRoutes(from,to){
-  const ids=state.config.routes.map(r=>r.id);
+// kind 为 route 或 provider，对应 config 里的 routes / providers 与同名 reorder 动作
+async function reorderList(kind,from,to){
+  const ids=state.config[kind+'s'].map(x=>x.id);
   if(from===to||from<0||to<0||from>=ids.length||to>=ids.length)return;
   const [moved]=ids.splice(from,1);
   ids.splice(to,0,moved);
-  try{await save('route.reorder',{ids});}catch(e){report(e);}
+  try{await save(kind+'.reorder',{ids});}catch(e){report(e);}
 }
 
  let from=-1;
@@ -174,7 +193,7 @@ async function reorderRoutes(from,to){
     if(el.dataset.dragKind!==fromKind)return;
     ev.preventDefault();
     const to=Number(el.dataset.dragIndex);
-    if(fromKind==='route')await reorderRoutes(from,to);
+    if(fromKind==='route'||fromKind==='provider')await reorderList(fromKind,from,to);
     else moveCandidate(from,to);
   });});
 
@@ -386,10 +405,6 @@ export async function handleAction(el){
  case 'save-route-order':await save('route.save',{id:state.routeID,route:{candidates:state.routeDraft}});
     break;
 
- case 'simulate-route':state.simulation=await rpc('route.test',{id,protocol:'chat'});
-    renderPage(false);
-    break;
-
  case 'play-protocol':preservePlayground();
     state.playProtocol=el.dataset.value;
     state.playResult=null;
@@ -445,7 +460,11 @@ export async function handleAction(el){
 
     }
 
- default:if(action.startsWith('go-')){
+ default:if(moduleActions[action]){
+      await moduleActions[action](el,id);
+
+    }
+    else if(action.startsWith('go-')){
       location.hash=action.slice(3);
 
     }

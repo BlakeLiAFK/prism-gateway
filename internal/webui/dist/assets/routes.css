@@ -1,0 +1,24 @@
+/* 路由画布：候选状态徽章、落点占比条、模拟切换与淘汰说明。 */
+.candidate.muted{opacity:.52}
+.candidate.muted:hover{opacity:.75}
+.candidate-flags{display:flex;gap:6px;flex-wrap:wrap;margin:5px 0 2px}
+.cand-share{display:flex;align-items:center;gap:8px;margin-top:6px;min-width:0}
+.cand-share-bar{flex:1;min-width:24px;max-width:140px;height:3px;border-radius:2px;background:var(--line2);overflow:hidden}
+.cand-share-bar i{display:block;height:100%;background:var(--mint-text);border-radius:2px}
+.cand-share small{font-size:9px;color:var(--muted);white-space:nowrap;flex:none}
+.cand-share.zero{opacity:.45}
+.route-canvas-note{padding:10px 2px 0;margin:0}
+.sim-out{font-size:11px;color:var(--warn);background:var(--warn-bg);border-radius:7px;padding:8px 10px;margin:7px 0}
+.sim-out b{color:inherit}
+
+@media(max-width:700px){
+  .cand-share-bar{max-width:none}
+  .candidate-flags{gap:4px}
+}
+
+@media(max-width:420px){
+  .candidate-info small{white-space:normal}
+  .cand-share{flex-wrap:wrap}
+  .cand-share-bar{max-width:none;width:100%;order:2}
+  .cand-share small{order:1}
+}
