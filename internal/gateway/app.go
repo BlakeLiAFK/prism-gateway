@@ -26,6 +26,8 @@ type App struct {
 	workers    sync.WaitGroup
 	usageMu    sync.Mutex
 	usageCache map[string]usageCacheEntry
+	statsMu    sync.Mutex
+	statsCache map[int]statsCacheEntry
 }
 
 func NewApp(ctx context.Context, s *Store, ui http.Handler) *App {
@@ -328,7 +330,7 @@ func (a *App) dashboard(p Object) (any, error) {
 		hours = 720
 	}
 	cut := now() - int64(hours)*3600000
-	rows, err := a.Store.DB.Query(`SELECT COUNT(*) requests,COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0) success,COALESCE(SUM(CASE WHEN status='error' OR status='unknown' THEN 1 ELSE 0 END),0) errors,COALESCE(SUM(input_tokens),0) input_tokens,COALESCE(SUM(output_tokens),0) output_tokens,COALESCE(SUM(cache_tokens),0) cache_tokens,COALESCE(SUM(CASE WHEN is_demo=0 THEN cost_nano ELSE 0 END),0) cost_nano,COALESCE(SUM(CASE WHEN is_demo=1 THEN 1 ELSE 0 END),0) demo_requests,COALESCE(AVG(CASE WHEN status='success' THEN duration_ms END),0) latency_ms,COALESCE(SUM(CASE WHEN usage_mode LIKE 'reserved%' THEN 1 ELSE 0 END),0) uncertain_requests FROM requests WHERE started_at>=?`, cut)
+	rows, err := a.Store.DB.Query(`SELECT COUNT(*) requests,COALESCE(SUM(CASE WHEN status='success' THEN 1 ELSE 0 END),0) success,COALESCE(SUM(CASE WHEN status='error' OR status='unknown' THEN 1 ELSE 0 END),0) errors,COALESCE(SUM(input_tokens),0) input_tokens,COALESCE(SUM(output_tokens),0) output_tokens,COALESCE(SUM(cache_tokens),0) cache_tokens,COALESCE(SUM(CASE WHEN is_demo=0 THEN cost_nano ELSE 0 END),0) cost_nano,COALESCE(SUM(CASE WHEN is_demo=1 THEN 1 ELSE 0 END),0) demo_requests,COALESCE(AVG(CASE WHEN status='success' THEN duration_ms END),0) latency_ms,COALESCE(SUM(CASE WHEN usage_mode LIKE 'reserved%' THEN 1 ELSE 0 END),0) uncertain_requests,COALESCE(SUM(CASE WHEN status='success' AND cost_known=0 AND is_demo=0 THEN 1 ELSE 0 END),0) unpriced_requests FROM requests WHERE started_at>=?`, cut)
 	if err != nil {
 		return nil, err
 	}

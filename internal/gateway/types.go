@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const Version = "1.20.0"
+const Version = "1.22.0"
 
 type Object = map[string]any
 
@@ -236,9 +236,6 @@ func (c Config) Validate() error {
 		names[r.ID] = true
 		if !routeStrategies[r.Strategy] {
 			return errors.New("路由策略仅支持 priority / balanced / weighted / latency / cost / least_busy")
-		}
-		if err := checkWeightedAccounts(&c, r); err != nil {
-			return err
 		}
 		seen := map[string]bool{}
 		for _, x := range r.Candidates {

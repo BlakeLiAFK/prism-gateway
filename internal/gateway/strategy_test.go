@@ -92,48 +92,6 @@ func TestWeightedFollowsWeights(t *testing.T) {
 	}
 }
 
-// 约束 9：按权重分流不能在同一厂商的多个账号之间轮换
-func TestWeightedRejectsSameVendorAccounts(t *testing.T) {
-	h := newHarness(t)
-	save := func(strategy string, providers ...Provider) int {
-		h.change(t, func(c *Config) {
-			c.Routes = nil
-			c.Providers = providers
-			a, b := modelFixture("a", "chat"), modelFixture("b", "chat")
-			a.ProviderID, b.ProviderID = providers[0].ID, providers[1].ID
-			c.Models = []Model{a, b}
-		})
-		w, _ := h.rpc(t, "route.save", Object{"version": h.a.Store.Config().Version, "id": "r",
-			"route": Object{"id": "r", "name": "r", "strategy": strategy, "enabled": true,
-				"candidates": []any{Object{"model_id": "a", "weight": 10}, Object{"model_id": "b", "weight": 10}}}}, h.token)
-		return w.Code
-	}
-	cc1 := Provider{ID: "cc1", Name: "cc1", Kind: "commandcode", BaseURL: "https://api.commandcode.ai/v1", Auth: "auto", Enabled: true, TimeoutSec: 30}
-	cc2 := cc1
-	cc2.ID, cc2.Name = "cc2", "cc2"
-	if code := save("weighted", cc1, cc2); code != 400 {
-		t.Fatalf("同厂商两个账号用 weighted 应被拒绝，实得 %d", code)
-	}
-	// 故障切换不受限制
-	if code := save("priority", cc1, cc2); code != 200 {
-		t.Fatalf("同厂商两个账号用 priority 应允许，实得 %d", code)
-	}
-	// 自定义供应商按域名区分
-	u1 := Provider{ID: "u1", Name: "u1", Kind: "custom", BaseURL: "https://one.example/v1", Auth: "auto", Enabled: true, TimeoutSec: 30}
-	u2 := u1
-	u2.ID = "u2"
-	if code := save("weighted", u1, u2); code != 400 {
-		t.Fatalf("同域名自定义供应商用 weighted 应被拒绝，实得 %d", code)
-	}
-	u2.BaseURL = "https://two.example/v1"
-	if code := save("weighted", u1, u2); code != 200 {
-		t.Fatalf("不同域名自定义供应商用 weighted 应允许，实得 %d", code)
-	}
-	if code := save("random", u1, u2); code != 400 {
-		t.Fatalf("未知策略应被拒绝，实得 %d", code)
-	}
-}
-
 // 真实转发成功后应留下响应头耗时样本，并出现在运行状态里
 func TestUpstreamTTFBRecorded(t *testing.T) {
 	h := newHarness(t)

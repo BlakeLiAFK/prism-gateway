@@ -244,23 +244,32 @@ func parseUsage(p Provider, o Object) (string, []any) {
 		return sym + str(b, "total_balance"), fields
 	}
 	if p.Kind == "zai" {
-		labels := map[string]string{"TOKENS_LIMIT": "Token 用量 · 5 小时", "TIME_LIMIT": "MCP 用量 · 1 个月"}
 		fields := []any{}
 		headline := ""
 		for _, v := range arr(obj(o["data"])["limits"]) {
 			it := obj(v)
-			kind := str(it, "type")
-			label := labels[kind]
-			if label == "" {
-				label = kind
-			}
+			window := zaiWindow(it)
 			value := fmt.Sprintf("%.0f%%", num(it, "percentage"))
-			if kind == "TOKENS_LIMIT" {
-				// 主位要自带窗口名，只写「已用 1%」看不出是哪个窗口的 1%
-				headline = "5 小时 " + value
+			left := ""
+			if r := ccReset(it["nextResetTime"]); r > now() {
+				left = durationText(r-now()) + "后"
+			}
+			// 主位取第一个用量窗口并自带窗口名，只写「已用 1%」看不出是哪个窗口的 1%
+			if headline == "" && str(it, "type") != "TIME_LIMIT" {
+				headline = window + " " + value
+				if left != "" {
+					// 紧跟主位放第一行，上游返回的窗口顺序不固定
+					fields = append([]any{Object{"label": window + "重置", "value": left}}, fields...)
+				}
 				continue
 			}
-			fields = append(fields, Object{"label": label, "value": value})
+			if str(it, "type") == "TIME_LIMIT" {
+				window = "MCP 用量 · " + window
+			}
+			if left != "" {
+				value += " · " + left + "重置"
+			}
+			fields = append(fields, Object{"label": window, "value": value})
 		}
 		return headline, fields
 	}
@@ -385,4 +394,25 @@ func monthCost(kind string, o Object) float64 {
 		}
 	}
 	return total
+}
+
+// zaiWindow 由 unit / number 写出窗口名：unit 3 = 小时、5 = 月、6 = 周。
+// 老套餐的 TOKENS_LIMIT / TIME_LIMIT 可能不带 unit，按类型给默认窗口。
+func zaiWindow(it Object) string {
+	n := int(num(it, "number"))
+	switch int(num(it, "unit")) {
+	case 3:
+		return fmt.Sprintf("%d 小时", n)
+	case 5:
+		return fmt.Sprintf("%d 个月", n)
+	case 6:
+		if n <= 1 {
+			return "每周"
+		}
+		return fmt.Sprintf("%d 周", n)
+	}
+	if str(it, "type") == "TIME_LIMIT" {
+		return "1 个月"
+	}
+	return "5 小时"
 }

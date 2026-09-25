@@ -1,10 +1,8 @@
 package gateway
 
 import (
-	"fmt"
 	"math"
 	"math/rand/v2"
-	"net/url"
 	"time"
 )
 
@@ -99,42 +97,6 @@ func nativeBonus(strategy string) float64 {
 		return 2
 	}
 	return 0.001
-}
-
-// vendorKey 标识「同一家厂商」：内置类型直接用 kind，自定义供应商按上游域名区分
-func vendorKey(p Provider) string {
-	if p.Kind != "custom" && p.Kind != "" {
-		return p.Kind
-	}
-	if u, err := url.Parse(p.BaseURL); err == nil && u.Host != "" {
-		return u.Host
-	}
-	return p.ID
-}
-
-// checkWeightedAccounts 执行约束 9：按权重分流不能在同一厂商的多个账号之间轮换，
-// 那等于把多个账号的额度拼起来用。故障切换（priority 等）不受此限制。
-func checkWeightedAccounts(c *Config, r Route) error {
-	if r.Strategy != "weighted" {
-		return nil
-	}
-	owner := map[string]string{}
-	for _, x := range r.Candidates {
-		m, ok := c.model(x.ModelID)
-		if !ok {
-			continue
-		}
-		p, ok := c.provider(m.ProviderID)
-		if !ok {
-			continue
-		}
-		k := vendorKey(p)
-		if other, dup := owner[k]; dup && other != p.ID {
-			return fmt.Errorf("路由 %s：按权重分流不能在同一厂商的多个账号（%s、%s）之间轮换；多账号请用优先级等策略做故障切换", r.ID, other, p.ID)
-		}
-		owner[k] = p.ID
-	}
-	return nil
 }
 
 // hasBudget 模型是否设了任一本地滚动预算；都没设时不必查用量

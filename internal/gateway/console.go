@@ -4,7 +4,10 @@ package gateway
 // admin.go 的分发器在未命中时回落到这里。
 
 var consoleActions = map[string]func(a *App, id string, p Object) (any, error){
-	"route.stats": func(a *App, _ string, p Object) (any, error) { return a.routeStats(p) },
+	"route.stats":     func(a *App, _ string, p Object) (any, error) { return a.routeStats(p) },
+	"model.stats":     func(a *App, _ string, p Object) (any, error) { return a.modelStats(p) },
+	"model.usage":     func(a *App, id string, p Object) (any, error) { return a.modelUsage(id, p) },
+	"request.reprice": func(a *App, _ string, p Object) (any, error) { return a.reprice(p) },
 }
 
 // routeStats 返回运行时状态与最近若干分钟各路由的实际落点。
