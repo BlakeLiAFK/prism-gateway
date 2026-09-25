@@ -34,24 +34,100 @@ export function bindCandidateSearch(){
   if(!box)return;
   const rows=$$('.candidate-row');
   const count=$('#candidate-count');
+  const providerSel=$('#candidate-provider');
+  const protocolSel=$('#candidate-protocol');
+  const filterBar=$('.candidate-filters');
+  const clearBtn=filterBar?$('[data-cand-clear]',filterBar):null;
+
+  // 缓存每行的复选框，避免重复查询
+  const items=rows.map(row=>({row,cb:$('input[name=candidate]',row)}));
+
+  const filters={provider:'',protocol:'',chips:{}};
+  const hasFilters=()=>filters.provider||filters.protocol||box.value.trim()||Object.values(filters.chips).some(v=>v);
+
+  // 通用匹配逻辑
+  const matches=(item,f)=>{
+    const q=f.q||'';
+    const matchSearch=!q||item.row.dataset.search.includes(q);
+    const matchProvider=!f.provider||item.row.dataset.provider===f.provider;
+    const matchProto=!f.protocol||item.row.dataset.protocol===f.protocol;
+    let matchChips=true;
+    for(const [k,v] of Object.entries(f.chips||{})){
+      if(!v)continue;
+      if(k==='checked'){if(!item.cb.checked)matchChips=false;}
+      else if(item.row.dataset[k]!=='1')matchChips=false;
+    }
+    return matchSearch&&matchProvider&&matchProto&&matchChips;
+  };
+
+  // 计数：只计匹配的行，不含已勾选的常显行
+  const countWith=(applyChip)=>{
+    const testFilters={...filters,chips:{...filters.chips,...applyChip},q:box.value.trim().toLowerCase()};
+    let c=0;
+    items.forEach(item=>{
+      if(matches(item,testFilters))c++;
+    });
+    return c;
+  };
+
   const apply=()=>{
     const q=box.value.trim().toLowerCase();
+    const f={provider:filters.provider,protocol:filters.protocol,chips:filters.chips,q};
     let shown=0;
-    rows.forEach(row=>{
-      const checked=$('input[name=candidate]',row)?.checked;
-      const hit=!q||row.dataset.search.includes(q);
-      row.hidden=!(hit||checked);
-      if(!row.hidden)shown++;
+    items.forEach(item=>{
+      const matched=matches(item,f);
+      item.row.hidden=!(matched||item.cb.checked);
+      if(!item.row.hidden)shown++;
     });
-    if(count)count.textContent=q?`显示 ${shown} / ${rows.length} 个（含已选中）`:`共 ${rows.length} 个模型`;
-    // 勾选了未启用的模型时明确告知：保存路由会一并启用它们
-    const off=rows.filter(row=>row.classList.contains('off')&&$('input[name=candidate]',row)?.checked).length;
+
+    if(count){
+      const active=hasFilters();
+      count.textContent=active?`显示 ${shown} / ${rows.length} 个模型（已选中的始终显示）`:`共 ${rows.length} 个模型`;
+    }
+
+    if(filterBar){
+      const chips=$$('[data-cand-filter]',filterBar);
+      chips.forEach(chip=>{
+        const key=chip.dataset.candFilter;
+        chip.classList.toggle('active',!!filters.chips[key]);
+        const cnt=chip.querySelector('.filter-count');
+        if(cnt)cnt.textContent=countWith({[key]:true});
+      });
+      if(clearBtn)clearBtn.hidden=!hasFilters();
+    }
+
+    const off=items.filter(({row,cb})=>row.classList.contains('off')&&cb.checked).length;
     const note=$('#candidate-enable-note');
     if(note){note.hidden=!off;note.textContent=`已选 ${off} 个未启用的模型，保存路由时会一并启用。`;}
   };
+
   box.addEventListener('input',apply);
-  // 勾选状态变化后要重算，否则取消勾选的行在搜索状态下不会隐藏
-  rows.forEach(row=>$('input[name=candidate]',row)?.addEventListener('change',apply));
+  if(providerSel)providerSel.addEventListener('change',e=>{filters.provider=e.target.value;apply();});
+  if(protocolSel)protocolSel.addEventListener('change',e=>{filters.protocol=e.target.value;apply();});
+
+  if(filterBar){
+    const chips=$$('[data-cand-filter]',filterBar);
+    chips.forEach(chip=>{
+      chip.addEventListener('click',()=>{
+        const key=chip.dataset.candFilter;
+        filters.chips[key]=!filters.chips[key];
+        apply();
+      });
+    });
+    if(clearBtn){
+      clearBtn.addEventListener('click',()=>{
+        box.value='';
+        filters.provider='';
+        filters.protocol='';
+        filters.chips={};
+        if(providerSel)providerSel.value='';
+        if(protocolSel)protocolSel.value='';
+        apply();
+      });
+    }
+  }
+
+  items.forEach(({cb})=>cb?.addEventListener('change',apply));
   apply();
 }
 
@@ -71,7 +147,7 @@ export function routeEditor(id=''){
 
  const order=[...r.candidates.map(x=>getModel(x.model_id)).filter(Boolean),...state.config.models.filter(m=>!r.candidates.some(c=>c.model_id===m.id))];
 
- showDialog(old?'编辑路由':'创建智能路由','明确候选池；会话亲和优先，安全失败后才尝试备用。',`<div class="form-grid">${field('路由 ID','id',r.id,'text','客户端可直接将其作为 model。',`${old?'readonly':''} required placeholder="auto-coding"`)}${field('显示名称','name',r.name,'text','','required')}${selectField('选择策略','strategy',r.strategy,STRATEGIES.map(x=>[x[0],x[1]]))}</div>${field('路由描述','description',r.description)}${check('启用路由','enabled',r.enabled)}${check('启用会话亲和','affinity',r.affinity)}<div class="form-section"><h3>候选模型</h3><p class="small muted" style="margin:8px 0 14px">选中加入路由。权重用于「按权重分流」的抽签比例和「权重优先」的排序；冷却中或并发已满的候选会自动排到最后。保存后可在路由画布拖动排序。</p><div class="search-field" style="margin-bottom:12px">${icon('search')}<input id="candidate-search" placeholder="搜索模型、ID、协议或供应商" autocomplete="off" aria-label="搜索候选模型"></div><p class="tiny muted" id="candidate-count"></p><p class="enable-note" id="candidate-enable-note" hidden></p><div class="candidate-list">${order.map(m=>{const c=r.candidates.find(x=>x.model_id===m.id);const hay=[m.id,m.name,m.upstream,m.protocol,m.provider_id,getProvider(m.provider_id)?.name].filter(Boolean).join(' ').toLowerCase();return `<div class="candidate-row${m.enabled?'':' off'}" data-search="${E(hay)}"><label class="checkline" style="flex:1"><input name="candidate" type="checkbox" value="${E(m.id)}" ${c?'checked':''}><span><span class="candidate-title">${E(m.name||m.id)}${sourceTag(m.provider_id)}${m.enabled?'':'<span class="off-tag">未启用</span>'}</span><small><span class="mono">${E(m.id)}</span> · ${E(m.protocol)}</small></span></label><input class="weight-field" type="number" min="1" max="1000" value="${c?.weight||10}" data-weight="${E(m.id)}" style="width:80px" aria-label="候选权重"></div>`}).join('')}</div></div>`,async f=>{const candidates=$$('input[name=candidate]:checked',f).map(el=>({model_id:el.value,weight:Number($$('[data-weight]',f).find(x=>x.dataset.weight===el.value).value)}));const enable_models=candidates.some(c=>!getModel(c.model_id)?.enabled);await save('route.save',{id,enable_models,route:{id:val(f,'id').trim(),name:val(f,'name').trim(),strategy:val(f,'strategy'),description:val(f,'description'),enabled:checked(f,'enabled'),affinity:checked(f,'affinity'),sort:r.sort||0,candidates}},f);});
+ showDialog(old?'编辑路由':'创建智能路由','明确候选池；会话亲和优先，安全失败后才尝试备用。',`<div class="form-grid">${field('路由 ID','id',r.id,'text','客户端可直接将其作为 model。',`${old?'readonly':''} required placeholder="auto-coding"`)}${field('显示名称','name',r.name,'text','','required')}${selectField('选择策略','strategy',r.strategy,STRATEGIES.map(x=>[x[0],x[1]]))}</div>${field('路由描述','description',r.description)}${check('启用路由','enabled',r.enabled)}${check('启用会话亲和','affinity',r.affinity)}<div class="form-section"><h3>候选模型</h3><p class="small muted" style="margin:8px 0 14px">选中加入路由。权重用于「按权重分流」的抽签比例和「权重优先」的排序；冷却中或并发已满的候选会自动排到最后。保存后可在路由画布拖动排序。</p><div class="candidate-tools"><div class="search-field">${icon('search')}<input id="candidate-search" placeholder="搜索模型、ID、协议或供应商" autocomplete="off" aria-label="搜索候选模型"></div><select id="candidate-provider" aria-label="按供应商过滤"><option value="">全部供应商</option>${state.config.providers.map(p=>`<option value="${E(p.id)}">${E(p.name)}</option>`).join('')}</select><select id="candidate-protocol" aria-label="按协议过滤"><option value="">全部协议</option>${['chat','messages','responses','systemone'].map(v=>`<option value="${v}">${v}</option>`).join('')}</select></div><div class="filter-bar candidate-filters"><button type="button" class="filter-chip" data-cand-filter="checked">已选中<span class="filter-count">0</span></button><button type="button" class="filter-chip" data-cand-filter="enabled">已启用<span class="filter-count">0</span></button><button type="button" class="filter-chip" data-cand-filter="tools">支持工具<span class="filter-count">0</span></button><button type="button" class="filter-chip" data-cand-filter="vision">支持图像<span class="filter-count">0</span></button><button type="button" class="filter-chip" data-cand-filter="out64k" title="Claude Code 请求要求 64000 的输出上限">输出 ≥ 64K<span class="filter-count">0</span></button><button type="button" class="filter-chip" data-cand-filter="priced">已计价<span class="filter-count">0</span></button><button type="button" class="filter-chip" data-cand-filter="free">免费<span class="filter-count">0</span></button><button type="button" class="btn ghost small" data-cand-clear hidden>清除筛选</button></div><p class="tiny muted" id="candidate-count"></p><p class="enable-note" id="candidate-enable-note" hidden></p><div class="candidate-list">${order.map(m=>{const c=r.candidates.find(x=>x.model_id===m.id);const p=getProvider(m.provider_id);const hay=[m.id,m.name,m.upstream,m.protocol,m.provider_id,p?.name].filter(Boolean).join(' ').toLowerCase();return `<div class="candidate-row${m.enabled?'':' off'}" data-search="${E(hay)}" data-provider="${E(m.provider_id)}" data-protocol="${E(m.protocol)}" data-enabled="${m.enabled?'1':'0'}" data-tools="${m.tools?'1':'0'}" data-vision="${m.vision?'1':'0'}" data-out64k="${m.max_output_tokens>=64000?'1':'0'}" data-priced="${m.pricing_set?'1':'0'}" data-free="${m.pricing_set&&!(m.input_price||m.output_price||m.cache_price||m.write_price)?'1':'0'}"><label class="checkline" style="flex:1"><input name="candidate" type="checkbox" value="${E(m.id)}" ${c?'checked':''}><span><span class="candidate-title">${E(m.name||m.id)}${sourceTag(m.provider_id)}${m.enabled?'':'<span class="off-tag">未启用</span>'}</span><small><span class="mono">${E(m.id)}</span> · ${E(m.protocol)}</small></span></label><input class="weight-field" type="number" min="1" max="1000" value="${c?.weight||10}" data-weight="${E(m.id)}" style="width:80px" aria-label="候选权重"></div>`}).join('')}</div></div>`,async f=>{const candidates=$$('input[name=candidate]:checked',f).map(el=>({model_id:el.value,weight:Number($$('[data-weight]',f).find(x=>x.dataset.weight===el.value).value)}));const enable_models=candidates.some(c=>!getModel(c.model_id)?.enabled);await save('route.save',{id,enable_models,route:{id:val(f,'id').trim(),name:val(f,'name').trim(),strategy:val(f,'strategy'),description:val(f,'description'),enabled:checked(f,'enabled'),affinity:checked(f,'affinity'),sort:r.sort||0,candidates}},f);});
   bindCandidateSearch();
 
 }
