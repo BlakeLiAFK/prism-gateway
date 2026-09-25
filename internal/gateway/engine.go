@@ -128,7 +128,9 @@ func cost(m Model, u Usage) int64 {
 	return int64(math.Ceil(v))
 }
 func estimateInput(body Object) int64 { return int64((len(raw(body))+2)/3 + 16) }
-func reserveCost(m Model, o Object) int64 {
+
+// requestedMaxTokens 取客户端声明的输出上限，没写时为 0
+func requestedMaxTokens(o Object) int {
 	n := int(num(o, "max_tokens"))
 	if v := int(num(o, "max_completion_tokens")); v > 0 {
 		n = v
@@ -136,8 +138,14 @@ func reserveCost(m Model, o Object) int64 {
 	if v := int(num(o, "max_output_tokens")); v > 0 {
 		n = v
 	}
+	return n
+}
+
+// reserveCost 预留本次请求的最大花费。客户端没写输出上限时由上游决定，最多到模型上限，按上限预留
+func reserveCost(m Model, o Object) int64 {
+	n := min(requestedMaxTokens(o), m.MaxOutput)
 	if n < 1 {
-		n = min(m.MaxOutput, 4096)
+		n = m.MaxOutput
 	}
 	return cost(m, Usage{Input: estimateInput(o), Output: int64(n)})
 }
@@ -248,11 +256,15 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			if m.Protocol == "chat" && body["max_completion_tokens"] != nil {
 				field = "max_completion_tokens"
 			}
-			if body[field] == nil {
-				body[field] = min(m.MaxOutput, 4096)
+			// 客户端没写输出上限时交给上游默认（GLM 65536、DeepSeek 8K/64K 等，都比网关自定的大）；
+			// 只有 Messages 协议必填，补模型上限，与 LiteLLM、Vercel AI SDK、Claude Code 的做法一致
+			if body[field] == nil && m.Protocol == "messages" {
+				body[field] = m.MaxOutput
 			}
-			if num(body, field) > float64(m.MaxOutput) {
-				why = "请求输出上限超过模型配置"
+			// 超过模型上限时降到上限，而不是淘汰候选：Claude Code 固定要 64000，配置偏小的模型不该因此整个不可用
+			if body[field] != nil && num(body, field) > float64(m.MaxOutput) {
+				body[field] = m.MaxOutput
+				why = fitThinking(body, m.MaxOutput)
 			}
 		}
 		if why == "" {

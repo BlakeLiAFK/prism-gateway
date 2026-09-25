@@ -101,10 +101,13 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 		}
 		flush()
 	}
+	// 客户端没写输出上限时不带这个字段，由 selections 按上游协议决定是否补
+	if f := map[string]string{"chat": "max_tokens", "messages": "max_tokens", "responses": "max_output_tokens"}[protocol]; f != "" && c.MaxOutput > 0 {
+		o[f] = c.MaxOutput
+	}
 	switch protocol {
 	case "chat":
 		o["messages"] = messages
-		o["max_tokens"] = c.MaxOutput
 		if c.Stream {
 			o["stream_options"] = Object{"include_usage": true}
 		}
@@ -113,7 +116,6 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 		}
 	case "messages":
 		o["messages"] = messages
-		o["max_tokens"] = c.MaxOutput
 		if len(systems) > 0 {
 			o["system"] = strings.Join(systems, "\n\n")
 		}
@@ -127,7 +129,6 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 	case "responses":
 		o["input"] = messages
 		o["store"] = false
-		o["max_output_tokens"] = c.MaxOutput
 		if len(systems) > 0 {
 			o["instructions"] = strings.Join(systems, "\n\n")
 		}

@@ -199,6 +199,11 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 			out["exhausted_until"] = until
 		}
 	}
+	if p.Kind == "zai" {
+		if until := zaiExhausted(o); until > 0 {
+			out["exhausted_until"] = until
+		}
+	}
 	headline, fields := parseUsage(p, o)
 	out["headline"] = headline
 	out["fields"] = fields
@@ -415,4 +420,17 @@ func zaiWindow(it Object) string {
 		return "1 个月"
 	}
 	return "5 小时"
+}
+
+// zaiExhausted 返回已用满（percentage ≥ 100）的用量窗口中最晚的重置时刻，都没用满时为 0。
+// MCP 调用次数（TIME_LIMIT）用满不影响模型推理，不计入。
+func zaiExhausted(o Object) int64 {
+	until := int64(0)
+	for _, v := range arr(obj(o["data"])["limits"]) {
+		it := obj(v)
+		if str(it, "type") != "TIME_LIMIT" && num(it, "percentage") >= 100 {
+			until = max(until, ccReset(it["nextResetTime"]))
+		}
+	}
+	return until
 }

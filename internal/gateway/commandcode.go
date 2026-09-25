@@ -110,10 +110,10 @@ func (a *App) ccGet(ctx context.Context, p Provider, addr string) Object {
 	return o
 }
 
-// checkWindows 在 Command Code 返回 429 后查窗口额度：已耗尽就把该供应商的
-// 全部模型冷却到重置时刻，新请求不必再先撞一次 429 才切换。
+// checkWindows 在 Command Code 或 Z.AI 返回 429 后查窗口额度：已耗尽就把该供应商的
+// 全部模型冷却到重置时刻，新请求不必每隔 30 秒再撞一次 429 才切换。
 func (a *App) checkWindows(p Provider) {
-	if p.Kind != "commandcode" {
+	if p.Kind != "commandcode" && p.Kind != "zai" {
 		return
 	}
 	until, _ := a.providerUsage(a.Context, p)["exhausted_until"].(int64)

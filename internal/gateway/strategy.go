@@ -131,3 +131,17 @@ const pinGrace = int64(5 * time.Minute / time.Millisecond)
 func (e *Engine) keepPin(s selection) bool {
 	return s.Pinned != "" && s.Pinned != s.Model.ID && e.state(s.Pinned).Cooldown-now() <= pinGrace
 }
+
+// fitThinking 在输出上限被降低后收紧 Anthropic 的思考预算：budget_tokens 必须小于 max_tokens 且不低于 1024，
+// 放不下时返回淘汰原因
+func fitThinking(body Object, maxOut int) string {
+	t := obj(body["thinking"])
+	if t == nil || num(t, "budget_tokens") < float64(maxOut) {
+		return ""
+	}
+	if maxOut <= 1024 {
+		return "模型输出上限放不下思考预算"
+	}
+	t["budget_tokens"] = maxOut - 1
+	return ""
+}

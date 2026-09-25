@@ -360,6 +360,11 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		if emptyOutput(runErr) && safeFallback {
 			// 换一个候选才有意义：同一个模型再来一次大概率还是同样的结果
 			lastErr = fail("EMPTY_OUTPUT", "候选模型没有返回任何可用内容，已尝试可用候选", 502)
+			var ae *APIError
+			if n := requestedMaxTokens(o); n > 0 && errors.As(runErr, &ae) && ae.Code == "EMPTY_OUTPUT_TRUNCATED" {
+				// 仍然换候选：路由里可能有不思考的模型，同样的上限也能答出来
+				lastErr = fail("EMPTY_OUTPUT_TRUNCATED", fmt.Sprintf("max_tokens=%d 太小：推理模型的思考用完了输出预算，没来得及输出正文，请调大 max_tokens", n), 502)
+			}
 			continue
 		}
 		if status == 499 {

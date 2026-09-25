@@ -114,7 +114,7 @@ func allowed(o Object, keys ...string) ([]string, error) {
 }
 func unsupported(s string) error { return fail("UNSUPPORTED_FEATURE", s, 400) }
 func decodeCanonical(o Object, protocol string) (Canonical, error) {
-	c := Canonical{MaxOutput: 4096, Stream: boolean(o, "stream"), Temperature: o["temperature"], TopP: o["top_p"], Choice: "auto"}
+	c := Canonical{Stream: boolean(o, "stream"), Temperature: o["temperature"], TopP: o["top_p"], Choice: "auto"}
 	common := []string{"model", "stream", "temperature", "top_p", "tools", "tool_choice"}
 	var e error
 	switch protocol {
@@ -238,8 +238,9 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 	if e != nil {
 		return c, e
 	}
-	if c.MaxOutput < 1 {
-		return c, unsupported("跨协议 max output tokens 必须大于 0")
+	// 0 表示客户端没写，交给目标协议决定（见 selections）
+	if c.MaxOutput < 0 {
+		return c, unsupported("跨协议 max output tokens 不能为负数")
 	}
 	if len(c.Messages) == 0 {
 		return c, unsupported("messages/input 不能为空")
