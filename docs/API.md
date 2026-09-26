@@ -270,6 +270,24 @@ curl http://127.0.0.1:8080/api.json \
 
 路径由服务端决定（数据库同目录的 `backups/`），不接受客户端指定，避免路径穿越。同名文件不会被覆盖。`backup.list` 列出已有快照。
 
+### 远程备份（R2 / S3 兼容）
+
+| Action | 参数 | 说明 |
+| --- | --- | --- |
+| `r2.get` | `{}` | 存储配置；只返回 `has_secret`，不回显 Secret |
+| `r2.save` | `{endpoint, bucket, prefix, region?, access_key_id, secret?}` | `secret` 留空沿用已保存的值；`region` 默认 `auto`；前缀只允许 `[A-Za-z0-9._/-]` |
+| `r2.test` | `{}` | 写入、列出、删除一个探测对象，三步都成功才算连通 |
+| `backup.remote_list` | `{}` | 网关上传的备份 `[{key, size, modified_at, at}]`，新的在前；`at` 取自对象名里的 UTC 时间 |
+
+定时上传由定时任务 `remote` 完成（`schedule.save` 的 `remote_enabled`、`remote_minutes` 10–1440、`remote_keep` 1–1000），
+对象名为 `{prefix}gateway-YYYYMMDD-HHMMSS-mmm.db.gz`，快照在内存中生成并压缩，本机不落盘。
+
+### 在线还原
+
+`backup.restore`：`{"source":"local","name":"gateway-….db","confirm":true}` 或 `{"source":"remote","name":"prism/gateway-….db.gz","confirm":true}`。
+备份载入内存后校验完整性、是否 Prism 数据库、schema 版本并试解密全部上游凭证，全部通过才写入线上库。
+还原前生成本机安全快照；`admin_digest`、管理会话、R2 配置与定时任务状态沿用当前值。返回 `{restored_from, safety_backup, config_version}`。
+
 快照里的上游凭证仍是密文。把它交给新实例时必须同时提供原来的 `.key`，否则启动会因无法解密而失败——这是设计行为，不是故障。
 
 ## 指标

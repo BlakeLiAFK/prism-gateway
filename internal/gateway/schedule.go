@@ -21,6 +21,9 @@ type scheduleConfig struct {
 	BackupEnabled   bool `json:"backup_enabled"`
 	BackupHour      int  `json:"backup_hour"`
 	BackupKeep      int  `json:"backup_keep"`
+	RemoteEnabled   bool `json:"remote_enabled"`
+	RemoteMinutes   int  `json:"remote_minutes"`
+	RemoteKeep      int  `json:"remote_keep"`
 	QuotaEnabled    bool `json:"quota_enabled"`
 	QuotaPercent    int  `json:"quota_percent"`
 	QuotaMinutes    int  `json:"quota_minutes"`
@@ -34,8 +37,8 @@ type scheduleConfig struct {
 	UpstreamHours   int  `json:"upstream_hours"`
 }
 
-// 自动备份与每日日报默认关闭，由管理员自己开启
-var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
+// 自动备份、远程备份与每日日报默认关闭，由管理员自己开启
+var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, RemoteMinutes: 60, RemoteKeep: 48, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
 	ReportHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6}
 
 type taskRun struct {
@@ -64,6 +67,9 @@ var scheduledTasks = []scheduledTask{
 	{"backup", "自动备份", func(c scheduleConfig, last, t time.Time) bool {
 		return c.BackupEnabled && dailyDue(c, c.BackupHour, last, t)
 	}, (*App).taskBackup},
+	{"remote", "远程备份", func(c scheduleConfig, last, t time.Time) bool {
+		return c.RemoteEnabled && t.Sub(last) >= time.Duration(c.RemoteMinutes)*time.Minute
+	}, (*App).taskRemote},
 	{"quota", "额度预警", func(c scheduleConfig, last, t time.Time) bool {
 		return c.QuotaEnabled && t.Sub(last) >= time.Duration(c.QuotaMinutes)*time.Minute
 	}, (*App).taskQuota},
@@ -122,6 +128,10 @@ func (c scheduleConfig) validate() error {
 		return fail("INVALID_PARAMS", "时区偏移应在 -12 到 +14 之间", 400)
 	case c.BackupKeep < 1 || c.BackupKeep > 365:
 		return fail("INVALID_PARAMS", "备份保留份数应在 1–365 之间", 400)
+	case c.RemoteMinutes < 10 || c.RemoteMinutes > 1440:
+		return fail("INVALID_PARAMS", "远程备份间隔应在 10–1440 分钟之间", 400)
+	case c.RemoteKeep < 1 || c.RemoteKeep > 1000:
+		return fail("INVALID_PARAMS", "远程备份保留份数应在 1–1000 之间", 400)
 	case c.QuotaPercent < 1 || c.QuotaPercent > 100:
 		return fail("INVALID_PARAMS", "额度预警阈值应在 1–100% 之间", 400)
 	case c.QuotaMinutes < 5 || c.QuotaMinutes > 1440:
