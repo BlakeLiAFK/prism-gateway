@@ -30,3 +30,6 @@
 @media(max-width:700px){.sched-row{grid-template-columns:1fr;grid-template-areas:"check" "fields" "last" "run"}.sched-fields,.sched-last,.sched-run{padding-left:23px}.sched-last{white-space:normal}}
 .backup-lists{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:22px}.backup-section h3{font-size:12px}.backup-list{max-height:300px;overflow:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px;padding:0 12px}.backup-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line2)}.backup-row:last-child{border-bottom:0}.backup-row>div{min-width:0}.backup-row .mono{word-break:break-all}.backup-row .btn{flex:none;white-space:nowrap}
 @media(max-width:700px){.backup-lists{grid-template-columns:1fr}}
+
+.settings-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:24px;overflow-x:auto}.settings-tabs button{border:0;background:transparent;color:var(--muted);font-size:12px;font-weight:540;padding:11px 16px;border-bottom:2px solid transparent;white-space:nowrap;flex:none}.settings-tabs button:hover{color:var(--sub)}.settings-tabs button.active{color:var(--text);border-color:var(--text)}
+@media(max-width:700px){.settings-tabs{margin-bottom:18px}}

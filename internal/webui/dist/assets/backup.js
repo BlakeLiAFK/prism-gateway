@@ -5,7 +5,7 @@ import {btn,confirm,toast} from './ui.js';
 
 const MB=n=>(Number(n||0)/1048576).toFixed(1)+' MB';
 
-export const backupCard=()=>'<section class="card setting-card" id="backup-card" style="margin-top:22px"><h2>备份与还原</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';
+export const backupCard=()=>'<section class="card setting-card" id="backup-card" ><h2>备份与还原</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';
 
 function r2Form(c){
   const f=(id,label,value,extra='')=>`<div class="field"><label for="r2-${id}">${label}</label><input id="r2-${id}" value="${E(value||'')}" autocomplete="off" ${extra}></div>`;

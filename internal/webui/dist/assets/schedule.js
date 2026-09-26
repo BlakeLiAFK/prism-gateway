@@ -14,7 +14,7 @@ const TASKS=[
   ['upstream','上游检查','对照上游模型列表，找出可能已下架的模型与价格变动；只提示，不自动修改。有新发现时推送。',[['upstream_hours','间隔 · 小时',1,168]]]
 ];
 
-export const scheduleCard=()=>'<section class="card setting-card" id="schedule-card" style="margin-top:22px"><h2>定时任务</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';
+export const scheduleCard=()=>'<section class="card setting-card" id="schedule-card" ><h2>定时任务</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';
 
 function lastRun(r){
   if(!r?.at)return '<span class="muted">尚未运行</span>';

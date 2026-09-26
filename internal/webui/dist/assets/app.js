@@ -420,6 +420,10 @@ export async function handleAction(el){
     renderPage(false);
     break;
 
+ case 'settings-tab':state.settingsTab=el.dataset.value;
+    renderPage(false);
+    break;
+
  case 'add-question':preservePlayground();
     state.playQuestions=[...(state.playQuestions||defaultQuestions()),{key:'',type:'choice',instructions:'',criteria:''}];
     renderPage(false);

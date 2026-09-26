@@ -5,7 +5,7 @@ import {btn,toast} from './ui.js';
 
 const EVENTS=[['quota','上游额度用完','Command Code、Z.AI 的额度窗口用满，旗下模型冷却到重置时刻'],['failures','模型连续失败','同一模型连续 5 次请求失败（客户端取消不算）'],['route','路由无可用候选','某条路由的全部候选都因容量或上游问题失败']];
 
-export const alertCard=()=>'<section class="card setting-card" id="alert-card" style="margin-top:22px"><h2>告警推送</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';
+export const alertCard=()=>'<section class="card setting-card" id="alert-card" ><h2>告警推送</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';
 
 function render(c){
   const telegram=c.kind!=='webhook'&&c.kind!=='webhook_text';
