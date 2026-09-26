@@ -56,6 +56,11 @@ func errorParts(err error) (int, string, string) {
 }
 
 func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Principal) {
+	if err := e.checkKey(key); err != nil {
+		_, code, msg := errorParts(err)
+		protocolError(w, p, 429, code, msg, randomID("req_"))
+		return
+	}
 	from := clientOf(r)
 	id := randomID("req_")
 	w.Header().Set("X-Request-ID", id)
@@ -138,14 +143,16 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		}
 	}
 	lastErr := fail("NO_CAPACITY", "所有候选模型当前均不可用", 429)
+	admitted := false
 	for _, s := range selections {
 		att, er := e.admit(s, key, id, requested, p, session, from)
 		if er != nil {
 			lastErr = er
 			continue
 		}
+		admitted = true
 		start := now()
-		u := Usage{}
+		u := Usage{tap: func(n int) { e.addStreamed(s.Model.ID, n) }}
 		status := 200
 		upstreamStatus := 0
 		var runErr error
@@ -384,7 +391,14 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		protocolError(w, p, outStatus, "UPSTREAM_ERROR", fmt.Sprintf("上游请求失败（HTTP %d）；请求未被自动重放。", status), id)
 		return
 	}
+	if !admitted && len(selections) > 0 {
+		e.recordRejected(selections[0], key, id, requested, p, session, from, lastErr)
+	}
 	status, code, msg := errorParts(lastErr)
+	// 路由的全部候选都因容量或上游问题失败时告警；空回答这类请求本身的问题不算
+	if _, isRoute := c.route(requested); isRoute && e.OnAlert != nil && !strings.HasPrefix(code, "EMPTY_OUTPUT") {
+		go e.OnAlert("route", "route:"+requested, fmt.Sprintf("路由 %s 的全部候选都不可用（%s），客户端收到 HTTP %d。", requested, code, status))
+	}
 	protocolError(w, p, status, code, msg, id)
 }
 

@@ -1,6 +1,10 @@
 package gateway
 
 import (
+	"cmp"
+	"errors"
+	"fmt"
+	"log/slog"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -144,4 +148,75 @@ func fitThinking(body Object, maxOut int) string {
 	}
 	t["budget_tokens"] = maxOut - 1
 	return ""
+}
+
+// requestedMaxTokens 取客户端声明的输出上限，没写时为 0
+func requestedMaxTokens(o Object) int {
+	n := int(num(o, "max_tokens"))
+	if v := int(num(o, "max_completion_tokens")); v > 0 {
+		n = v
+	}
+	if v := int(num(o, "max_output_tokens")); v > 0 {
+		n = v
+	}
+	return n
+}
+
+// reserveCost 预留本次请求的最大花费。客户端没写输出上限时由上游决定，最多到模型上限，按上限预留
+func reserveCost(m Model, o Object) int64 {
+	n := min(requestedMaxTokens(o), m.MaxOutput)
+	if n < 1 {
+		n = m.MaxOutput
+	}
+	return cost(m, Usage{Input: estimateInput(o), Output: int64(n)})
+}
+
+// reject 是一次准入拒绝：并发满、冷却中、RPM 满或本地预算不足
+type reject struct {
+	At   int64
+	Code string
+}
+
+// reject 记录一次准入拒绝并丢掉 5 分钟前的旧记录。调用方持有 e.mu
+func (h *health) reject(err error, t int64) {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return
+	}
+	keep := h.Rejects[:0]
+	for _, r := range h.Rejects {
+		if r.At > t-5*60000 {
+			keep = append(keep, r)
+		}
+	}
+	h.Rejects = append(keep, reject{t, ae.Code})
+}
+
+// recordRejected 在所有候选都没能通过准入时补一条请求记录：客户端收到了 429，请求日志里却什么都没有，排查无从下手
+func (e *Engine) recordRejected(s selection, key Principal, reqID, requested, p, session string, from client, err error) {
+	_, code, _ := errorParts(err)
+	id := randomID("att_")
+	if er := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,http_status,started_at,cost_nano,cost_known,reason,error_code,usage_mode,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,?,?,?,?,?,'error',429,?,0,0,?,?,'rejected',?,?,?,?)`,
+		id, reqID, key.ID, requested, s.Model.ID, s.Provider.ID, p, s.Model.Protocol, session, now(), "全部候选准入被拒："+s.Reason, code, s.Provider.Kind == "mock", from.IP, from.Agent, from.Role); er != nil {
+		slog.Error("rejected request record failed", "request_id", reqID, "err", er)
+		return
+	}
+	e.rollup(id)
+}
+
+// failAlertAfter：同一模型连续失败这么多次就告警一次（客户端主动取消不算）
+const failAlertAfter = 5
+
+// trackFailure 维护连续失败计数，达到阈值时告警。调用方持有 e.mu
+func (e *Engine) trackFailure(h *health, m Model, state, code string) {
+	if state == "success" {
+		h.Fails = 0
+		return
+	}
+	if code == "CLIENT_CANCELED" {
+		return
+	}
+	if h.Fails++; h.Fails == failAlertAfter && e.OnAlert != nil {
+		go e.OnAlert("failures", "fail:"+m.ID, fmt.Sprintf("%s 连续 %d 次请求失败，最近一次：%s。", cmp.Or(m.Name, m.ID), failAlertAfter, code))
+	}
 }

@@ -29,6 +29,9 @@ func TestCheckTLS(t *testing.T) {
 }
 
 func TestLockDatabaseRejectsSecondProcess(t *testing.T) {
+	old := lockWait
+	lockWait = 300 * time.Millisecond
+	defer func() { lockWait = old }()
 	path := filepath.Join(t.TempDir(), "gateway.db.lock")
 	unlock, err := lockDatabase(path)
 	if err != nil {
@@ -41,6 +44,22 @@ func TestLockDatabaseRejectsSecondProcess(t *testing.T) {
 	unlock2, err := lockDatabase(path)
 	if err != nil {
 		t.Fatalf("释放后应可重新加锁: %v", err)
+	}
+	unlock2()
+}
+
+// 部署交接：新进程先起来等锁，旧进程放锁后在等待期内接手
+func TestLockDatabaseWaitsForHandoff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.db.lock")
+	unlock, err := lockDatabase(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(300*time.Millisecond, unlock)
+	start := time.Now()
+	unlock2, err := lockDatabase(path)
+	if err != nil || time.Since(start) < 250*time.Millisecond {
+		t.Fatalf("应等旧进程放锁后接手: %v %v", err, time.Since(start))
 	}
 	unlock2()
 }

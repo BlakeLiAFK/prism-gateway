@@ -55,6 +55,8 @@ type liveState struct {
 	cooldown int64
 	ttfb     int64
 	limits   Object
+	rejects  map[string]int
+	stream   float64
 }
 
 // liveAgg 是 requests 表按模型或按请求名汇总出来的近窗计数
@@ -74,6 +76,13 @@ func (e *Engine) snapshot(ids []string, t int64) (int, map[string]liveState) {
 		if h := e.states[id]; h != nil {
 			s.active, s.cooldown, s.limits = h.Active, h.Cooldown, h.Limits
 			s.ttfb = int64(math.Round(h.TTFB))
+			s.stream = e.streamedTokS(id, t)
+			s.rejects = map[string]int{}
+			for _, r := range h.Rejects {
+				if r.At > t-5*60000 {
+					s.rejects[r.Code]++
+				}
+			}
 			for _, ts := range h.Recent {
 				if ts > t-60000 {
 					s.rpm++
@@ -143,14 +152,14 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 			"active": st.active, "concurrency": m.Concurrency, "rpm": st.rpm, "rpm_limit": m.RPM,
 			"ttfb_ms": st.ttfb, "cooldown_until": st.cooldown, "limits": st.limits,
 			"sessions": sessions[id], "requests_5m": g.requests, "success_5m": g.success,
-			"tok_s": perSecond(g),
+			"tok_s": perSecond(g), "rejected_5m": st.rejects, "live_tok_s": math.Round(st.stream*10) / 10,
 		}
 	}
 
 	routes := Object{}
 	for _, rt := range c.Routes {
 		var active, capacity, sess int64
-		var weighted, weights float64
+		var weighted, weights, live float64
 		seen := map[string]bool{}
 		for _, cm := range rt.Candidates {
 			m, ok := c.model(cm.ModelID)
@@ -160,6 +169,7 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 			seen[cm.ModelID] = true
 			st, w := states[cm.ModelID], float64(byModel[cm.ModelID].requests)
 			active += int64(st.active)
+			live += st.stream
 			capacity += int64(m.Concurrency)
 			sess += sessions[cm.ModelID]
 			// 候选的响应头耗时按各自近 5 分钟的请求数加权
@@ -179,7 +189,7 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 		routes[rt.ID] = Object{
 			"active": active, "capacity": capacity, "rpm": g.rpm, "tok_s": tok,
 			"requests_5m": g.requests, "success_5m": g.success,
-			"sessions": sess, "ttfb_ms": ttfb,
+			"sessions": sess, "ttfb_ms": ttfb, "live_tok_s": math.Round(live*10) / 10,
 		}
 	}
 	return Object{

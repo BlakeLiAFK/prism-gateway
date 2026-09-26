@@ -18,6 +18,7 @@ import (
 type Principal struct {
 	ID      string
 	Allowed []string
+	Policy  keyPolicy
 }
 
 func (p Principal) allows(model string) bool {
@@ -41,6 +42,8 @@ type health struct {
 	TTFB       float64 // 上游 2xx 响应头耗时的滑动平均，latency 策略的依据
 	Limits     Object  // 上游最近一次声明的限额，原样留存
 	LimitsAt   int64
+	Rejects    []reject // 近 5 分钟的准入拒绝
+	Fails      int      // 连续失败次数，成功即清零
 }
 type Engine struct {
 	store    *Store
@@ -51,21 +54,27 @@ type Engine struct {
 	clients  map[string]*http.Client
 	keyMu    sync.Mutex
 	keys     map[string]*cachedKey
+	keyHits  map[string][]int64 // 每把 Key 近 60 秒的请求时刻，用于 Key 级 RPM
+	streamed map[string]*streamWindow
+	spend    map[string]keySpendEntry
 	// OnRateLimited 在上游返回 429 后调用，供 App 去查额度窗口
 	OnRateLimited func(Provider)
+	// OnAlert 推送告警（事件类别、限频键、正文），未设置时忽略
+	OnAlert func(event, key, text string)
 }
 
 func NewEngine(s *Store) *Engine {
-	return &Engine{store: s, states: map[string]*health{}, clients: map[string]*http.Client{}, keys: map[string]*cachedKey{}}
+	return &Engine{store: s, states: map[string]*health{}, clients: map[string]*http.Client{}, keys: map[string]*cachedKey{}, keyHits: map[string][]int64{}, spend: map[string]keySpendEntry{}}
 }
 func (e *Engine) client(p Provider) *http.Client {
 	e.clientMu.Lock()
 	defer e.clientMu.Unlock()
-	key := p.ID + "|" + p.BaseURL + fmt.Sprint(p.TimeoutSec, p.AllowPrivate)
+	idle := e.store.Config().Settings.StreamIdle()
+	key := p.ID + "|" + p.BaseURL + fmt.Sprint(p.TimeoutSec, p.AllowPrivate, idle)
 	if c := e.clients[key]; c != nil {
 		return c
 	}
-	c := clientFor(p)
+	c := clientFor(p, idle)
 	e.clients[key] = c
 	return c
 }
@@ -128,27 +137,6 @@ func cost(m Model, u Usage) int64 {
 	return int64(math.Ceil(v))
 }
 func estimateInput(body Object) int64 { return int64((len(raw(body))+2)/3 + 16) }
-
-// requestedMaxTokens 取客户端声明的输出上限，没写时为 0
-func requestedMaxTokens(o Object) int {
-	n := int(num(o, "max_tokens"))
-	if v := int(num(o, "max_completion_tokens")); v > 0 {
-		n = v
-	}
-	if v := int(num(o, "max_output_tokens")); v > 0 {
-		n = v
-	}
-	return n
-}
-
-// reserveCost 预留本次请求的最大花费。客户端没写输出上限时由上游决定，最多到模型上限，按上限预留
-func reserveCost(m Model, o Object) int64 {
-	n := min(requestedMaxTokens(o), m.MaxOutput)
-	if n < 1 {
-		n = m.MaxOutput
-	}
-	return cost(m, Usage{Input: estimateInput(o), Output: int64(n)})
-}
 
 type selection struct {
 	Model    Model
@@ -315,11 +303,13 @@ func containsImage(v any) bool {
 	}
 	return false
 }
-func (e *Engine) admit(s selection, key Principal, reqID, requested, p, session string, from client) (string, error) {
+func (e *Engine) admit(s selection, key Principal, reqID, requested, p, session string, from client) (_ string, rerr error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	h := e.state(s.Model.ID)
 	t := now()
+	// 准入被拒计入内存，路由实时面板据此回答「是不是被并发 / 冷却挡住了」
+	defer func() { h.reject(rerr, t) }()
 	if h.Cooldown > t {
 		return "", fail("UPSTREAM_COOLDOWN", "上游限流冷却中", 429)
 	}
@@ -408,6 +398,8 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 	if err := e.store.DB.Exec(`UPDATE requests SET status=?,http_status=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_tokens=?,write_tokens=?,cost_nano=?,cost_known=?,usage_mode=?,error_code=? WHERE id=?`, state, status, now()-start, u.Input, u.Output, u.Cache, u.Write, value, known, mode, code, id); err != nil {
 		slog.Error("request accounting write failed", "request_id", id, "model", s.Model.ID, "err", err)
 	}
+	e.rollup(id)
+	e.trackFailure(h, s.Model, state, code)
 	if session != "" && state == "success" {
 		// 冲突分支里的列要用本表限定。曾经误写成 requests.requests（另一张表），
 		// 导致整条语句编译失败、会话亲和记录一条都没写进去，而错误被丢弃因此无人察觉。
@@ -490,7 +482,10 @@ func (e *Engine) pruneOnce() {
 	}{
 		{"requests", "DELETE FROM requests WHERE started_at<?", now() - int64(s.RetentionDays)*86400000},
 		{"admin_sessions", "DELETE FROM admin_sessions WHERE expires_at<?", now()},
+		{"jobs", "DELETE FROM jobs WHERE updated_at<? AND status NOT IN ('queued','running')", now() - 30*86400000},
 		{"sessions", "DELETE FROM sessions WHERE updated_at<?", now() - int64(s.SessionTTLHours)*3600000},
+		// 汇总表很小，保留比请求明细长，历史用量不随明细一起清掉
+		{"usage_hourly", "DELETE FROM usage_hourly WHERE hour<?", (now() - 400*86400000) / 3600000},
 	} {
 		if err := e.store.DB.Exec(job.query, job.cutoff); err != nil {
 			slog.Error("retention cleanup failed", "table", job.name, "err", err)

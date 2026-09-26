@@ -18,6 +18,10 @@ WorkingDirectory=/var/lib/prism
 ExecStart=/usr/local/bin/prism-gateway --db /var/lib/prism/gateway.db
 Restart=on-failure
 RestartSec=5s
+# 停止时先交出监听与数据库锁，再等在途请求结束（后台「平滑停止等待」，默认 600 秒）。
+# 零中断部署：把本文件另存为 prism-gateway@.service，用 @a / @b 两个实例轮换——
+# 先 start 新实例（它会等锁），再 stop 旧实例；反代配置连接失败重试（Caddy: lb_try_duration）
+TimeoutStopSec=1900
 
 # 数据目录含主密钥，权限收紧
 UMask=0077

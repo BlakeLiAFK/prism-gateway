@@ -50,6 +50,31 @@ func ccExhausted(w Object) (label string, until int64) {
 	return label, until
 }
 
+// quotaWindows 把 Command Code / Z.AI 的窗口额度统一成 [{label, percent, reset_at}]，供额度预警使用。
+// Z.AI 的 MCP 调用次数（TIME_LIMIT）不影响模型推理，不计入。
+func quotaWindows(kind string, o Object) []any {
+	out := []any{}
+	add := func(label string, pct float64, reset int64) {
+		out = append(out, Object{"label": label, "percent": pct, "reset_at": reset})
+	}
+	switch kind {
+	case "commandcode":
+		w := ccWindows(o)
+		for _, x := range ccWindowLabels {
+			if v := obj(w[x.key]); v != nil && num(v, "cap") > 0 {
+				add(x.label, num(v, "used")/num(v, "cap")*100, ccReset(v["resetAt"]))
+			}
+		}
+	case "zai":
+		for _, v := range arr(obj(o["data"])["limits"]) {
+			if it := obj(v); str(it, "type") != "TIME_LIMIT" {
+				add(zaiWindow(it), num(it, "percentage"), ccReset(it["nextResetTime"]))
+			}
+		}
+	}
+	return out
+}
+
 // ccWindowFields 生成「已用 / 上限 · 多久后重置」明细
 func ccWindowFields(w Object) []any {
 	out := []any{}
@@ -125,6 +150,7 @@ func (a *App) checkWindows(p Provider) {
 			a.Engine.coolUntil(m.ID, until)
 		}
 	}
+	a.alert("quota", "quota:"+p.ID, fmt.Sprintf("%s 的额度窗口已用完，旗下模型冷却中，约 %s后恢复。", p.Name, durationText(until-now())))
 }
 
 // coolUntil 冷却到指定时刻。与响应头声明的耗尽冷却一样封顶 24 小时：

@@ -57,6 +57,15 @@ func (a *App) startSync(id string) (any, error) {
 }
 
 func (a *App) syncModels(ctx context.Context, p Provider, version int64) (any, error) {
+	items, err := a.upstreamModels(ctx, p)
+	if err != nil {
+		return nil, err
+	}
+	return a.applySyncedModels(p, version, items)
+}
+
+// upstreamModels 取上游 /models 列表的 data 数组
+func (a *App) upstreamModels(ctx context.Context, p Provider) ([]any, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(p.BaseURL, "/")+"/models", nil)
 	requestHeaders(req, &http.Request{Header: http.Header{}}, p, providerProtocol(p), "")
 	res, err := a.Engine.client(p).Do(req)
@@ -79,8 +88,12 @@ func (a *App) syncModels(ctx context.Context, p Provider, version int64) (any, e
 	if len(items) == 0 || len(items) > 2000 {
 		return nil, fail("INVALID_MODELS", "未识别到模型列表，或模型数量超过 2000；可在界面手动添加", 400)
 	}
+	return items, nil
+}
+
+func (a *App) applySyncedModels(p Provider, version int64, items []any) (any, error) {
 	added := 0
-	_, err = a.Store.Change(version, "provider.sync_models", p.ID, func(c *Config) error {
+	_, err := a.Store.Change(version, "provider.sync_models", p.ID, func(c *Config) error {
 		for _, v := range items {
 			v := obj(v)
 			up := str(v, "id")

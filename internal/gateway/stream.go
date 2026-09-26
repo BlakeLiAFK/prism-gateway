@@ -98,6 +98,11 @@ func meterFrame(f frame, p string, u *Usage) (terminal bool, err error) {
 	if typ == "error" || o["error"] != nil {
 		return false, errors.New("upstream error event")
 	}
+	if u.tap != nil {
+		if n := deltaChars(o, p, typ); n > 0 {
+			u.tap(n)
+		}
+	}
 	switch p {
 	case "chat":
 		extractUsage(obj(o["usage"]), p, u)

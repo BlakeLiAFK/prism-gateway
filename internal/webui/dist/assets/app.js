@@ -9,10 +9,12 @@ import {bindRoutes,routeActions} from './routes.js';
 import {modelEditor,models} from './models.js';
 import {bindModels,modelActions} from './models.js';
 import {usageActions} from './usage.js';
+import {alertActions,bindAlerts} from './alerts.js';
+import {scheduleActions,bindSchedule} from './schedule.js';
 import {bindPages,pageActions} from './views.js';
 
 // 各页面模块自带的动作；app.js 的 switch 未命中时按名字分发到这里
-const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions};
+const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions,...alertActions,...scheduleActions};
 
 export function login(){
 
@@ -79,6 +81,7 @@ export async function loadPage(animated=true){
       case 'jobs':action='job.list';
       break;
       case 'keys':action='apikey.list';
+      params={days:state.usageDays};
       break;
       case 'settings':action='system.info';
       break;
@@ -157,6 +160,7 @@ export function bindPage(){
   bindModels();
   bindRoutes();
   bindPages();
+  bindAlerts();bindSchedule();
 
  $('#model-search')?.addEventListener('input',ev=>{const pos=ev.target.selectionStart;state.modelQ=ev.target.value;renderPage(false);const x=$('#model-search');x.focus();x.setSelectionRange(pos,pos);});
 
@@ -172,7 +176,7 @@ export function bindPage(){
 
  $('#request-status')?.addEventListener('change',ev=>{state.requestStatus=ev.target.value;state.requestPage=1;loadPage(false).catch(report);});
 
- $('#settings-form')?.addEventListener('submit',async ev=>{ev.preventDefault();const f=ev.currentTarget,b=$('button[type=submit]',f);b.disabled=true;try{await save('settings.update',{settings:{app_name:val(f,'app_name'),default_route:val(f,'default_route'),retention_days:nval(f,'retention_days'),max_body_mb:nval(f,'max_body_mb'),global_concurrency:nval(f,'global_concurrency'),session_ttl_hours:nval(f,'session_ttl_hours'),allow_estimated_count:checked(f,'allow_estimated_count'),listen:val(f,'listen'),metrics_enabled:checked(f,'metrics_enabled'),log_level:val(f,'log_level'),log_format:val(f,'log_format')}},f);}catch(e){report(e);b.disabled=false;}});
+ $('#settings-form')?.addEventListener('submit',async ev=>{ev.preventDefault();const f=ev.currentTarget,b=$('button[type=submit]',f);b.disabled=true;try{await save('settings.update',{settings:{app_name:val(f,'app_name'),default_route:val(f,'default_route'),retention_days:nval(f,'retention_days'),max_body_mb:nval(f,'max_body_mb'),global_concurrency:nval(f,'global_concurrency'),session_ttl_hours:nval(f,'session_ttl_hours'),stream_idle_sec:nval(f,'stream_idle_sec'),shutdown_grace_sec:nval(f,'shutdown_grace_sec'),allow_estimated_count:checked(f,'allow_estimated_count'),listen:val(f,'listen'),metrics_enabled:checked(f,'metrics_enabled'),log_level:val(f,'log_level'),log_format:val(f,'log_format')}},f);}catch(e){report(e);b.disabled=false;}});
 
  $('#playground-form')?.addEventListener('submit',async ev=>{ev.preventDefault();preservePlayground();state.playBusy=true;renderPage(false);try{const args={protocol:state.playProtocol,model:state.lastPlayModel,session:state.playSession};
   if(state.playProtocol==='systemone'){args.state=state.playState;args.questions=buildQuestions(state.playQuestions||defaultQuestions());}

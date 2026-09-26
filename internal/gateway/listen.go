@@ -121,3 +121,12 @@ func (l *Listener) Addr() string {
 	}
 	return l.ln.Addr().String()
 }
+
+// Close 关闭当前监听：停止接新连接，已建立的连接继续由 http.Server 处理完
+func (l *Listener) Close() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.ln != nil {
+		l.ln.Close()
+	}
+}

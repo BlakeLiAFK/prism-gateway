@@ -9,8 +9,10 @@ import (
 
 func insertUsage(t *testing.T, h *harness, model, provider, status, role string, at, cost int64, known, demo bool) {
 	t.Helper()
+	id := randomID("att_")
+	defer h.a.Engine.rollup(id) // 与 finish 一样，结束的请求累加进汇总表
 	if err := h.s.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,duration_ms,input_tokens,output_tokens,cost_nano,cost_known,is_demo,reason,agent_role,usage_mode)
-		VALUES (?,?,?,?,?,?,'chat','chat','',?,?,100,10,5,?,?,?,'',?,'reported_tokens')`, randomID("att_"), "p", "k", model, model, provider, status, at, cost, known, demo, role); err != nil {
+		VALUES (?,?,?,?,?,?,'chat','chat','',?,?,100,10,5,?,?,?,'',?,'reported_tokens')`, id, "p", "k", model, model, provider, status, at, cost, known, demo, role); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -29,11 +31,11 @@ func TestModelStatsAggregates(t *testing.T) {
 	requireStatus(t, w, 200)
 	d := obj(out["data"])
 	a := obj(obj(d["models"])["a"])
-	if num(d, "days") != 7 || num(a, "requests") != 3 || num(a, "success") != 1 || num(a, "errors") != 1 || num(a, "cost") != 2 || num(a, "output_tokens") != 15 {
+	if num(d, "days") != 7 || num(a, "requests") != 2 || num(a, "success") != 1 || num(a, "errors") != 1 || num(a, "cost") != 2 || num(a, "output_tokens") != 10 {
 		t.Fatalf("模型 a 的 7 天汇总不对: %v", a)
 	}
 	p1 := obj(obj(d["providers"])["p1"])
-	if num(p1, "requests") != 4 || num(p1, "unpriced") != 1 || num(p1, "cost") != 2 {
+	if num(p1, "requests") != 3 || num(p1, "unpriced") != 1 || num(p1, "cost") != 2 {
 		t.Fatalf("供应商 p1 汇总不对: %v", p1)
 	}
 	if c := obj(obj(d["models"])["c"]); num(c, "cost") != 0 {
@@ -42,7 +44,7 @@ func TestModelStatsAggregates(t *testing.T) {
 	// 30 秒内同一时间范围走内存缓存，不重新聚合
 	insertUsage(t, h, "a", "p1", "success", "", n, 0, true, false)
 	_, out = h.rpc(t, "model.stats", Object{}, h.token)
-	if num(obj(obj(obj(out["data"])["models"])["a"]), "requests") != 3 {
+	if num(obj(obj(obj(out["data"])["models"])["a"]), "requests") != 2 {
 		t.Fatal("30 秒内应返回缓存的统计")
 	}
 }

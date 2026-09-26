@@ -121,3 +121,38 @@ func TestZaiExhaustedCoolsUntilReset(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// 空闲超时：一直在输出的流即使超过供应商超时也不打断；中途卡住的流按空闲超时断开
+func TestStreamIdleTimeout(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		steps, gap := 15, 100*time.Millisecond // 持续输出 1.5 秒，超过下面 1 秒的供应商超时
+		if r.URL.Path == "/stall" {
+			steps, gap = 1, 2*time.Second
+		}
+		for i := 0; i < steps; i++ {
+			io.WriteString(w, "data: x\n\n")
+			w.(http.Flusher).Flush()
+			time.Sleep(gap)
+		}
+	}))
+	defer up.Close()
+	c := clientFor(Provider{TimeoutSec: 1, AllowPrivate: true}, 300*time.Millisecond)
+	read := func(path string) (time.Duration, error) {
+		start := time.Now()
+		res, err := c.Get(up.URL + path)
+		if err != nil {
+			return 0, err
+		}
+		defer res.Body.Close()
+		_, err = io.ReadAll(res.Body)
+		return time.Since(start), err
+	}
+	if _, err := read("/steady"); err != nil {
+		t.Fatalf("持续输出的流不应被打断: %v", err)
+	}
+	d, err := read("/stall")
+	if err == nil || d > 1500*time.Millisecond {
+		t.Fatalf("卡住的流应在空闲超时后断开，实得 %v %v", d, err)
+	}
+}

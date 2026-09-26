@@ -73,7 +73,13 @@ curl http://127.0.0.1:8080/api.json \
 | `provider.delete` | `{version,id}` | 新 Config；存在引用则拒绝 |
 | `route.stats` | `{minutes?}` | 近 N 分钟（默认 60）各路由的实际落点 share（每个候选含 attempts、success、affinity 命中次数）与运行状态 runtime |
 | `route.live` | `{}` | 实时面板数据（缓存 5 秒）：全局并发；被路由引用的模型的并发、RPM、首字节、会话数、近 5 分钟请求与单请求 tok/s；各路由的并发 / 容量、近 60 秒 RPM 与输出 tok/s、近 5 分钟成功率、会话数、加权首字节 |
-| `model.stats` | `{days?}` | 近 N 天（默认 7，最多 90）按模型与供应商汇总的请求、成功、失败、tokens、估算花费、未计价次数、平均耗时、最后使用时间 |
+| `alert.get` | `{}` | 告警推送配置：`enabled`、`kind`（telegram / webhook）、`chat_id`、`has_secret`、`events`；不返回凭证 |
+| `alert.save` | `{enabled, kind, secret?, chat_id?, events:{quota,failures,route}}` | 保存告警配置；`kind` 为 `telegram`、`webhook`（POST JSON `{event,text,at}`）或 `webhook_text`（POST 纯文本正文）；`secret` 留空表示沿用已保存的 Token / 地址，加密存储 |
+| `alert.test` | `{}` | 立即发送一条测试消息 |
+| `schedule.get` | `{}` | 定时任务配置、每项最近一次运行 `runs.{task}:{at,status,result}`、推送通道是否可用 `channel` |
+| `schedule.save` | 配置字段（只覆盖提交的字段） | `utc_offset`、`{backup,quota,report,expiry,maintain,upstream}_enabled`、`backup_hour`、`backup_keep`、`quota_percent`、`quota_minutes`、`report_hour`、`expiry_days`、`maintain_hour`、`upstream_hours` |
+| `schedule.run` | `{"task":"backup"}` | 立即运行一次，返回 `{at,status,result}`；`result` 为空表示无事可做 |
+| `model.stats` | `{days?}` | 读取用量小时汇总表，近 N 天（默认 7，最多 90）按模型与供应商汇总的请求、成功、失败、tokens、估算花费、未计价次数、平均耗时、最后使用时间 |
 | `model.usage` | `{id, days?, tz_offset_min?}` | 单个模型近 N 天（默认 30）的每日用量（按浏览器时区分日）与按 `agent_role` 的拆分 |
 | `request.reprice` | `{model_id?, dry_run?}` | 按当前单价补录价格确认之前的请求：只处理 `usage_mode=reported_tokens`、未计价、非演示且模型已确认价格的记录，补录后标为 `reported_tokens_repriced`；`dry_run` 只返回条数与金额 |
 | `provider.reorder` | `{version,ids:[]}` | 新 Config；按 ids 顺序整体重排供应商，未列出的保持原序号 |
@@ -94,10 +100,12 @@ curl http://127.0.0.1:8080/api.json \
 | `settings.get` | `{}` | Settings |
 | `settings.update` | `{version,settings}` | 新 Config |
 | `quota.list` | `{}` | 每模型本地窗口预算 / 已用及在途预留 |
-| `apikey.list` | `{}` | Key 元数据，不返回 hash 或完整密钥 |
-| `apikey.create` | `{name,allowed:[]}` | id / key / warning；key 仅创建时返回 |
+| `apikey.list` | `{days?}` | 网关 Key 列表（不含密钥），每把附带近 N 天（默认 7）用量 `usage` |
+| `key.usage` | `{id, days?, tz_offset_min?}` | 单把 Key 近 N 天（默认 30）的每日用量、常用模型、常用路由与近 7 天来源 |
+| `apikey.create` | `{name,allowed:[]}` | id / key / warning；key 仅创建时返回；可带 `expires_at`（毫秒，0 为永久）、`limit_day` / `limit_month`（USD，近 24 小时 / 30 天）、`rpm` |
+| `apikey.update` | `{id, name, allowed?, expires_at?, limit_day?, limit_month?, rpm?}` | 修改 Key 的名称、授权范围、到期与限额，密钥不变，立即生效 |
 | `apikey.revoke` | `{id}` | 撤销结果 |
-| `session.list` | `{}` | 最近 200 个本地亲和映射 |
+| `session.list` | `{}` | 有效期内最近 200 个本地亲和映射，附 `expires_at` |
 | `session.delete` | `{id}` 或 `{model_id}` | 解除本地绑定（给 model_id 时解除该模型的全部绑定，返回 unbound 数量），不重置上游状态 |
 | `request.list` | `{page?,page_size?,q?,status?,provider_id?}` | items / page / page_size / total |
 | `request.get` | `{id}` | 单次上游尝试元数据 |

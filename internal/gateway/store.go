@@ -131,6 +131,8 @@ func (s *Store) migrate() error {
 			`CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, key_id TEXT NOT NULL, requested_model TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_tokens INTEGER NOT NULL DEFAULT 0, write_tokens INTEGER NOT NULL DEFAULT 0, cost_nano INTEGER NOT NULL DEFAULT 0, cost_known INTEGER NOT NULL DEFAULT 0, usage_mode TEXT NOT NULL DEFAULT 'reserved', reason TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', is_demo INTEGER NOT NULL DEFAULT 0, client_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', agent_role TEXT NOT NULL DEFAULT '')`,
 			`CREATE INDEX IF NOT EXISTS requests_model_time ON requests(model_id,started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_time ON requests(started_at)`,
+			`CREATE INDEX IF NOT EXISTS requests_key_time ON requests(key_id,started_at)`,
+			rollupTable,
 			`CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, action TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
 			`CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, action TEXT NOT NULL, target TEXT NOT NULL, version INTEGER NOT NULL, created_at INTEGER NOT NULL)`,
 			`INSERT OR IGNORE INTO meta VALUES ('schema_version','1')`,
@@ -140,6 +142,14 @@ func (s *Store) migrate() error {
 		}
 		for _, q := range qs {
 			if e := t.Exec(q); e != nil {
+				return e
+			}
+		}
+		// 汇总表是后加的：第一次建好时用历史请求回填一次，之后由 finish 逐条累加
+		if rows, e := t.Query("SELECT EXISTS(SELECT 1 FROM usage_hourly) n"); e != nil {
+			return e
+		} else if rows[0].Int("n") == 0 {
+			if e := t.Exec(rollupFill, 0); e != nil {
 				return e
 			}
 		}
@@ -155,6 +165,16 @@ func (s *Store) migrate() error {
 		for _, c := range []string{"client_ip", "user_agent", "agent_role"} {
 			if !have[c] {
 				if e := t.Exec("ALTER TABLE requests ADD COLUMN " + c + " TEXT NOT NULL DEFAULT ''"); e != nil {
+					return e
+				}
+			}
+		}
+		if cols, e = t.Query("PRAGMA table_info(api_keys)"); e != nil {
+			return e
+		}
+		if !slices.ContainsFunc(cols, func(c sqlite.Row) bool { return c.String("name") == "rpm" }) {
+			for _, q := range []string{"expires_at INTEGER NOT NULL DEFAULT 0", "limit_day REAL NOT NULL DEFAULT 0", "limit_month REAL NOT NULL DEFAULT 0", "rpm INTEGER NOT NULL DEFAULT 0"} {
+				if e := t.Exec("ALTER TABLE api_keys ADD COLUMN " + q); e != nil {
 					return e
 				}
 			}
@@ -254,15 +274,15 @@ func (s *Store) load() error {
 // Backup 用 SQLite 的 VACUUM INTO 生成一致性快照，不需要停进程，
 // 也不会漏掉 WAL 里尚未合并的内容。
 // 快照里的上游凭证仍是密文：恢复时必须配套原来的 .key，否则无法解密。
-func (s *Store) Backup() (string, int64, error) {
-	dbPath := strings.TrimSuffix(s.KeyPath, ".key")
-	dir := filepath.Join(filepath.Dir(dbPath), "backups")
+// prefix 区分自动备份（"auto-"）与手动备份（""），轮转只清理自动备份。
+func (s *Store) Backup(prefix string) (string, int64, error) {
+	dir := s.backupDir()
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		return "", 0, e
 	}
 	// 带毫秒，避免同一秒内连续备份撞名
 	stamp := strings.Replace(time.Now().Format("20060102-150405.000"), ".", "-", 1)
-	target := filepath.Join(dir, "gateway-"+stamp+".db")
+	target := filepath.Join(dir, "gateway-"+prefix+stamp+".db")
 	if _, e := os.Stat(target); e == nil {
 		return "", 0, fail("BACKUP_EXISTS", "同名备份已存在，请稍后重试", 409)
 	}
@@ -278,9 +298,13 @@ func (s *Store) Backup() (string, int64, error) {
 	return target, fi.Size(), nil
 }
 
+func (s *Store) backupDir() string {
+	return filepath.Join(filepath.Dir(strings.TrimSuffix(s.KeyPath, ".key")), "backups")
+}
+
 // Backups 列出已有快照，按时间倒序。
 func (s *Store) Backups() ([]any, error) {
-	dir := filepath.Join(filepath.Dir(strings.TrimSuffix(s.KeyPath, ".key")), "backups")
+	dir := s.backupDir()
 	entries, e := os.ReadDir(dir)
 	if e != nil {
 		if os.IsNotExist(e) {

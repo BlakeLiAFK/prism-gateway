@@ -3,8 +3,9 @@
 import {rpc} from './api.js';
 import {loadPage,renderPage} from './app.js';
 import {$,E,compact,dateTime,money,number,state} from './core.js';
-import {btn,confirm,getModel,toast} from './ui.js';
+import {btn,confirm,getModel,modelName,showDialog,toast} from './ui.js';
 import {modelEditor} from './models.js';
+import {keyEditor} from './views.js';
 
 const RANGES=[[1,'24 小时'],[7,'7 天'],[30,'30 天']];
 const ROLE_NAMES={'':'主线程 / 其他',main:'主线程',subagent:'子代理',auxiliary:'后台',compaction:'压缩',workflow:'工作流'};
@@ -99,7 +100,29 @@ async function repriceHistory(el){
   if(model_id)modelEditor(model_id);
 }
 
+// 访问密钥列表的用量单元格：u 是 apikey.list 附带的 usage，没有请求时为空
+export function keyUsageCell(k){
+  const u=k.usage;
+  if(!u?.requests)return '<span class="muted">—</span>';
+  return `<div class="cell-title">${number(u.requests)} 次 <span class="tiny muted">· 成功 ${rate(u)}</span></div><div class="cell-sub">${compact(tokens(u))} tokens · ${costText(u)}</div>`;
+}
+export const keyUsageHead=()=>`<th>用量 · ${rangeLabel()}</th>`;
+
+// Key 用量详情：近 30 天每日请求、常用模型与路由、近 7 天来源
+export function keyUsageDialog(id,name){
+  showDialog(`${name||id} · 用量`,'按小时汇总的本地统计；花费按已确认的单价估算，不是上游账单。',`<div id="key-usage-body"><div class="skeleton skeleton-line"></div><div class="skeleton skeleton-line" style="width:60%"></div></div>`,null,'',true);
+  rpc('key.usage',{id,days:30,tz_offset_min:new Date().getTimezoneOffset()}).then(d=>{
+    const el=$('#key-usage-body');if(!el)return;
+    const sum=d.daily.reduce((a,x)=>({requests:a.requests+x.requests,success:a.success+x.success,input_tokens:a.input_tokens+x.input_tokens,output_tokens:a.output_tokens+x.output_tokens,cost:a.cost+x.cost,unpriced:a.unpriced+(x.unpriced||0)}),{requests:0,success:0,input_tokens:0,output_tokens:0,cost:0,unpriced:0});
+    const list=(title,rows,label)=>rows.length?`<h3 class="key-usage-title">${title}</h3><div class="role-split">${rows.map(r=>{const pct=Math.round(r.requests/(sum.requests||1)*100);return `<div class="role-line"><span class="ellipsis" title="${E(r.id)}">${E(label(r.id))}</span><span class="role-bar"><i style="width:${Math.max(pct,2)}%"></i></span><b>${number(r.requests)} 次 · ${compact(r.tokens)} tokens</b></div>`;}).join('')}</div>`:'';
+    const src=d.sources.length?`<h3 class="key-usage-title">近 7 天来源</h3><div class="key-sources">${d.sources.map(s=>`<div><span class="mono">${E(s.ip||'—')}</span><span class="ellipsis muted" title="${E(s.agent)}">${E(s.agent||'—')}</span><b>${number(s.requests)} 次 · ${dateTime(s.last_used)}</b></div>`).join('')}</div>`:'';
+    el.innerHTML=sum.requests?`<div class="usage-summary"><div><strong>${number(sum.requests)}</strong><small>请求 · 成功 ${rate(sum)}</small></div><div><strong>${compact(tokens(sum))}</strong><small>tokens</small></div><div><strong>${costText(sum)}</strong><small>估算花费</small></div></div>${bars(d.daily)}${list('常用模型',d.models,modelName)}${list('常用路由 / 请求名',d.routes,x=>x)}${src}`:'<p class="small muted">近 30 天没有请求。</p>';
+  }).catch(e=>{const el=$('#key-usage-body');if(el)el.innerHTML=`<p class="small negative">${E(e.message||String(e))}</p>`;});
+}
+
 export const usageActions={
+  'key-usage':el=>keyUsageDialog(el.dataset.id,el.dataset.name),
+  'edit-key':el=>keyEditor(el.dataset.id),
   'reprice-history':repriceHistory,
   'usage-days':async el=>{state.usageDays=Number(el.dataset.value)||7;await loadPage(false);},
   'model-sort-usage':()=>{state.modelFilters={...state.modelFilters,sortUsage:!state.modelFilters.sortUsage};renderPage(false);}

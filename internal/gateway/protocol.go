@@ -49,6 +49,8 @@ type Usage struct {
 	Cache  int64
 	Write  int64
 	Known  bool
+	// tap 在流式片段到达时收到新增输出的字符数，供实时面板估算速度；可为空
+	tap func(chars int)
 }
 type Completion struct {
 	Blocks []Block

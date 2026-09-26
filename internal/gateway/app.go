@@ -26,14 +26,19 @@ type App struct {
 	workers    sync.WaitGroup
 	usageMu    sync.Mutex
 	usageCache map[string]usageCacheEntry
+	alerts     alerter
 	statsMu    sync.Mutex
 	statsCache map[int]statsCacheEntry
+	missing    missingModels
+	sched      scheduler
 }
 
 func NewApp(ctx context.Context, s *Store, ui http.Handler) *App {
 	a := &App{Store: s, Engine: NewEngine(s), UI: ui, Started: now(), Context: ctx, logins: map[string][]int64{}, usageCache: map[string]usageCacheEntry{}}
 	a.Engine.OnRateLimited = a.checkWindows
+	a.Engine.OnAlert = a.alert
 	go a.Engine.Prune(ctx)
+	go a.runSchedule(ctx)
 	return a
 }
 func (a *App) Wait() { a.workers.Wait(); a.Engine.Close() }
@@ -357,5 +362,5 @@ func (a *App) dashboard(p Object) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return Object{"summary": rows[0], "series": series, "top_models": top, "recent": recent, "quotas": quotas, "runtime": a.Engine.Health(), "config_version": a.Store.Config().Version, "range": hours, "uptime_ms": now() - a.Started}, nil
+	return Object{"summary": rows[0], "series": series, "top_models": top, "recent": recent, "quotas": quotas, "runtime": a.Engine.Health(), "config_version": a.Store.Config().Version, "range": hours, "uptime_ms": now() - a.Started, "missing_models": a.missingList(), "price_drift": a.driftList()}, nil
 }

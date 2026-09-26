@@ -303,36 +303,23 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		}
 		return r[0], nil
 	case "apikey.list":
-		return a.Store.DB.Query("SELECT id,name,prefix,enabled,allowed,created_at,last_used,revoked_at FROM api_keys ORDER BY created_at DESC")
+		return a.keyList(p)
 	case "apikey.create":
 		name := strings.TrimSpace(str(p, "name"))
 		if name == "" || len(name) > 120 {
 			return nil, fail("INVALID_PARAMS", "Key 名称不能为空且长度最多 120", 400)
 		}
-		allowed := []string{}
-		for _, v := range arr(p["allowed"]) {
-			s, ok := v.(string)
-			if !ok {
-				return nil, fail("INVALID_PARAMS", "allowed 应为字符串数组", 400)
-			}
-			exists := false
-			for _, x := range c.Models {
-				exists = exists || x.ID == s
-			}
-			for _, x := range c.Routes {
-				exists = exists || x.ID == s
-			}
-			for _, x := range c.Aliases {
-				exists = exists || x.ID == s
-			}
-			if !exists {
-				return nil, fail("INVALID_PARAMS", "授权目标不存在: "+s, 400)
-			}
-			allowed = append(allowed, s)
+		allowed, er := keyTargets(c, p)
+		if er != nil {
+			return nil, er
+		}
+		k, er := keyPolicyFrom(p)
+		if er != nil {
+			return nil, er
 		}
 		key := randomID("prism_sk_")
 		kid := randomID("key_")
-		er := a.Store.DB.Exec("INSERT INTO api_keys(id,name,prefix,digest,enabled,allowed,created_at) VALUES (?,?,?,?,1,?,?)", kid, name, key[:17], digest(key), raw(allowed), now())
+		er = a.Store.DB.Exec("INSERT INTO api_keys(id,name,prefix,digest,enabled,allowed,created_at,"+keyPolicyColumns+") VALUES (?,?,?,?,1,?,?,?,?,?,?)", kid, name, key[:17], digest(key), raw(allowed), now(), k.ExpiresAt, k.LimitDay, k.LimitMonth, k.RPM)
 		if er != nil {
 			return nil, er
 		}
@@ -346,7 +333,8 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		}
 		return Object{"id": id, "revoked": true}, er
 	case "session.list":
-		return a.Store.DB.Query("SELECT * FROM sessions ORDER BY updated_at DESC LIMIT 200")
+		ttl := int64(c.Settings.SessionTTLHours) * 3600000
+		return a.Store.DB.Query("SELECT *, updated_at+? expires_at FROM sessions WHERE updated_at>? ORDER BY updated_at DESC LIMIT 200", ttl, now()-ttl)
 	case "session.delete":
 		return a.deleteSessions(id, str(p, "model_id"))
 	case "request.list":
@@ -402,7 +390,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		json.Unmarshal(rr.Body.Bytes(), &result)
 		return Object{"status": rr.Code, "duration_ms": now() - t, "headers": rr.Header(), "response": result}, nil
 	case "backup.create":
-		path, size, er := a.Store.Backup()
+		path, size, er := a.Store.Backup("")
 		if er != nil {
 			return nil, er
 		}
@@ -424,7 +412,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			v := obj(v)
 			act := str(v, "action")
 			switch act {
-			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "quota.list", "provider.usage", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list", "route.stats", "model.stats", "model.usage":
+			case "config.get", "config.export", "backup.list", "system.info", "dashboard.get", "quota.list", "provider.usage", "provider.list", "model.list", "route.list", "request.list", "session.list", "job.list", "apikey.list", "route.stats", "model.stats", "model.usage", "key.usage":
 				data, er := a.call(ctx, act, obj(v["params"]))
 				if er != nil {
 					_, code, msg := errorParts(er)

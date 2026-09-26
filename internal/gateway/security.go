@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -32,7 +33,10 @@ func validateBaseURL(raw string, allowPrivate bool) error {
 func privateIP(ip net.IP) bool {
 	return ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() || ip.Equal(net.ParseIP("169.254.169.254"))
 }
-func clientFor(p Provider) *http.Client {
+
+// clientFor 建上游客户端。供应商超时只管到拿到响应头为止；响应体（尤其是持续几分钟的流式输出）
+// 不设总时长，改为连续 idle 没有数据才断开：还在输出就不打断，上游卡死也能及时释放并发名额
+func clientFor(p Provider, idle time.Duration) *http.Client {
 	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
 	tr := &http.Transport{MaxIdleConns: 20, MaxIdleConnsPerHost: 8, IdleConnTimeout: 60 * time.Second, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: time.Duration(p.TimeoutSec) * time.Second, DisableCompression: true, ForceAttemptHTTP2: true}
 	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -62,7 +66,50 @@ func clientFor(p Provider) *http.Client {
 		}
 		return nil, last
 	}
-	return &http.Client{Transport: tr, Timeout: time.Duration(p.TimeoutSec) * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &http.Client{Transport: idleTransport{tr, idle}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// idleTransport 给响应体加空闲计时：每读到数据就重置，超时则取消这次请求
+type idleTransport struct {
+	base http.RoundTripper
+	idle time.Duration
+}
+
+func (t idleTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithCancelCause(r.Context())
+	res, err := t.base.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		cancel(nil)
+		return nil, err
+	}
+	b := &idleBody{rc: res.Body, cancel: cancel, idle: t.idle}
+	b.timer = time.AfterFunc(t.idle, func() { cancel(errStreamIdle) })
+	res.Body = b
+	return res, nil
+}
+
+var errStreamIdle = errors.New("上游持续无数据，已按空闲超时断开")
+
+type idleBody struct {
+	rc     io.ReadCloser
+	timer  *time.Timer
+	cancel context.CancelCauseFunc
+	idle   time.Duration
+}
+
+func (b *idleBody) Read(p []byte) (int, error) {
+	n, err := b.rc.Read(p)
+	if n > 0 {
+		b.timer.Reset(b.idle)
+	}
+	return n, err
+}
+
+func (b *idleBody) Close() error {
+	b.timer.Stop()
+	err := b.rc.Close()
+	b.cancel(nil)
+	return err
 }
 
 // requestIsSecure 判断客户端到网关这一段是不是 HTTPS。
@@ -134,6 +181,10 @@ func requestHeaders(dst *http.Request, src *http.Request, p Provider, protocol, 
 	if dst.Header.Get("x-opencode-session") == "" && session != "" {
 		dst.Header.Set("x-opencode-session", session)
 	}
+	// OpenRouter 按 x-session-id 把同一会话固定到同一家上游厂商（闲置 10 分钟失效），缓存才能持续命中
+	if dst.Header.Get("x-session-id") == "" && session != "" {
+		dst.Header.Set("x-session-id", session)
+	}
 }
 
 // client 是一次调用的来源元数据：只有 IP 与 User-Agent，不含任何请求内容。
@@ -196,6 +247,9 @@ func (e *Engine) Authenticate(r *http.Request) (Principal, error) {
 	if err != nil {
 		return Principal{}, err
 	}
+	if k.p.Policy.expired() {
+		return Principal{}, fail("KEY_EXPIRED", "网关 API Key 已过期", 401)
+	}
 	// last_used 只用于界面展示，每把 Key 最多每分钟落库一次
 	e.keyMu.Lock()
 	t := now()
@@ -228,14 +282,15 @@ func (e *Engine) lookupKey(d string) (*cachedKey, error) {
 	if k := e.keys[d]; k != nil {
 		return k, nil
 	}
-	rows, err := e.store.DB.Query("SELECT id,allowed FROM api_keys WHERE digest=? AND enabled=1", d)
+	rows, err := e.store.DB.Query("SELECT id,allowed,"+keyPolicyColumns+" FROM api_keys WHERE digest=? AND enabled=1", d)
 	if err != nil {
 		return nil, err
 	}
 	if len(rows) == 0 {
 		return nil, fail("UNAUTHORIZED", "网关 API Key 无效或已撤销", 401)
 	}
-	k := &cachedKey{p: Principal{ID: rows[0].String("id")}}
+	r := rows[0]
+	k := &cachedKey{p: Principal{ID: r.String("id"), Policy: keyPolicy{ExpiresAt: r.Int("expires_at"), LimitDay: r.Float("limit_day"), LimitMonth: r.Float("limit_month"), RPM: int(r.Int("rpm"))}}}
 	if err = json.Unmarshal([]byte(rows[0].String("allowed")), &k.p.Allowed); err != nil {
 		return nil, err
 	}

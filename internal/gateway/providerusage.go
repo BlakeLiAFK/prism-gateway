@@ -204,6 +204,9 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 			out["exhausted_until"] = until
 		}
 	}
+	if p.Kind == "commandcode" || p.Kind == "zai" {
+		out["windows"] = quotaWindows(p.Kind, o)
+	}
 	headline, fields := parseUsage(p, o)
 	out["headline"] = headline
 	out["fields"] = fields

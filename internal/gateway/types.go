@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,7 +10,7 @@ import (
 	"time"
 )
 
-const Version = "1.23.0"
+const Version = "1.29.2"
 
 type Object = map[string]any
 
@@ -90,7 +91,21 @@ type Settings struct {
 	MetricsEnabled      bool   `json:"metrics_enabled"`
 	LogLevel            string `json:"log_level"`
 	LogFormat           string `json:"log_format"`
+	// ShutdownGraceSec 停止时等待在途请求结束的最长秒数；StreamIdleSec 上游连续多少秒没有数据就断开。0 表示默认
+	ShutdownGraceSec int `json:"shutdown_grace_sec"`
+	StreamIdleSec    int `json:"stream_idle_sec"`
 }
+
+// ShutdownGrace 返回平滑停止的等待时长，默认 10 分钟
+func (s Settings) ShutdownGrace() time.Duration {
+	return time.Duration(cmp.Or(s.ShutdownGraceSec, 600)) * time.Second
+}
+
+// StreamIdle 返回上游响应体的空闲超时，默认 120 秒
+func (s Settings) StreamIdle() time.Duration {
+	return time.Duration(cmp.Or(s.StreamIdleSec, 120)) * time.Second
+}
+
 type Config struct {
 	Version   int64      `json:"version"`
 	Providers []Provider `json:"providers"`
@@ -262,6 +277,9 @@ func (c Config) Validate() error {
 	s := c.Settings
 	if s.MaxBodyMB < 1 || s.MaxBodyMB > 32 || s.GlobalConcurrency < 1 || s.GlobalConcurrency > 512 || s.RetentionDays < 31 || s.RetentionDays > 3650 || s.SessionTTLHours < 1 || s.SessionTTLHours > 720 {
 		return errors.New("设置范围：body 1–32MB，并发 1–512，保留 31–3650 天，会话 1–720 小时")
+	}
+	if s.ShutdownGraceSec < 0 || s.ShutdownGraceSec > 1800 || s.StreamIdleSec < 0 || (s.StreamIdleSec > 0 && s.StreamIdleSec < 10) || s.StreamIdleSec > 1800 {
+		return errors.New("设置范围：平滑停止等待 0–1800 秒，流式空闲超时 10–1800 秒（0 为默认）")
 	}
 	// 空值表示沿用默认，兼容升级前写入的旧配置
 	if s.Listen != "" {

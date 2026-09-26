@@ -74,3 +74,26 @@ func TestRouteLive(t *testing.T) {
 		t.Error("5 秒内应返回缓存结果")
 	}
 }
+
+// 并发满导致所有候选准入被拒：客户端收到 429，请求日志留下 rejected 记录，实时面板计入拒绝次数
+func TestAdmissionRejectRecorded(t *testing.T) {
+	h := newHarness(t)
+	m := modelFixture("a", "chat")
+	m.Concurrency = 1
+	h.configure(t, "http://127.0.0.1:1", m)
+	h.change(t, func(c *Config) {
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"a", 10}}}}
+	})
+	h.a.Engine.mu.Lock()
+	h.a.Engine.state("a").Active = 1
+	h.a.Engine.mu.Unlock()
+	requireStatus(t, h.generate(t, "chat", requestFixture("chat", "auto")), 429)
+	rows, _ := h.s.DB.Query("SELECT error_code, usage_mode, requested_model FROM requests")
+	if len(rows) != 1 || rows[0].String("error_code") != "CONCURRENCY_LIMIT" || rows[0].String("usage_mode") != "rejected" {
+		t.Fatalf("应记录一条准入被拒: %v", rows)
+	}
+	_, out := h.rpc(t, "route.live", Object{}, h.token)
+	if n := num(obj(obj(obj(obj(out["data"])["models"])["a"])["rejected_5m"]), "CONCURRENCY_LIMIT"); n != 1 {
+		t.Fatalf("实时面板应计入 1 次并发拒绝，实得 %v", n)
+	}
+}

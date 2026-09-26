@@ -19,7 +19,7 @@ const repricedMode = "reported_tokens_repriced"
 func (a *App) reprice(p Object) (any, error) {
 	c := a.Store.Config()
 	model, dry := str(p, "model_id"), boolean(p, "dry_run")
-	rows, err := a.Store.DB.Query(`SELECT id, model_id, input_tokens, output_tokens, cache_tokens, write_tokens
+	rows, err := a.Store.DB.Query(`SELECT id, model_id, started_at, input_tokens, output_tokens, cache_tokens, write_tokens
 		FROM requests WHERE cost_known=0 AND usage_mode='reported_tokens' AND is_demo=0 AND (?='' OR model_id=?)`, model, model)
 	if err != nil {
 		return nil, err
@@ -29,6 +29,7 @@ func (a *App) reprice(p Object) (any, error) {
 		cost int64
 	}
 	items := []item{}
+	from := now()
 	perModel, skipped := Object{}, Object{}
 	for _, r := range rows {
 		m, ok := c.model(r.String("model_id"))
@@ -38,6 +39,7 @@ func (a *App) reprice(p Object) (any, error) {
 		}
 		v := cost(m, Usage{Input: r.Int("input_tokens"), Output: r.Int("output_tokens"), Cache: r.Int("cache_tokens"), Write: r.Int("write_tokens")})
 		items = append(items, item{r.String("id"), v})
+		from = min(from, r.Int("started_at"))
 		s := obj(perModel[m.ID])
 		if s == nil {
 			s = Object{"model_id": m.ID, "count": int64(0), "cost_nano": int64(0)}
@@ -64,7 +66,7 @@ func (a *App) reprice(p Object) (any, error) {
 				return err
 			}
 		}
-		return nil
+		return rebuildRollup(t, from)
 	})
 	if err != nil {
 		return nil, err

@@ -157,7 +157,13 @@ func main() {
 	}
 	fmt.Println("  监听地址、日志与其余运行设置都可在管理后台修改。按 Ctrl+C 停止。\n" + strings.Repeat("─", 62))
 	<-ctx.Done()
-	shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	// 先关监听、放开数据库锁，让新进程立即接手新请求；本进程再等在途请求结束。
+	// 流式回答常常持续几分钟，15 秒就强切会让客户端报错
+	app.Listen.Close()
+	unlock()
+	grace := s.Config().Settings.ShutdownGrace()
+	slog.Info("正在停止：不再接收新请求，等待在途请求结束", "grace", grace.String())
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), grace)
 	defer shutCancel()
 	if err = server.Shutdown(shutCtx); err != nil {
 		server.Close()

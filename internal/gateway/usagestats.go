@@ -57,7 +57,7 @@ func (a *App) modelStats(p Object) (any, error) {
 	a.statsMu.Lock()
 	defer a.statsMu.Unlock()
 	if c, ok := a.statsCache[days]; ok && now()-c.at < statsTTL {
-		return c.val, nil
+		return withMissing(c.val, a), nil
 	}
 	v, err := a.computeModelStats(days)
 	if err != nil {
@@ -67,12 +67,12 @@ func (a *App) modelStats(p Object) (any, error) {
 		a.statsCache = map[int]statsCacheEntry{}
 	}
 	a.statsCache[days] = statsCacheEntry{now(), v}
-	return v, nil
+	return withMissing(v, a), nil
 }
 
 func (a *App) computeModelStats(days int) (Object, error) {
-	rows, err := a.Store.DB.Query(`SELECT model_id, provider_id, `+usageColumns+`
-		FROM requests WHERE started_at >= ? GROUP BY model_id, provider_id`, now()-int64(days)*86400000)
+	rows, err := a.Store.DB.Query(`SELECT model_id, provider_id, `+rollupColumns+`
+		FROM usage_hourly WHERE hour >= ? GROUP BY model_id, provider_id`, sinceHour(days))
 	if err != nil {
 		return nil, err
 	}
@@ -143,4 +143,14 @@ func (a *App) modelUsage(id string, p Object) (any, error) {
 		return nil, err
 	}
 	return Object{"id": id, "days": days, "daily": daily, "roles": roles}, nil
+}
+
+// withMissing 在缓存的统计上附带上游检查的结论：下架与价格变动（这部分不缓存）
+func withMissing(v Object, a *App) Object {
+	out := Object{}
+	for k, x := range v {
+		out[k] = x
+	}
+	out["missing"], out["price_drift"] = a.missingList(), a.driftList()
+	return out
 }

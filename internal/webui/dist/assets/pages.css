@@ -24,3 +24,7 @@
   .usage-card-head{flex-wrap:wrap}
   .usage-head-tools{flex-basis:100%;justify-content:flex-end}
 }
+.alert-events{display:grid;gap:8px;margin-top:14px}.alert-events small{display:block;font-size:10px;color:var(--muted);margin-top:2px}
+
+.sched-zone{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--sub)}.sched-zone input{width:64px;min-height:30px}.sched-list{margin-top:10px}.sched-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;grid-template-areas:"check fields run" "last last last";gap:4px 16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line2)}.sched-row:last-child{border-bottom:0}.sched-row .checkline{grid-area:check;padding:0}.sched-row .checkline strong{font-size:12px;color:var(--text);font-weight:560}.sched-fields{grid-area:fields;display:flex;gap:10px}.sched-fields label{display:flex;flex-direction:column;gap:4px;font-size:10px;color:var(--muted)}.sched-fields input{width:96px;min-height:30px}.sched-run{grid-area:run}.sched-last{grid-area:last;padding-left:23px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:700px){.sched-row{grid-template-columns:1fr;grid-template-areas:"check" "fields" "last" "run"}.sched-fields,.sched-last,.sched-run{padding-left:23px}.sched-last{white-space:normal}}
