@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -75,4 +76,70 @@ func (a *App) taskFailureRate(c scheduleConfig) (string, error) {
 	}
 	a.markWarned("failure-rate", end+int64(c.FailureCooldownMinutes)*60000)
 	return text, nil
+}
+
+// taskKeyBudget 复用 Key 限额的滚动 24 小时 / 30 天口径，在达到上限前提醒。
+func (a *App) taskKeyBudget(c scheduleConfig) (string, error) {
+	rows, err := a.Store.DB.Query(`SELECT id,name,limit_day,limit_month FROM api_keys
+		WHERE enabled=1 AND (limit_day>0 OR limit_month>0) ORDER BY name`)
+	if err != nil {
+		return "", err
+	}
+	lines, keys := []string{}, []string{}
+	for _, key := range rows {
+		id := key.String("id")
+		day, month, err := a.Engine.keySpend(id)
+		if err != nil {
+			return "", err
+		}
+		for _, window := range []struct {
+			label string
+			days  int
+			spend float64
+			limit float64
+		}{{"近 24 小时", 1, day, key.Float("limit_day")}, {"近 30 天", 30, month, key.Float("limit_month")}} {
+			if window.limit <= 0 {
+				continue
+			}
+			percent := window.spend / window.limit * 100
+			warnKey := fmt.Sprintf("key-budget:%s:%dd:%g:%d", id, window.days, window.limit, c.KeyBudgetPercent)
+			if percent < float64(c.KeyBudgetPercent) || a.warned(warnKey) {
+				continue
+			}
+			unknown, estimated, err := a.keyBudgetKinds(id, window.days)
+			if err != nil {
+				return "", err
+			}
+			line := fmt.Sprintf("「%s」%s $%.2f / $%.2f（%.1f%%）", key.String("name"), window.label, window.spend, window.limit, percent)
+			if estimated > 0 || unknown > 0 {
+				line += fmt.Sprintf("；含 %d 次本地估算，%d 次费用未知，实际花费可能更高", estimated, unknown)
+			} else {
+				line += "；均为已记录实际费用"
+			}
+			lines, keys = append(lines, line), append(keys, warnKey)
+		}
+	}
+	if len(lines) == 0 {
+		return "", nil
+	}
+	text := "Key 预算预警\n" + strings.Join(lines, "\n")
+	if err = a.notify(text); err != nil {
+		return "", err
+	}
+	for _, key := range keys {
+		a.markWarned(key, now()+int64(c.KeyBudgetCooldownMinutes)*60000)
+	}
+	return text, nil
+}
+
+func (a *App) keyBudgetKinds(id string, days int) (unknown, estimated int64, err error) {
+	rows, err := a.Store.DB.Query(`SELECT
+		COALESCE(SUM(status IN ('success','unknown') AND cost_known=0),0) unknown,
+		COALESCE(SUM(cost_known=1 AND usage_mode!='reported_cost'),0) estimated
+		FROM requests WHERE key_id=? AND started_at>=? AND status!='running' AND is_demo=0`,
+		id, sinceHour(days)*3600000)
+	if err != nil {
+		return 0, 0, err
+	}
+	return rows[0].Int("unknown"), rows[0].Int("estimated"), nil
 }

@@ -17,37 +17,40 @@ import (
 )
 
 type scheduleConfig struct {
-	UTCOffset              int     `json:"utc_offset"`
-	BackupEnabled          bool    `json:"backup_enabled"`
-	BackupHour             int     `json:"backup_hour"`
-	BackupKeep             int     `json:"backup_keep"`
-	RemoteEnabled          bool    `json:"remote_enabled"`
-	RemoteMinutes          int     `json:"remote_minutes"`
-	RemoteKeep             int     `json:"remote_keep"`
-	QuotaEnabled           bool    `json:"quota_enabled"`
-	QuotaPercent           int     `json:"quota_percent"`
-	QuotaMinutes           int     `json:"quota_minutes"`
-	ReportEnabled          bool    `json:"report_enabled"`
-	ReportHour             int     `json:"report_hour"`
-	WeeklyEnabled          bool    `json:"weekly_enabled"`
-	WeeklyWeekday          int     `json:"weekly_weekday"` // 1 周一至 7 周日
-	WeeklyHour             int     `json:"weekly_hour"`
-	ExpiryEnabled          bool    `json:"expiry_enabled"`
-	ExpiryDays             int     `json:"expiry_days"`
-	MaintainEnabled        bool    `json:"maintain_enabled"`
-	MaintainHour           int     `json:"maintain_hour"`
-	UpstreamEnabled        bool    `json:"upstream_enabled"`
-	UpstreamHours          int     `json:"upstream_hours"`
-	PriceEnabled           bool    `json:"price_enabled"`
-	PriceHours             int     `json:"price_hours"`
-	SpendEnabled           bool    `json:"spend_enabled"`
-	SpendMultiple          float64 `json:"spend_multiple"`
-	SpendMinimum           float64 `json:"spend_minimum"`
-	FailureEnabled         bool    `json:"failure_enabled"`
-	FailureMinutes         int     `json:"failure_minutes"`
-	FailureMinSamples      int     `json:"failure_min_samples"`
-	FailurePercent         float64 `json:"failure_percent"`
-	FailureCooldownMinutes int     `json:"failure_cooldown_minutes"`
+	UTCOffset                int     `json:"utc_offset"`
+	BackupEnabled            bool    `json:"backup_enabled"`
+	BackupHour               int     `json:"backup_hour"`
+	BackupKeep               int     `json:"backup_keep"`
+	RemoteEnabled            bool    `json:"remote_enabled"`
+	RemoteMinutes            int     `json:"remote_minutes"`
+	RemoteKeep               int     `json:"remote_keep"`
+	QuotaEnabled             bool    `json:"quota_enabled"`
+	QuotaPercent             int     `json:"quota_percent"`
+	QuotaMinutes             int     `json:"quota_minutes"`
+	ReportEnabled            bool    `json:"report_enabled"`
+	ReportHour               int     `json:"report_hour"`
+	WeeklyEnabled            bool    `json:"weekly_enabled"`
+	WeeklyWeekday            int     `json:"weekly_weekday"` // 1 周一至 7 周日
+	WeeklyHour               int     `json:"weekly_hour"`
+	ExpiryEnabled            bool    `json:"expiry_enabled"`
+	ExpiryDays               int     `json:"expiry_days"`
+	MaintainEnabled          bool    `json:"maintain_enabled"`
+	MaintainHour             int     `json:"maintain_hour"`
+	UpstreamEnabled          bool    `json:"upstream_enabled"`
+	UpstreamHours            int     `json:"upstream_hours"`
+	PriceEnabled             bool    `json:"price_enabled"`
+	PriceHours               int     `json:"price_hours"`
+	SpendEnabled             bool    `json:"spend_enabled"`
+	SpendMultiple            float64 `json:"spend_multiple"`
+	SpendMinimum             float64 `json:"spend_minimum"`
+	FailureEnabled           bool    `json:"failure_enabled"`
+	FailureMinutes           int     `json:"failure_minutes"`
+	FailureMinSamples        int     `json:"failure_min_samples"`
+	FailurePercent           float64 `json:"failure_percent"`
+	FailureCooldownMinutes   int     `json:"failure_cooldown_minutes"`
+	KeyBudgetEnabled         bool    `json:"key_budget_enabled"`
+	KeyBudgetPercent         int     `json:"key_budget_percent"`
+	KeyBudgetCooldownMinutes int     `json:"key_budget_cooldown_minutes"`
 	// 免费模型自动维护：目标路由、上下文下限、是否要求 tools、是否开启丢弃推理内容、排除的上游 ID（逗号分隔）
 	FreeEnabled       bool   `json:"free_enabled"`
 	FreeHours         int    `json:"free_hours"`
@@ -62,7 +65,7 @@ type scheduleConfig struct {
 var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, RemoteMinutes: 60, RemoteKeep: 48, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
 	ReportHour: 9, WeeklyWeekday: 1, WeeklyHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6,
 	PriceHours: 24, SpendMultiple: 2, SpendMinimum: 10, FailureMinutes: 15, FailureMinSamples: 20, FailurePercent: 20, FailureCooldownMinutes: 60,
-	FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
+	KeyBudgetPercent: 80, KeyBudgetCooldownMinutes: 1440, FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
 
 type taskRun struct {
 	At     int64  `json:"at"`
@@ -118,6 +121,9 @@ var scheduledTasks = []scheduledTask{
 	{"failure", "失败率告警", func(c scheduleConfig, last, t time.Time) bool {
 		return c.FailureEnabled && t.Sub(last) >= 5*time.Minute
 	}, (*App).taskFailureRate},
+	{"key-budget", "Key 预算预警", func(c scheduleConfig, last, t time.Time) bool {
+		return c.KeyBudgetEnabled && t.Sub(last) >= time.Hour
+	}, (*App).taskKeyBudget},
 	{"free", "免费模型", func(c scheduleConfig, last, t time.Time) bool {
 		return c.FreeEnabled && t.Sub(last) >= time.Duration(c.FreeHours)*time.Hour
 	}, (*App).taskFreeModels},
@@ -203,6 +209,10 @@ func (c scheduleConfig) validate() error {
 		return fail("INVALID_PARAMS", "失败率阈值应在 1–100% 之间", 400)
 	case c.FailureCooldownMinutes < 5 || c.FailureCooldownMinutes > 10080:
 		return fail("INVALID_PARAMS", "失败率冷却应在 5–10080 分钟之间", 400)
+	case c.KeyBudgetPercent < 1 || c.KeyBudgetPercent > 100:
+		return fail("INVALID_PARAMS", "Key 预算预警阈值应在 1–100% 之间", 400)
+	case c.KeyBudgetCooldownMinutes < 5 || c.KeyBudgetCooldownMinutes > 43200:
+		return fail("INVALID_PARAMS", "Key 预算预警冷却应在 5–43200 分钟之间", 400)
 	case c.FreeHours < 1 || c.FreeHours > 168:
 		return fail("INVALID_PARAMS", "免费模型检查间隔应在 1–168 小时之间", 400)
 	case c.FreeMinContext < 0 || c.FreeMinContext > 10000000:
@@ -360,7 +370,7 @@ func (a *App) runTask(task scheduledTask, c scheduleConfig) taskRun {
 	} else if err != nil {
 		run.Status, run.Result = "failed", err.Error()
 		slog.Warn("scheduled task failed", "task", task.id, "err", err)
-		if task.id != "report" && task.id != "weekly" && task.id != "quota" && task.id != "spend" && task.id != "failure" && task.id != "expiry" {
+		if task.id != "report" && task.id != "weekly" && task.id != "quota" && task.id != "spend" && task.id != "failure" && task.id != "key-budget" && task.id != "expiry" {
 			if e := a.notify(task.name + "失败：" + err.Error()); e != nil {
 				slog.Debug("schedule failure notice not sent", "err", e)
 			}
