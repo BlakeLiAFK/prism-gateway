@@ -13,7 +13,8 @@ const TASKS=[
   ['weekly','每周周报','推送上一个完整周一至周日的请求数、成功率、估算花费与主要用量。错过设定时刻时会在重启后补跑。',[['weekly_weekday','推送星期 · 1周一…7周日',1,7],['weekly_hour','推送时刻 · 点',0,23]]],
   ['expiry','Key 到期提醒','每小时检查一次，设了到期时间的网关 Key 在到期前推送一次提醒。',[['expiry_days','提前天数',1,90]]],
   ['maintain','数据库维护','更新 SQLite 查询统计（PRAGMA optimize），并把 WAL 合并回主库后截断，防止 WAL 文件持续增大。',[['maintain_hour','执行时刻 · 点',0,23]]],
-  ['upstream','上游检查','对照上游模型列表，找出可能已下架的模型与价格变动；只提示，不自动修改。有新发现时推送。',[['upstream_hours','间隔 · 小时',1,168]]]
+  ['upstream','上游检查','对照上游模型列表，找出可能已下架的模型与价格变动；只提示，不自动修改。有新发现时推送。',[['upstream_hours','间隔 · 小时',1,168]]],
+  ['price','OpenRouter 价格同步','定时读取已启用 OpenRouter 供应商的公开模型价格，更新未锁定的本地模型；已锁定价格保持不变。',[['price_hours','间隔 · 小时',1,168]]]
 ];
 
 export const scheduleCard=()=>'<section class="card setting-card" id="schedule-card" ><h2>定时任务</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';

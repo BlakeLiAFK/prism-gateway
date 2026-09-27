@@ -38,6 +38,8 @@ type scheduleConfig struct {
 	MaintainHour    int  `json:"maintain_hour"`
 	UpstreamEnabled bool `json:"upstream_enabled"`
 	UpstreamHours   int  `json:"upstream_hours"`
+	PriceEnabled    bool `json:"price_enabled"`
+	PriceHours      int  `json:"price_hours"`
 	// 免费模型自动维护：目标路由、上下文下限、是否要求 tools、是否开启丢弃推理内容、排除的上游 ID（逗号分隔）
 	FreeEnabled       bool   `json:"free_enabled"`
 	FreeHours         int    `json:"free_hours"`
@@ -51,7 +53,7 @@ type scheduleConfig struct {
 // 自动备份、远程备份与每日日报默认关闭，由管理员自己开启
 var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, RemoteMinutes: 60, RemoteKeep: 48, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
 	ReportHour: 9, WeeklyWeekday: 1, WeeklyHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6,
-	FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
+	PriceHours: 24, FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
 
 type taskRun struct {
 	At     int64  `json:"at"`
@@ -98,6 +100,9 @@ var scheduledTasks = []scheduledTask{
 	{"upstream", "上游检查", func(c scheduleConfig, last, t time.Time) bool {
 		return c.UpstreamEnabled && t.Sub(last) >= time.Duration(c.UpstreamHours)*time.Hour
 	}, (*App).taskUpstream},
+	{"price", "价格同步", func(c scheduleConfig, last, t time.Time) bool {
+		return c.PriceEnabled && t.Sub(last) >= time.Duration(c.PriceHours)*time.Hour
+	}, (*App).taskPriceSync},
 	{"free", "免费模型", func(c scheduleConfig, last, t time.Time) bool {
 		return c.FreeEnabled && t.Sub(last) >= time.Duration(c.FreeHours)*time.Hour
 	}, (*App).taskFreeModels},
@@ -169,6 +174,8 @@ func (c scheduleConfig) validate() error {
 		return fail("INVALID_PARAMS", "到期提醒应提前 1–90 天", 400)
 	case c.UpstreamHours < 1 || c.UpstreamHours > 168:
 		return fail("INVALID_PARAMS", "上游检查间隔应在 1–168 小时之间", 400)
+	case c.PriceHours < 1 || c.PriceHours > 168:
+		return fail("INVALID_PARAMS", "价格同步间隔应在 1–168 小时之间", 400)
 	case c.FreeHours < 1 || c.FreeHours > 168:
 		return fail("INVALID_PARAMS", "免费模型检查间隔应在 1–168 小时之间", 400)
 	case c.FreeMinContext < 0 || c.FreeMinContext > 10000000:

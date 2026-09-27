@@ -54,6 +54,7 @@ type Model struct {
 	CachePrice    float64 `json:"cache_price"`
 	WritePrice    float64 `json:"write_price"`
 	PricingSet    bool    `json:"pricing_set"`
+	PriceLocked   bool    `json:"price_locked"`
 	Limit5h       float64 `json:"limit_5h"`
 	Limit7d       float64 `json:"limit_7d"`
 	Limit30d      float64 `json:"limit_30d"`
