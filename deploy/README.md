@@ -24,3 +24,11 @@
 ## Docker
 
 见仓库根目录 `Dockerfile`。镜像固定绑 `0.0.0.0:8080` 并带 `--allow-remote`，数据卷挂到 `/data`。
+
+## 交接发布与回滚
+
+在目标主机执行 `deploy/activate-release.sh <已上传二进制> <预期版本>`。脚本先校验版本、当前实例健康和数据库备份，串行交接 `prism-gateway@a` / `@b`。新实例健康检查或切换失败时，自动停新实例、恢复旧二进制、启动旧实例并验证旧版本；失败仍返回非零，不掩盖发布失败。
+
+默认二进制为 `/usr/local/bin/prism-gateway`，备份命令为 `/usr/local/bin/prism-backup.sh`，健康地址为 `http://127.0.0.1:8091/healthz`。测试环境可通过 `PRISM_BIN`、`PRISM_SERVICE_PREFIX`、`PRISM_BACKUP_COMMAND`、`PRISM_HEALTH_URL`、`PRISM_DEPLOY_LOCK` 覆盖部署路径；这些不是网关运行配置。部署锁为互斥目录，异常断电遗留时须确认没有部署进程后清理。
+
+回滚只恢复二进制，不自动回退业务数据库；不兼容的数据迁移须另定发布方案。`make check` 包含隔离脚本测试，覆盖成功、健康失败、启动失败和备份失败，不操作真实 systemd。

@@ -1,6 +1,6 @@
 GO ?= go
 BINARY := bin/prism-gateway
-.PHONY: build test race vet cover lint ui format check hooks release run clean
+.PHONY: build test race vet cover lint ui format deploy-test check hooks release run clean
 build:
 	mkdir -p bin
 	CGO_ENABLED=1 $(GO) build -trimpath -o $(BINARY) ./cmd/gateway
@@ -20,7 +20,9 @@ ui: build
 format:
 	@files="$$(gofmt -l cmd internal)" || exit $$?; \
 	if [ -n "$$files" ]; then printf "以下文件需要 gofmt：\n%s\n" "$$files"; exit 1; fi
-check: format vet lint cover ui
+deploy-test:
+	python3 scripts/test_release.py
+check: format vet lint cover ui deploy-test
 hooks:
 	cp scripts/hooks/pre-push scripts/hooks/pre-commit .git/hooks/
 	chmod +x .git/hooks/pre-push .git/hooks/pre-commit
