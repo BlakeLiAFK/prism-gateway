@@ -23,7 +23,7 @@ import urllib.request
 from pathlib import Path
 
 PAGES = ['overview', 'providers', 'models', 'routes', 'playground', 'usage',
-         'requests', 'sessions', 'jobs', 'keys', 'settings']
+         'requests', 'sessions', 'jobs', 'keys', 'audit', 'settings']
 
 
 def wait_ready(base, process, logpath):
@@ -209,6 +209,26 @@ def run_ui_checks(page, base, token, results):
     if page.locator('select[name="log_level"]').input_value() != 'warn':
         fail('设置保存后未回显新值')
     results.append('settings save round trip')
+
+    # 审计页筛选与清空，确认真实接口与事件绑定。
+    page.click('.nav-item[data-nav="audit"]')
+    page.wait_for_selector('#audit-filter')
+    page.fill('#audit-filter input[name="action"]', 'settings.update')
+    page.click('#audit-filter button[type="submit"]')
+    page.wait_for_timeout(350)
+    rows = page.locator('main tbody tr')
+    if rows.count() == 0 or any('settings.update' not in row.inner_text() for row in rows.all()):
+        fail('审计操作筛选未生效')
+    page.fill('#audit-filter input[name="q"]', 'no-such-audit-record')
+    page.click('#audit-filter button[type="submit"]')
+    page.wait_for_timeout(350)
+    if page.locator('main tbody tr').count() != 0:
+        fail('审计空结果筛选未生效')
+    page.click('[data-action="audit-clear"]')
+    page.wait_for_timeout(350)
+    if page.locator('main tbody tr').count() == 0:
+        fail('审计清除筛选未恢复记录')
+    results.append('audit filter and reset')
 
     # 移动端宽度不得产生横向滚动
     page.set_viewport_size({'width': 390, 'height': 844})

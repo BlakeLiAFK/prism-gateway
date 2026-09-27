@@ -12,10 +12,11 @@ import {usageActions} from './usage.js';
 import {alertActions,bindAlerts} from './alerts.js';
 import {scheduleActions,bindSchedule} from './schedule.js';
 import {backupActions,bindBackup} from './backup.js';
+import {auditParams,renderAudit,bindAudit,auditActions} from './audit.js';
 import {bindPages,pageActions} from './views.js';
 
 // 各页面模块自带的动作；app.js 的 switch 未命中时按名字分发到这里
-const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions,...alertActions,...scheduleActions,...backupActions};
+const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions,...alertActions,...scheduleActions,...backupActions,...auditActions};
 
 export function login(){
 
@@ -84,6 +85,7 @@ export async function loadPage(animated=true){
       case 'keys':action='apikey.list';
       params={days:state.usageDays};
       break;
+      case 'audit':action='audit.search'; params=auditParams(); break;
       case 'settings':action='system.info';
       break;
       default:break;
@@ -129,7 +131,7 @@ export function renderPage(animated=false){
   $$('[data-nav]').forEach(e=>e.classList.toggle('active',e.dataset.nav===state.page));
 
  const views={
-    overview:overview,providers:providers,models:models,routes:routes,playground:playground,usage:usage,requests:requests,sessions:sessions,jobs:jobs,keys:keys,settings:settings
+    overview:overview,providers:providers,models:models,routes:routes,playground:playground,usage:usage,requests:requests,sessions:sessions,jobs:jobs,keys:keys,audit:renderAudit,settings:settings
   };
 
  const paint=()=>{
@@ -156,6 +158,7 @@ export async function navigate(page){
 }
 
 export function bindPage(){
+  bindAudit();
 
   // 各页面模块自己的输入框、下拉框等事件
   bindModels();
@@ -466,12 +469,7 @@ export async function handleAction(el){
     }
     break;
 
- case 'audit':{
-      const rows=await rpc('audit.list');
-      showDialog('配置与安全审计','最近 200 条操作记录；不包含密钥正文。',`<pre>${E(json(rows))}</pre>`,null,'',true);
-      break;
-
-    }
+ case 'audit':await navigate('audit'); break;
 
  default:if(moduleActions[action]){
       await moduleActions[action](el,id);
