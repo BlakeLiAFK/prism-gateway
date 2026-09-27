@@ -236,4 +236,4 @@ OpenRouter 有效的 `usage.cost` 优先于本地价格估算，实际零费用�
 
 Cloudflare R2 已完成真实对象读写删除、数据库快照上传、下载与 SQLite 完整性验证；在线还原有本地自动化覆盖，未对生产库执行覆盖式还原。TypeSafe 已完成 choice、score、noul 三题型真实请求验证；其他云集成仍以各自实际验证记录为准。
 
-版本 1.32.0 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。
+版本 1.32.1 · MIT · 实际测试状态以 `docs/TEST_REPORT.md` 为准。

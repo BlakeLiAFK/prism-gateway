@@ -277,7 +277,7 @@ export function routeLiveBar(routeId){
   const pct=r?.capacity?Math.round((r.active||0)/r.capacity*100):0;
   const lead=r?.capacity&&pct>=80?(pct>=100?'error':'warn'):'';
   const sub=`全局 ${g?number(g.active||0):'—'} / ${g?number(g.limit||0):'—'}`;
-  return `<div class="route-live"><div class="live-grid">${liveItem(`${lv(r?.active)} <span class="live-sep">/</span> ${lv(r?.capacity)}`,'并发',lead,sub)}${r?.live_tok_s>0?liveItem(`${tokRate(r.live_tok_s)} <span class="live-unit">tok/s</span>`,'输出速度 · 实时估算','',`已完成请求 ${lv(r.tok_s,tokRate)} tok/s`):liveItem(`${lv(r?.tok_s,tokRate)} <span class="live-unit">tok/s</span>`,'输出速度 · 近 60 秒')}}${liveItem(lv(r?.rpm),'RPM')}${liveItem(rateText(r?.requests_5m,r?.success_5m),'成功率')}${liveItem(lv(r?.sessions),'会话')}${liveItem(lv(r?.ttfb_ms,v=>v>0?ms(v):'—'),'首字节')}</div><span class="live-tag" title="每 ${LIVE_INTERVAL/1000} 秒自动刷新路由与候选的实时数据"><i class="dot"></i>实时 · ${LIVE_INTERVAL/1000}s</span></div>`;
+  return `<div class="route-live"><div class="live-grid">${liveItem(`${lv(r?.active)} <span class="live-sep">/</span> ${lv(r?.capacity)}`,'并发',lead,sub)}${r?.live_tok_s>0?liveItem(`${tokRate(r.live_tok_s)} <span class="live-unit">tok/s</span>`,'输出速度 · 实时估算','',`已完成请求 ${lv(r.tok_s,tokRate)} tok/s`):liveItem(`${lv(r?.tok_s,tokRate)} <span class="live-unit">tok/s</span>`,'输出速度 · 近 60 秒')}${liveItem(lv(r?.rpm),'RPM')}${liveItem(rateText(r?.requests_5m,r?.success_5m),'成功率')}${liveItem(lv(r?.sessions),'会话')}${liveItem(lv(r?.ttfb_ms,v=>v>0?ms(v):'—'),'首字节')}</div><span class="live-tag" title="每 ${LIVE_INTERVAL/1000} 秒自动刷新路由与候选的实时数据"><i class="dot"></i>实时 · ${LIVE_INTERVAL/1000}s</span></div>`;
 }
 
 // 候选卡片上的一行实时指标：并发条 + 并发 / RPM / 速度 / 首字节 / 会话。

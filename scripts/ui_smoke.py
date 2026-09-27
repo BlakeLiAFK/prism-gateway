@@ -81,6 +81,29 @@ def run_ui_checks(page, base, token, results, artifacts=None):
             fail(f'{name} 页渲染为空')
         results.append(f'page: {name}')
 
+    # 指标网格只能包含六个指标，不能出现模板残留文本。
+    page.click('.nav-item[data-nav="routes"]')
+    page.wait_for_selector('.live-grid')
+    page.evaluate("""async () => {
+        const {state} = await import('/assets/core.js');
+        const {routeLiveBar} = await import('/assets/routes.js');
+        const original = state.live;
+        try {
+            for (const live of [null, {routes:{check:{tok_s:0}}}, {routes:{check:{live_tok_s:12,tok_s:8}}}]) {
+                state.live = live;
+                const host = document.createElement('div');
+                host.innerHTML = routeLiveBar('check');
+                const grid = host.querySelector('.live-grid');
+                const stray = [...grid.childNodes].filter(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim());
+                if (stray.length || grid.querySelectorAll('.live-item').length !== 6)
+                    throw new Error('路由实时指标含多余文本或指标缺失');
+            }
+        } finally { state.live = original; }
+    }""")
+    if artifacts:
+        page.screenshot(path=str(artifacts / 'routes-desktop.png'), full_page=True)
+    results.append('route live metrics clean in all states')
+
     # 命令面板与主题切换是全局交互，容易在模块拆分时漏掉绑定
     page.keyboard.press('Meta+k')
     page.wait_for_timeout(250)
