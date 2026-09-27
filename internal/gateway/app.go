@@ -24,6 +24,7 @@ type App struct {
 	loginMu    sync.Mutex
 	logins     map[string][]int64
 	workers    sync.WaitGroup
+	background sync.WaitGroup
 	usageMu    sync.Mutex
 	usageCache map[string]usageCacheEntry
 	alerts     alerter
@@ -37,11 +38,13 @@ func NewApp(ctx context.Context, s *Store, ui http.Handler) *App {
 	a := &App{Store: s, Engine: NewEngine(s), UI: ui, Started: now(), Context: ctx, logins: map[string][]int64{}, usageCache: map[string]usageCacheEntry{}}
 	a.Engine.OnRateLimited = a.checkWindows
 	a.Engine.OnAlert = a.alert
-	go a.Engine.Prune(ctx)
-	go a.runSchedule(ctx)
+	a.resetOnStart()
+	a.background.Add(2)
+	go func() { defer a.background.Done(); a.Engine.Prune(ctx) }()
+	go func() { defer a.background.Done(); a.runSchedule(ctx) }()
 	return a
 }
-func (a *App) Wait() { a.workers.Wait(); a.Engine.Close() }
+func (a *App) Wait() { a.background.Wait(); a.workers.Wait(); a.Engine.Close() }
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Referrer-Policy", "same-origin")

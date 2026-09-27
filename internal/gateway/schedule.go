@@ -250,7 +250,6 @@ func (a *App) markWarned(key string, until int64) {
 
 // runSchedule 每分钟检查一次到期任务
 func (a *App) runSchedule(ctx context.Context) {
-	a.resetOnStart()
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
 	for {
