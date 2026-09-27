@@ -57,7 +57,7 @@ def enable_demo(base, token):
     return rpc
 
 
-def run_ui_checks(page, base, token, results):
+def run_ui_checks(page, base, token, results, artifacts=None):
     errors = []
 
     def fail(message):
@@ -121,6 +121,18 @@ def run_ui_checks(page, base, token, results):
     page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
     page.wait_for_timeout(200)
     results.append('model editor capability toggles')
+    page.locator('[data-action="edit-model"]').first.click()
+    page.wait_for_selector('input[name="price_locked"]')
+    page.check('input[name="price_locked"]')
+    page.locator('dialog button[type="submit"]').click()
+    page.wait_for_timeout(400)
+    page.locator('[data-action="edit-model"]').first.click()
+    page.wait_for_selector('input[name="price_locked"]')
+    if not page.locator('input[name="price_locked"]').is_checked():
+        fail('模型价格锁保存未生效')
+    page.click('[data-action="close-dialog"]')
+    results.append('model price lock persists')
+
 
     # 路由编辑器的候选搜索：模型多起来之后这是唯一能用的定位方式
     page.click('.nav-item[data-nav="routes"]')
@@ -210,6 +222,37 @@ def run_ui_checks(page, base, token, results):
         fail('设置保存后未回显新值')
     results.append('settings save round trip')
 
+    # 新定时任务参数必须经过界面保存、刷新后仍保持。
+    page.click('[data-action="settings-tab"][data-value="schedule"]')
+    page.wait_for_selector('[name="weekly_hour"]')
+    fields = {'weekly_hour': '10', 'weekly_weekday': '2', 'price_hours': '12',
+              'spend_multiple': '3', 'spend_minimum': '20', 'failure_minutes': '10',
+              'failure_min_samples': '25', 'failure_percent': '30',
+              'failure_cooldown_minutes': '90', 'key_budget_percent': '85',
+              'key_budget_cooldown_minutes': '720'}
+    for name, value in fields.items():
+        page.fill(f'#schedule-card [name="{name}"]', value)
+    toggles = ('weekly_enabled', 'price_enabled', 'spend_enabled', 'failure_enabled', 'key_budget_enabled')
+    for name in toggles:
+        page.check(f'#schedule-card [name="{name}"]')
+    page.click('[data-action="schedule-save"]')
+    page.wait_for_timeout(400)
+    page.reload(wait_until='networkidle')
+    page.click('[data-action="settings-tab"][data-value="schedule"]')
+    page.wait_for_selector('[name="weekly_hour"]')
+    for name, value in fields.items():
+        if page.locator(f'#schedule-card [name="{name}"]').input_value() != value:
+            fail(f'定时任务字段 {name} 未持久化')
+    for name in toggles:
+        if not page.locator(f'#schedule-card [name="{name}"]').is_checked():
+            fail(f'定时任务开关 {name} 未持久化')
+        page.uncheck(f'#schedule-card [name="{name}"]')
+    page.click('[data-action="schedule-save"]')
+    page.wait_for_timeout(300)
+    if artifacts:
+        page.screenshot(path=str(artifacts / 'schedule-desktop.png'), full_page=True)
+    results.append('new scheduled task settings persist')
+
     # 审计页筛选与清空，确认真实接口与事件绑定。
     page.click('.nav-item[data-nav="audit"]')
     page.wait_for_selector('#audit-filter')
@@ -229,6 +272,8 @@ def run_ui_checks(page, base, token, results):
     if page.locator('main tbody tr').count() == 0:
         fail('审计清除筛选未恢复记录')
     results.append('audit filter and reset')
+    if artifacts:
+        page.screenshot(path=str(artifacts / 'audit-desktop.png'), full_page=True)
 
     # 移动端宽度不得产生横向滚动
     page.set_viewport_size({'width': 390, 'height': 844})
@@ -237,6 +282,28 @@ def run_ui_checks(page, base, token, results):
     if overflow > 0:
         fail(f'390px 宽度下横向溢出 {overflow}px')
     results.append('responsive 390px')
+    if artifacts:
+        page.screenshot(path=str(artifacts / 'audit-mobile.png'), full_page=True)
+    for target in ('settings', 'models', 'routes'):
+        page.goto(base + '/#' + target, wait_until='networkidle')
+        page.wait_for_timeout(400)
+        if target == 'settings':
+            page.click('[data-action="settings-tab"][data-value="schedule"]')
+            page.wait_for_selector('[name="weekly_hour"]')
+        overflow = page.evaluate('document.documentElement.scrollWidth - document.documentElement.clientWidth')
+        if overflow > 0:
+            fail(f'{target} 在390px横向溢出 {overflow}px')
+        if artifacts:
+            page.screenshot(path=str(artifacts / (target + '-mobile.png')), full_page=True)
+    page.emulate_media(reduced_motion='reduce')
+    page.goto(base + '/#audit', wait_until='networkidle')
+    page.wait_for_selector('#audit-filter')
+    page.locator('#audit-filter input[name="q"]').focus()
+    page.keyboard.press('Tab')
+    if page.evaluate('document.activeElement.name') != 'action':
+        fail('审计筛选键盘顺序错误')
+    results.append('mobile pages and reduced-motion keyboard navigation')
+
 
     if errors:
         raise AssertionError('页面产生 console 错误: ' + ' | '.join(errors[:5]))
@@ -262,7 +329,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='./bin/prism-gateway')
     parser.add_argument('--headed', action='store_true')
+    parser.add_argument('--artifacts', type=Path)
     args = parser.parse_args()
+    if args.artifacts:
+        args.artifacts.mkdir(parents=True, exist_ok=True)
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -292,7 +362,7 @@ def main():
                 browser = p.chromium.launch(headless=not args.headed)
                 page = browser.new_page(viewport={'width': 1280, 'height': 900})
                 try:
-                    run_ui_checks(page, base, token, results)
+                    run_ui_checks(page, base, token, results, args.artifacts)
                 finally:
                     browser.close()
         finally:
