@@ -329,6 +329,7 @@ func (a *App) resetOnStart() {
 	defer a.sched.mu.Unlock()
 	if err := a.loadScheduleState(); err != nil {
 		slog.Error("schedule state load failed", "err", err)
+		return
 	}
 	for id := range runOnStart {
 		delete(a.sched.state.Runs, id)
