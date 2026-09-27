@@ -35,11 +35,20 @@ type scheduleConfig struct {
 	MaintainHour    int  `json:"maintain_hour"`
 	UpstreamEnabled bool `json:"upstream_enabled"`
 	UpstreamHours   int  `json:"upstream_hours"`
+	// 免费模型自动维护：目标路由、上下文下限、是否要求 tools、是否开启丢弃推理内容、排除的上游 ID（逗号分隔）
+	FreeEnabled       bool   `json:"free_enabled"`
+	FreeHours         int    `json:"free_hours"`
+	FreeRoute         string `json:"free_route"`
+	FreeMinContext    int    `json:"free_min_context"`
+	FreeRequireTools  bool   `json:"free_require_tools"`
+	FreeDropReasoning bool   `json:"free_drop_reasoning"`
+	FreeExclude       string `json:"free_exclude"`
 }
 
 // 自动备份、远程备份与每日日报默认关闭，由管理员自己开启
 var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, RemoteMinutes: 60, RemoteKeep: 48, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
-	ReportHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6}
+	ReportHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6,
+	FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
 
 type taskRun struct {
 	At     int64  `json:"at"`
@@ -83,6 +92,9 @@ var scheduledTasks = []scheduledTask{
 	{"upstream", "上游检查", func(c scheduleConfig, last, t time.Time) bool {
 		return c.UpstreamEnabled && t.Sub(last) >= time.Duration(c.UpstreamHours)*time.Hour
 	}, (*App).taskUpstream},
+	{"free", "免费模型", func(c scheduleConfig, last, t time.Time) bool {
+		return c.FreeEnabled && t.Sub(last) >= time.Duration(c.FreeHours)*time.Hour
+	}, (*App).taskFreeModels},
 }
 
 // 这些任务的结论只在内存里（如下架清单），进程启动后要先跑一次，不沿用上次运行时间
@@ -140,6 +152,12 @@ func (c scheduleConfig) validate() error {
 		return fail("INVALID_PARAMS", "到期提醒应提前 1–90 天", 400)
 	case c.UpstreamHours < 1 || c.UpstreamHours > 168:
 		return fail("INVALID_PARAMS", "上游检查间隔应在 1–168 小时之间", 400)
+	case c.FreeHours < 1 || c.FreeHours > 168:
+		return fail("INVALID_PARAMS", "免费模型检查间隔应在 1–168 小时之间", 400)
+	case c.FreeMinContext < 0 || c.FreeMinContext > 10000000:
+		return fail("INVALID_PARAMS", "最小上下文应在 0–10000000 之间", 400)
+	case !validID(c.FreeRoute):
+		return fail("INVALID_PARAMS", "请填写免费模型要加入的路由 ID", 400)
 	}
 	return nil
 }

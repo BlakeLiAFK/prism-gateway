@@ -77,7 +77,7 @@ curl http://127.0.0.1:8080/api.json \
 | `alert.save` | `{enabled, kind, secret?, chat_id?, events:{quota,failures,route}}` | 保存告警配置；`kind` 为 `telegram`、`webhook`（POST JSON `{event,text,at}`）或 `webhook_text`（POST 纯文本正文）；`secret` 留空表示沿用已保存的 Token / 地址，加密存储 |
 | `alert.test` | `{}` | 立即发送一条测试消息 |
 | `schedule.get` | `{}` | 定时任务配置、每项最近一次运行 `runs.{task}:{at,status,result}`、推送通道是否可用 `channel` |
-| `schedule.save` | 配置字段（只覆盖提交的字段） | `utc_offset`、`{backup,quota,report,expiry,maintain,upstream}_enabled`、`backup_hour`、`backup_keep`、`quota_percent`、`quota_minutes`、`report_hour`、`expiry_days`、`maintain_hour`、`upstream_hours` |
+| `schedule.save` | 配置字段（只覆盖提交的字段） | `utc_offset`、`{backup,quota,report,expiry,maintain,upstream}_enabled`、`backup_hour`、`backup_keep`、`quota_percent`、`quota_minutes`、`report_hour`、`expiry_days`、`maintain_hour`、`upstream_hours`、`free_enabled`、`free_hours`、`free_route`、`free_min_context`、`free_require_tools`、`free_drop_reasoning`、`free_exclude`（逗号分隔的上游 ID） |
 | `schedule.run` | `{"task":"backup"}` | 立即运行一次，返回 `{at,status,result}`；`result` 为空表示无事可做 |
 | `model.stats` | `{days?}` | 读取用量小时汇总表，近 N 天（默认 7，最多 90）按模型与供应商汇总的请求、成功、失败、tokens、估算花费、未计价次数、平均耗时、最后使用时间 |
 | `model.usage` | `{id, days?, tz_offset_min?}` | 单个模型近 N 天（默认 30）的每日用量（按浏览器时区分日）与按 `agent_role` 的拆分 |
