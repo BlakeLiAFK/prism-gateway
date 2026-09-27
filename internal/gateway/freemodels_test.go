@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// 上游列表：路径里带 openrouter.ai，让供应商被识别为 OpenRouter
+// 上游列表使用显式 OpenRouter 类型，测试服务器只负责返回模型数据。
 const freeListJSON = `{"data":[
  {"id":"v/new-a:free","name":"New A","created":300,"context_length":262144,"pricing":{"prompt":"0","completion":"0"},"supported_parameters":["tools","reasoning"]},
  {"id":"v/new-b:free","name":"New B","created":400,"context_length":1000000,"pricing":{"prompt":"0","completion":"0"},"supported_parameters":["tools"]},
@@ -37,7 +37,7 @@ func freeHarness(t *testing.T) (*harness, *atomic.Bool) {
 		return m
 	}
 	h.change(t, func(c *Config) {
-		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", Kind: "custom", BaseURL: up.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
+		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", Kind: "openrouter", BaseURL: up.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
 		c.Models = []Model{
 			orm("lite-old", "v/old:free", true),    // 在路由里、上游已下架 → 停用
 			orm("lite-back", "v/back:free", false), // 在路由里、停用、上游又出现 → 重新启用

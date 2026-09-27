@@ -36,7 +36,7 @@ func providerUsageURL(p Provider) (addr string, ok bool, note string) {
 	case p.Kind == "deepseek" || strings.Contains(host, "deepseek.com"):
 		// DeepSeek 的余额接口挂在根路径，不在 /v1 下
 		return strings.TrimSuffix(base, "/v1") + "/user/balance", true, ""
-	case strings.Contains(host, "openrouter.ai"):
+	case isOpenRouter(p):
 		return "https://openrouter.ai/api/v1/credits", true, ""
 	case p.Kind == "opencode":
 		return base + "/usage", true, ""
@@ -299,7 +299,7 @@ func parseUsage(p Provider, o Object) (string, []any) {
 	if p.Kind == "openai" || p.Kind == "anthropic" {
 		return fmt.Sprintf("本月 $%.2f", monthCost(p.Kind, o)), nil
 	}
-	if strings.Contains(host, "openrouter.ai") {
+	if isOpenRouter(p) {
 		d := obj(o["data"])
 		total, used := num(d, "total_credits"), num(d, "total_usage")
 		return fmt.Sprintf("$%.2f", total-used), []any{

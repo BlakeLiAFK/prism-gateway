@@ -21,7 +21,7 @@ var errNoChange = errors.New("no change")
 
 func openRouterProvider(c Config) (Provider, bool) {
 	for _, p := range c.Providers {
-		if p.Enabled && strings.Contains(strings.ToLower(p.BaseURL), "openrouter.ai") {
+		if p.Enabled && isOpenRouter(p) {
 			return p, true
 		}
 	}

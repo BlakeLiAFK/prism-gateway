@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,11 +61,10 @@ func TestOpenRouterReportedCostAccounting(t *testing.T) {
 			h := newHarness(t)
 			m := modelFixture("m", "chat")
 			m.PricingSet, m.InputPrice, m.OutputPrice = true, 1, 2
-			baseURL := up.URL
+			h.configure(t, up.URL, m)
 			if tc.openRouter {
-				baseURL += "/openrouter.ai/api/v1"
+				h.change(t, func(c *Config) { c.Providers[0].Kind = "openrouter" })
 			}
-			h.configure(t, baseURL, m)
 			body := requestFixture(tc.client, "m")
 			body["stream"] = tc.stream
 			w := h.generate(t, tc.client, body)
@@ -89,7 +89,7 @@ func TestReportedCostIsNotRepriced(t *testing.T) {
 	h := newHarness(t)
 	m := modelFixture("m", "chat")
 	m.PricingSet, m.InputPrice, m.OutputPrice = true, 1, 2
-	s := selection{Model: m, Provider: Provider{ID: "p_test", BaseURL: "https://openrouter.ai/api/v1"}}
+	s := selection{Model: m, Provider: Provider{ID: "p_test", Kind: "openrouter"}}
 	id, err := h.a.Engine.admit(s, Principal{ID: "k"}, "req", "m", "chat", "", client{})
 	if err != nil {
 		t.Fatal(err)
@@ -104,5 +104,65 @@ func TestReportedCostIsNotRepriced(t *testing.T) {
 	}
 	if rows[0].Int("cost_nano") != 900000000 || rows[0].String("usage_mode") != "reported_cost" {
 		t.Fatalf("reported cost was overwritten: %+v", rows)
+	}
+}
+
+func TestReportedCostSurvivesCrossProtocolConversionFailure(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"gen-1","object":"chat.completion","model":"upstream-m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok","reasoning":"internal"}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"cost":0.125}}`)
+	}))
+	defer up.Close()
+
+	h := newHarness(t)
+	h.configure(t, up.URL, modelFixture("m", "chat"))
+	h.change(t, func(c *Config) { c.Providers[0].Kind = "openrouter" })
+	w := h.generate(t, "messages", requestFixture("messages", "m"))
+	requireStatus(t, w, http.StatusBadGateway)
+
+	rows, err := h.s.DB.Query("SELECT status,error_code,cost_nano,cost_known,usage_mode FROM requests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].String("status") != "error" || rows[0].String("error_code") != "UPSTREAM_INCOMPATIBLE" || rows[0].Int("cost_nano") != 125000000 || rows[0].Int("cost_known") != 1 || rows[0].String("usage_mode") != "reported_cost" {
+		t.Fatalf("conversion failure must retain reported cost: %+v", rows)
+	}
+}
+
+func TestReportedCostSurvivesClientWriteFailure(t *testing.T) {
+	h := newHarness(t)
+	m := modelFixture("m", "chat")
+	s := selection{Model: m, Provider: Provider{ID: "p_test", Kind: "openrouter"}}
+	id, err := h.a.Engine.admit(s, Principal{ID: "k"}, "req", "m", "chat", "", client{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.a.Engine.finish(s, id, "", "k", Usage{ReportedCostNano: 750000000, ReportedCostKnown: true}, 499, errors.New("client write failed"), now())
+	rows, err := h.s.DB.Query("SELECT status,error_code,cost_nano,cost_known,usage_mode FROM requests WHERE id=?", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].String("status") != "error" || rows[0].String("error_code") != "CLIENT_CANCELED" || rows[0].Int("cost_nano") != 750000000 || rows[0].Int("cost_known") != 1 || rows[0].String("usage_mode") != "reported_cost" {
+		t.Fatalf("client write failure must retain reported cost: %+v", rows)
+	}
+}
+
+func TestOpenRouterIdentityRejectsLookalikeHostsAndPaths(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		p    Provider
+		want bool
+	}{
+		{"explicit-kind", Provider{Kind: "openrouter", BaseURL: "http://127.0.0.1:8080"}, true},
+		{"official-host", Provider{Kind: "custom", BaseURL: "https://openrouter.ai/api/v1"}, true},
+		{"lookalike-domain", Provider{Kind: "custom", BaseURL: "https://evilopenrouter.ai/api/v1"}, false},
+		{"host-suffix", Provider{Kind: "custom", BaseURL: "https://openrouter.ai.example.com/api/v1"}, false},
+		{"path-spoof", Provider{Kind: "custom", BaseURL: "https://example.com/openrouter.ai/api/v1"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isOpenRouter(tc.p); got != tc.want {
+				t.Fatalf("isOpenRouter(%+v)=%v want %v", tc.p, got, tc.want)
+			}
+		})
 	}
 }

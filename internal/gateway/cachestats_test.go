@@ -98,7 +98,8 @@ func TestReportedCostWithoutTokensDoesNotCreateCacheSample(t *testing.T) {
 	h := newHarness(t)
 	up := cacheStatsUpstream(t, "chat", Object{"cost": 0.1})
 	m := modelFixture("m", "chat")
-	h.configure(t, up.URL+"/openrouter.ai/api/v1", m)
+	h.configure(t, up.URL, m)
+	h.change(t, func(c *Config) { c.Providers[0].Kind = "openrouter" })
 	requireStatus(t, h.generate(t, "chat", requestFixture("chat", "m")), 200)
 	rows, err := h.s.DB.Query("SELECT cost_known,cache_known FROM requests")
 	if err != nil {

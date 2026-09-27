@@ -21,7 +21,7 @@ func (a *App) taskPriceSync(scheduleConfig) (string, error) {
 	feeds := map[string]map[string]syncedModelPrice{}
 	providers := []string{}
 	for _, p := range cfg.Providers {
-		if !p.Enabled || !strings.Contains(strings.ToLower(p.BaseURL), "openrouter.ai") {
+		if !p.Enabled || !isOpenRouter(p) {
 			continue
 		}
 		ctx, cancel := context.WithTimeout(a.Context, 30*time.Second)

@@ -46,9 +46,9 @@ func TestPriceSyncAllProvidersLocksAndMissingCache(t *testing.T) {
 	h := newHarness(t)
 	h.change(t, func(c *Config) {
 		c.Providers = []Provider{
-			{ID: "p_one", Name: "OpenRouter One", BaseURL: first.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
-			{ID: "p_two", Name: "OpenRouter Two", BaseURL: second.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
-			{ID: "p_off", Name: "Disabled", BaseURL: disabled.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: false, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_one", Name: "OpenRouter One", Kind: "openrouter", BaseURL: first.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_two", Name: "OpenRouter Two", Kind: "openrouter", BaseURL: second.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_off", Name: "Disabled", Kind: "openrouter", BaseURL: disabled.URL, Auth: "none", Enabled: false, AllowPrivate: true, TimeoutSec: 30},
 		}
 		locked := pricedModel("locked", "p_one", "vendor/locked", 7, 8, 9, 10)
 		locked.PriceLocked = true
@@ -112,8 +112,8 @@ func TestPriceSyncFetchFailureIsAtomic(t *testing.T) {
 	h := newHarness(t)
 	h.change(t, func(c *Config) {
 		c.Providers = []Provider{
-			{ID: "p_good", Name: "Good", BaseURL: good.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
-			{ID: "p_bad", Name: "Bad", BaseURL: bad.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_good", Name: "Good", Kind: "openrouter", BaseURL: good.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_bad", Name: "Bad", Kind: "openrouter", BaseURL: bad.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
 		}
 		c.Models = []Model{pricedModel("a", "p_good", "vendor/a", 10, 20, 30, 40)}
 	})
@@ -138,7 +138,7 @@ func TestPriceSyncRejectsConcurrentConfigChange(t *testing.T) {
 	t.Cleanup(server.Close)
 	h := newHarness(t)
 	h.change(t, func(c *Config) {
-		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", BaseURL: server.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
+		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", Kind: "openrouter", BaseURL: server.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
 		c.Models = []Model{pricedModel("a", "p_or", "vendor/a", 10, 20, 30, 40)}
 	})
 	type outcome struct {
@@ -169,7 +169,7 @@ func TestPriceSyncScheduleHandler(t *testing.T) {
 	server := priceSyncProvider(t, `{"data":[{"id":"vendor/a","pricing":{"prompt":"0.000001","completion":"0.000002"}}]}`, &calls)
 	h := newHarness(t)
 	h.change(t, func(c *Config) {
-		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", BaseURL: server.URL + "/openrouter.ai/api/v1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
+		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", Kind: "openrouter", BaseURL: server.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
 		c.Models = []Model{pricedModel("a", "p_or", "vendor/a", 10, 20, 30, 40)}
 	})
 

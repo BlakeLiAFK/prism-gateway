@@ -3,7 +3,16 @@ package gateway
 import (
 	"encoding/json"
 	"math"
+	"net/url"
 )
+
+func isOpenRouter(p Provider) bool {
+	if p.Kind == "openrouter" {
+		return true
+	}
+	u, err := url.Parse(p.BaseURL)
+	return err == nil && u.Hostname() == "openrouter.ai"
+}
 
 func cost(m Model, u Usage) int64 {
 	if !m.PricingSet {
