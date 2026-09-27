@@ -69,7 +69,7 @@ func TestWeeklyDueAndReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"周报 2026-09-14 至 2026-09-20（UTC+8）", "请求 2 次", "估算花费 $1.00"} {
+	for _, want := range []string{"周报 2026-09-14 至 2026-09-20（UTC+8）", "请求 2 次", "已记录花费（含估算/异常预留）$1.00"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("周报缺少「%s」:\n%s", want, text)
 		}

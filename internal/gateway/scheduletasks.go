@@ -147,9 +147,9 @@ func (a *App) usageReport(c scheduleConfig, start, end time.Time, title, empty s
 		return strings.Join(append(lines, empty), "\n"), nil
 	}
 	lines = append(lines, fmt.Sprintf("请求 %.0f 次，成功率 %.1f%%，失败 %.0f 次", num(s, "r"), num(s, "s")/num(s, "r")*100, num(s, "e")),
-		fmt.Sprintf("Token %s，估算花费 $%.2f", compactCount(num(s, "t")), dollars(int64(num(s, "c")))))
+		fmt.Sprintf("Token %s，已记录花费（含估算/异常预留）$%.2f", compactCount(num(s, "t")), dollars(int64(num(s, "c")))))
 	if u := num(s, "u"); u > 0 {
-		lines[len(lines)-1] += fmt.Sprintf("（%.0f 次未计价）", u)
+		lines[len(lines)-1] += fmt.Sprintf("（另有 %.0f 次成功请求价格未确认）", u)
 	}
 	sections := []struct {
 		title, sql, format string

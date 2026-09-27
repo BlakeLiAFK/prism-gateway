@@ -28,9 +28,11 @@ function lastRun(r){
   return `${tag(ok?'成功':skip?'未推送':'失败',ok?'':skip?'warning':'error')} <span class="mono">${dateTime(r.at)}</span> · <span class="${ok||skip?'':'negative'}">${E(r.result||'正常，无需处理')}</span>`;
 }
 
+const enabledField=id=>id.replaceAll('-','_')+'_enabled';
+
 function render(d){
   const c=d.config,runs=d.runs||{};
-  return `<div class="between"><h2>定时任务</h2><div class="sched-zone"><label for="sched-offset">时区 UTC</label><input id="sched-offset" type="number" min="-12" max="14" value="${c.utc_offset}"></div></div><p class="small muted" style="margin-top:6px">执行时刻按所设时区计算；每分钟检查一次，保存后下一分钟生效。推送走下方「告警推送」配置的通道。</p>${d.channel?'':'<div class="enable-note" style="margin-top:12px">推送通道未启用：额度预警、日报、到期提醒与上游变动都无法送达，请先在下方「告警推送」中配置并启用。</div>'}<div class="sched-list">${TASKS.map(([id,name,help,fields])=>`<div class="sched-row"><label class="checkline"><input type="checkbox" name="${id}_enabled" ${c[id+'_enabled']?'checked':''}><span><strong>${E(name)}</strong><small>${E(help)}</small></span></label><div class="sched-fields">${fields.map(fieldHTML(c)).join('')}</div><div class="sched-last small">${lastRun(runs[id])}</div><div class="sched-run">${btn('立即运行','schedule-run','bolt',`type="button" data-task="${id}"`,'small')}</div></div>`).join('')}</div><div class="flex" style="margin-top:16px">${btn('保存定时任务','schedule-save','check','type="button"','primary small')}</div>`;
+  return `<div class="between"><h2>定时任务</h2><div class="sched-zone"><label for="sched-offset">时区 UTC</label><input id="sched-offset" type="number" min="-12" max="14" value="${c.utc_offset}"></div></div><p class="small muted" style="margin-top:6px">执行时刻按所设时区计算；每分钟检查一次，保存后下一分钟生效。推送走下方「告警推送」配置的通道。</p>${d.channel?'':'<div class="enable-note" style="margin-top:12px">推送通道未启用：额度预警、日报、到期提醒与上游变动都无法送达，请先在下方「告警推送」中配置并启用。</div>'}<div class="sched-list">${TASKS.map(([id,name,help,fields])=>`<div class="sched-row"><label class="checkline"><input type="checkbox" name="${enabledField(id)}" ${c[enabledField(id)]?'checked':''}><span><strong>${E(name)}</strong><small>${E(help)}</small></span></label><div class="sched-fields">${fields.map(fieldHTML(c)).join('')}</div><div class="sched-last small">${lastRun(runs[id])}</div><div class="sched-run">${btn('立即运行','schedule-run','bolt',`type="button" data-task="${id}"`,'small')}</div></div>`).join('')}</div><div class="flex" style="margin-top:16px">${btn('保存定时任务','schedule-save','check','type="button"','primary small')}</div>`;
 }
 
 // 字段第 5 项是类型：缺省为数字，text 文本，wide 宽文本，check 勾选

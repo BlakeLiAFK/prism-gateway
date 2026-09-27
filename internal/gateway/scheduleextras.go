@@ -12,19 +12,19 @@ func (a *App) taskSpendAnomaly(c scheduleConfig) (string, error) {
 	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, c.zone())
 	read := func(from, to time.Time) (int64, int64, error) {
 		rows, err := a.Store.DB.Query(`SELECT
-			COALESCE(SUM(CASE WHEN status!='running' AND cost_known=1 AND is_demo=0 THEN cost_nano ELSE 0 END),0) cost,
-			COALESCE(SUM(CASE WHEN status IN ('success','unknown') AND cost_known=0 AND is_demo=0 THEN 1 ELSE 0 END),0) unknown
-			FROM requests WHERE started_at>=? AND started_at<?`, from.UnixMilli(), to.UnixMilli())
+			COALESCE(SUM(cost_nano),0) cost, COALESCE(SUM(unpriced),0) unpriced
+			FROM usage_hourly WHERE hour>=? AND hour<?`, from.UnixMilli()/3600000, to.UnixMilli()/3600000)
 		if err != nil {
 			return 0, 0, err
 		}
-		return rows[0].Int("cost"), rows[0].Int("unknown"), nil
+		return rows[0].Int("cost"), rows[0].Int("unpriced"), nil
 	}
-	todayCost, todayUnknown, err := read(today, local)
+	// 当前小时已有完成请求时也要计入，因此上界取下一整点。
+	todayCost, todayUnpriced, err := read(today, local.Truncate(time.Hour).Add(time.Hour))
 	if err != nil {
 		return "", err
 	}
-	pastCost, pastUnknown, err := read(today.AddDate(0, 0, -7), today)
+	pastCost, pastUnpriced, err := read(today.AddDate(0, 0, -7), today)
 	if err != nil {
 		return "", err
 	}
@@ -36,13 +36,12 @@ func (a *App) taskSpendAnomaly(c scheduleConfig) (string, error) {
 	if a.warned(key) {
 		return "", nil
 	}
-	text := fmt.Sprintf("花费异常\n今日已知花费 $%.2f，是前 7 个完整日均值 $%.2f 的 %.1f 倍（阈值 %.1f 倍）。",
+	text := fmt.Sprintf("花费异常\n今日已记录花费 $%.2f，是前 7 个完整日均值 $%.2f 的 %.1f 倍（阈值 %.1f 倍）。",
 		dollars(todayCost), dollars(int64(average)), float64(todayCost)/average, c.SpendMultiple)
-	if todayUnknown+pastUnknown > 0 {
-		text += fmt.Sprintf("\n今日 %d 次、前 7 日 %d 次费用未知，实际花费可能更高。", todayUnknown, pastUnknown)
-	} else {
-		text += "\n今日与前 7 日均无未知费用。"
+	if todayUnpriced+pastUnpriced > 0 {
+		text += fmt.Sprintf("\n今日 %d 次、前 7 日 %d 次成功请求价格未确认。", todayUnpriced, pastUnpriced)
 	}
+	text += "\n已记录花费可能含本地估算与异常预留，不代表供应商实际账单。"
 	if err = a.notify(text); err != nil {
 		return "", err
 	}
@@ -106,16 +105,15 @@ func (a *App) taskKeyBudget(c scheduleConfig) (string, error) {
 			if percent < float64(c.KeyBudgetPercent) || a.warned(warnKey) {
 				continue
 			}
-			unknown, estimated, err := a.keyBudgetKinds(id, window.days)
+			unpriced, err := a.keyBudgetUnpriced(id, window.days)
 			if err != nil {
 				return "", err
 			}
 			line := fmt.Sprintf("「%s」%s $%.2f / $%.2f（%.1f%%）", key.String("name"), window.label, window.spend, window.limit, percent)
-			if estimated > 0 || unknown > 0 {
-				line += fmt.Sprintf("；含 %d 次本地估算，%d 次费用未知，实际花费可能更高", estimated, unknown)
-			} else {
-				line += "；均为已记录实际费用"
+			if unpriced > 0 {
+				line += fmt.Sprintf("；另有 %d 次成功请求价格未确认", unpriced)
 			}
+			line += "；汇总金额可能含本地估算与异常预留，明细仅覆盖保留期"
 			lines, keys = append(lines, line), append(keys, warnKey)
 		}
 	}
@@ -132,14 +130,11 @@ func (a *App) taskKeyBudget(c scheduleConfig) (string, error) {
 	return text, nil
 }
 
-func (a *App) keyBudgetKinds(id string, days int) (unknown, estimated int64, err error) {
-	rows, err := a.Store.DB.Query(`SELECT
-		COALESCE(SUM(status IN ('success','unknown') AND cost_known=0),0) unknown,
-		COALESCE(SUM(cost_known=1 AND usage_mode!='reported_cost'),0) estimated
-		FROM requests WHERE key_id=? AND started_at>=? AND status!='running' AND is_demo=0`,
-		id, sinceHour(days)*3600000)
+func (a *App) keyBudgetUnpriced(id string, days int) (int64, error) {
+	rows, err := a.Store.DB.Query(`SELECT COALESCE(SUM(unpriced),0) unpriced
+		FROM usage_hourly WHERE key_id=? AND hour>=?`, id, sinceHour(days))
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
-	return rows[0].Int("unknown"), rows[0].Int("estimated"), nil
+	return rows[0].Int("unpriced"), nil
 }

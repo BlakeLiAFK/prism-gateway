@@ -154,7 +154,7 @@ func TestDailyReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"日报 2026-09-25（UTC+8）", "请求 3 次，成功率 66.7%，失败 1 次", "估算花费 $3.00", "常用模型：a 2 次 · b 1 次", "花费最多的 Key：k $3.00", "失败最多：b 1 次"} {
+	for _, want := range []string{"日报 2026-09-25（UTC+8）", "请求 3 次，成功率 66.7%，失败 1 次", "已记录花费（含估算/异常预留）$3.00", "常用模型：a 2 次 · b 1 次", "花费最多的 Key：k $3.00", "失败最多：b 1 次"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("日报缺少「%s」:\n%s", want, text)
 		}
