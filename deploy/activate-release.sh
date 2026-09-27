@@ -30,10 +30,12 @@ finish() {
     if [ "$changed" = 1 ]; then
         echo '新版本未通过验证，正在回滚' >&2
         systemctl stop "$NEXT" || echo '停止新实例失败，继续恢复旧二进制与实例' >&2
+        restored=0
         if cp -p "$SAVED" "$BIN.rollback" && mv -f "$BIN.rollback" "$BIN"; then
+            restored=1
             systemctl start "$CUR" || echo '启动旧实例命令失败，继续检查健康状态' >&2
         fi
-        if health "$OLD"; then
+        if [ "$restored" = 1 ] && health "$OLD"; then
             systemctl enable "$CUR" >/dev/null && systemctl disable "$NEXT" >/dev/null || result=1
             echo "已恢复版本 $OLD" >&2
         else
