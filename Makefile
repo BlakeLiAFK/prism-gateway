@@ -1,6 +1,6 @@
 GO ?= go
 BINARY := bin/prism-gateway
-.PHONY: build test race vet cover lint ui check hooks release run clean
+.PHONY: build test race vet cover lint ui format check hooks release run clean
 build:
 	mkdir -p bin
 	CGO_ENABLED=1 $(GO) build -trimpath -o $(BINARY) ./cmd/gateway
@@ -17,7 +17,10 @@ lint:
 	else echo "staticcheck 未安装，跳过（go install honnef.co/go/tools/cmd/staticcheck@latest）"; fi
 ui: build
 	python3 scripts/ui_smoke.py --binary ./$(BINARY)
-check: vet lint cover ui
+format:
+	@files="$$(gofmt -l cmd internal)" || exit $$?; \
+	if [ -n "$$files" ]; then printf "以下文件需要 gofmt：\n%s\n" "$$files"; exit 1; fi
+check: format vet lint cover ui
 hooks:
 	cp scripts/hooks/pre-push scripts/hooks/pre-commit .git/hooks/
 	chmod +x .git/hooks/pre-push .git/hooks/pre-commit
