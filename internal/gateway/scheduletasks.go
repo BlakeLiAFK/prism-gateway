@@ -101,7 +101,33 @@ func (a *App) taskReport(c scheduleConfig) (string, error) {
 func (a *App) dailyReport(c scheduleConfig, t time.Time) (string, error) {
 	local := t.In(c.zone())
 	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, c.zone())
-	from, to := today.AddDate(0, 0, -1).UnixMilli()/3600000, today.UnixMilli()/3600000
+	from, to := today.AddDate(0, 0, -1), today
+	return a.usageReport(c, from, to, fmt.Sprintf("日报 %s（%s）", from.Format("2006-01-02"), c.zone()), "昨日没有请求。")
+}
+
+// taskWeeklyReport 汇总上一个完整的周一至周日。
+func (a *App) taskWeeklyReport(c scheduleConfig) (string, error) {
+	text, err := a.weeklyReport(c, time.Now())
+	if err != nil {
+		return "", err
+	}
+	if err = a.notify(text); err != nil {
+		return "", err
+	}
+	return text, nil
+}
+
+func (a *App) weeklyReport(c scheduleConfig, t time.Time) (string, error) {
+	local := t.In(c.zone())
+	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, c.zone())
+	thisMonday := today.AddDate(0, 0, -(int(today.Weekday())+6)%7)
+	from, to := thisMonday.AddDate(0, 0, -7), thisMonday
+	title := fmt.Sprintf("周报 %s 至 %s（%s）", from.Format("2006-01-02"), to.AddDate(0, 0, -1).Format("2006-01-02"), c.zone())
+	return a.usageReport(c, from, to, title, "上周没有请求。")
+}
+
+func (a *App) usageReport(c scheduleConfig, start, end time.Time, title, empty string) (string, error) {
+	from, to := start.UnixMilli()/3600000, end.UnixMilli()/3600000
 	q := func(sql string) ([]Object, error) {
 		rows, err := a.Store.DB.Query(sql, from, to)
 		out := make([]Object, len(rows))
@@ -116,9 +142,9 @@ func (a *App) dailyReport(c scheduleConfig, t time.Time) (string, error) {
 		return "", err
 	}
 	s := sum[0]
-	lines := []string{fmt.Sprintf("日报 %s（%s）", today.AddDate(0, 0, -1).Format("2006-01-02"), c.zone())}
+	lines := []string{title}
 	if num(s, "r") == 0 {
-		return strings.Join(append(lines, "昨日没有请求。"), "\n"), nil
+		return strings.Join(append(lines, empty), "\n"), nil
 	}
 	lines = append(lines, fmt.Sprintf("请求 %.0f 次，成功率 %.1f%%，失败 %.0f 次", num(s, "r"), num(s, "s")/num(s, "r")*100, num(s, "e")),
 		fmt.Sprintf("Token %s，估算花费 $%.2f", compactCount(num(s, "t")), dollars(int64(num(s, "c")))))

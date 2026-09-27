@@ -29,6 +29,9 @@ type scheduleConfig struct {
 	QuotaMinutes    int  `json:"quota_minutes"`
 	ReportEnabled   bool `json:"report_enabled"`
 	ReportHour      int  `json:"report_hour"`
+	WeeklyEnabled   bool `json:"weekly_enabled"`
+	WeeklyWeekday   int  `json:"weekly_weekday"` // 1 周一至 7 周日
+	WeeklyHour      int  `json:"weekly_hour"`
 	ExpiryEnabled   bool `json:"expiry_enabled"`
 	ExpiryDays      int  `json:"expiry_days"`
 	MaintainEnabled bool `json:"maintain_enabled"`
@@ -47,7 +50,7 @@ type scheduleConfig struct {
 
 // 自动备份、远程备份与每日日报默认关闭，由管理员自己开启
 var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, RemoteMinutes: 60, RemoteKeep: 48, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
-	ReportHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6,
+	ReportHour: 9, WeeklyWeekday: 1, WeeklyHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6,
 	FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
 
 type taskRun struct {
@@ -85,6 +88,9 @@ var scheduledTasks = []scheduledTask{
 	{"report", "每日日报", func(c scheduleConfig, last, t time.Time) bool {
 		return c.ReportEnabled && dailyDue(c, c.ReportHour, last, t)
 	}, (*App).taskReport},
+	{"weekly", "每周周报", func(c scheduleConfig, last, t time.Time) bool {
+		return c.WeeklyEnabled && weeklyDue(c, last, t)
+	}, (*App).taskWeeklyReport},
 	{"expiry", "Key 到期提醒", func(c scheduleConfig, last, t time.Time) bool { return c.ExpiryEnabled && t.Sub(last) >= time.Hour }, (*App).taskExpiry},
 	{"maintain", "数据库维护", func(c scheduleConfig, last, t time.Time) bool {
 		return c.MaintainEnabled && dailyDue(c, c.MaintainHour, last, t)
@@ -128,8 +134,17 @@ func dailyDue(c scheduleConfig, hour int, last, t time.Time) bool {
 	return t.Hour() >= hour && (last.YearDay() != t.YearDay() || last.Year() != t.Year())
 }
 
+// weeklyDue：到达本周设定时刻后只跑一次；错过时刻的重启会补跑。
+func weeklyDue(c scheduleConfig, last, t time.Time) bool {
+	t, last = t.In(c.zone()), last.In(c.zone())
+	today := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, c.zone())
+	monday := today.AddDate(0, 0, -(int(t.Weekday())+6)%7)
+	due := monday.AddDate(0, 0, c.WeeklyWeekday-1).Add(time.Duration(c.WeeklyHour) * time.Hour)
+	return !t.Before(due) && last.Before(due)
+}
+
 func (c scheduleConfig) validate() error {
-	hours := []int{c.BackupHour, c.ReportHour, c.MaintainHour}
+	hours := []int{c.BackupHour, c.ReportHour, c.WeeklyHour, c.MaintainHour}
 	for _, h := range hours {
 		if h < 0 || h > 23 {
 			return fail("INVALID_PARAMS", "执行时刻应在 0–23 点之间", 400)
@@ -148,6 +163,8 @@ func (c scheduleConfig) validate() error {
 		return fail("INVALID_PARAMS", "额度预警阈值应在 1–100% 之间", 400)
 	case c.QuotaMinutes < 5 || c.QuotaMinutes > 1440:
 		return fail("INVALID_PARAMS", "额度检查间隔应在 5–1440 分钟之间", 400)
+	case c.WeeklyWeekday < 1 || c.WeeklyWeekday > 7:
+		return fail("INVALID_PARAMS", "周报推送日应在周一到周日之间", 400)
 	case c.ExpiryDays < 1 || c.ExpiryDays > 90:
 		return fail("INVALID_PARAMS", "到期提醒应提前 1–90 天", 400)
 	case c.UpstreamHours < 1 || c.UpstreamHours > 168:
@@ -309,7 +326,7 @@ func (a *App) runTask(task scheduledTask, c scheduleConfig) taskRun {
 	} else if err != nil {
 		run.Status, run.Result = "failed", err.Error()
 		slog.Warn("scheduled task failed", "task", task.id, "err", err)
-		if task.id != "report" && task.id != "quota" && task.id != "expiry" {
+		if task.id != "report" && task.id != "weekly" && task.id != "quota" && task.id != "expiry" {
 			if e := a.notify(task.name + "失败：" + err.Error()); e != nil {
 				slog.Debug("schedule failure notice not sent", "err", e)
 			}
