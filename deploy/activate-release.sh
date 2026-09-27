@@ -29,7 +29,11 @@ finish() {
     trap - EXIT HUP INT TERM
     if [ "$changed" = 1 ]; then
         echo '新版本未通过验证，正在回滚' >&2
-        if systemctl stop "$NEXT" && cp -p "$SAVED" "$BIN.rollback" && mv -f "$BIN.rollback" "$BIN" && systemctl start "$CUR" && health "$OLD"; then
+        systemctl stop "$NEXT" || echo '停止新实例失败，继续恢复旧二进制与实例' >&2
+        if cp -p "$SAVED" "$BIN.rollback" && mv -f "$BIN.rollback" "$BIN"; then
+            systemctl start "$CUR" || echo '启动旧实例命令失败，继续检查健康状态' >&2
+        fi
+        if health "$OLD"; then
             systemctl enable "$CUR" >/dev/null && systemctl disable "$NEXT" >/dev/null || result=1
             echo "已恢复版本 $OLD" >&2
         else
@@ -50,6 +54,7 @@ if systemctl is-active --quiet "$NEXT"; then echo '两个实例同时活动，�
 [ "$(systemctl is-active "$NEXT" || true)" != deactivating ] || { echo '备用实例仍在排空，请稍后重试' >&2; exit 1; }
 OLD=$("$BIN" -version | awk '{print $3}')
 case "$OLD" in ''|*[!0-9.]*) echo '旧版本号无效' >&2; exit 1;; esac
+[ "$VERSION" != "$OLD" ] || { echo '拒绝同版本交接，请使用新的版本号' >&2; exit 1; }
 SAVED="$BIN.$OLD"
 health "$OLD" || { echo '当前实例健康检查失败' >&2; exit 1; }
 "$BACKUP"
