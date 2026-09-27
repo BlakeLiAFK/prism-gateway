@@ -15,7 +15,8 @@ const TASKS=[
   ['maintain','数据库维护','更新 SQLite 查询统计（PRAGMA optimize），并把 WAL 合并回主库后截断，防止 WAL 文件持续增大。',[['maintain_hour','执行时刻 · 点',0,23]]],
   ['upstream','上游检查','对照上游模型列表，找出可能已下架的模型与价格变动；只提示，不自动修改。有新发现时推送。',[['upstream_hours','间隔 · 小时',1,168]]],
   ['price','OpenRouter 价格同步','定时读取已启用 OpenRouter 供应商的公开模型价格，更新未锁定的本地模型；已锁定价格保持不变。',[['price_hours','间隔 · 小时',1,168]]],
-  ['spend','花费异常','每小时比较今日已知花费与前 7 个完整自然日的日均值；达到最低金额和倍数阈值时推送，同一自然日只提醒一次。',[['spend_multiple','异常倍数',1,100],['spend_minimum','最低花费 · $',0,1000000000]]]
+  ['spend','花费异常','每小时比较今日已知花费与前 7 个完整自然日的日均值；达到最低金额和倍数阈值时推送，同一自然日只提醒一次。',[['spend_multiple','异常倍数',1,100],['spend_minimum','最低花费 · $',0,1000000000]]],
+  ['failure','失败率告警','每 5 分钟统计最近精确时间窗口内已结束的真实请求；达到最小样本与失败率阈值时推送，错误和状态未知均算失败。',[['failure_minutes','统计窗口 · 分钟',1,1440],['failure_min_samples','最小样本',1,1000000],['failure_percent','失败率阈值 · %',1,100],['failure_cooldown_minutes','冷却 · 分钟',5,10080]]]
 ];
 
 export const scheduleCard=()=>'<section class="card setting-card" id="schedule-card" ><h2>定时任务</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';

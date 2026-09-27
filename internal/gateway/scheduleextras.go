@@ -48,3 +48,31 @@ func (a *App) taskSpendAnomaly(c scheduleConfig) (string, error) {
 	a.markWarned(key, today.AddDate(0, 0, 1).UnixMilli())
 	return text, nil
 }
+
+// taskFailureRate 按精确分钟窗口统计已结束的真实请求，达到阈值后进入可配置冷却。
+func (a *App) taskFailureRate(c scheduleConfig) (string, error) {
+	end := now()
+	rows, err := a.Store.DB.Query(`SELECT COUNT(*) total,
+		COALESCE(SUM(status='error'),0) errors, COALESCE(SUM(status='unknown'),0) unknown
+		FROM requests WHERE started_at>=? AND started_at<? AND status IN ('success','error','unknown') AND is_demo=0`,
+		end-int64(c.FailureMinutes)*60000, end)
+	if err != nil {
+		return "", err
+	}
+	total, errors, unknown := rows[0].Int("total"), rows[0].Int("errors"), rows[0].Int("unknown")
+	if total < int64(c.FailureMinSamples) {
+		return "", nil
+	}
+	failed := errors + unknown
+	rate := float64(failed) / float64(total) * 100
+	if rate < c.FailurePercent || a.warned("failure-rate") {
+		return "", nil
+	}
+	text := fmt.Sprintf("失败率告警\n最近 %d 分钟 %d/%d 次失败（%.1f%%，阈值 %.1f%%）。\n错误 %d 次，状态未知 %d 次。",
+		c.FailureMinutes, failed, total, rate, c.FailurePercent, errors, unknown)
+	if err = a.notify(text); err != nil {
+		return "", err
+	}
+	a.markWarned("failure-rate", end+int64(c.FailureCooldownMinutes)*60000)
+	return text, nil
+}
