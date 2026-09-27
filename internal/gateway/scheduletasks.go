@@ -125,12 +125,16 @@ func (a *App) dailyReport(c scheduleConfig, t time.Time) (string, error) {
 	if u := num(s, "u"); u > 0 {
 		lines[len(lines)-1] += fmt.Sprintf("（%.0f 次未计价）", u)
 	}
-	sections := []struct{ title, sql, format string }{
-		{"常用模型", `SELECT model_id n, SUM(requests) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY model_id ORDER BY v DESC LIMIT 3`, "%s %.0f 次"},
+	sections := []struct {
+		title, sql, format string
+		model              bool
+	}{
+		{"常用模型", `SELECT model_id n, SUM(requests) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY model_id ORDER BY v DESC LIMIT 3`, "%s %.0f 次", true},
 		{"花费最多的 Key", `SELECT COALESCE(k.name, u.key_id) n, SUM(u.cost_nano)/1e9 v FROM usage_hourly u LEFT JOIN api_keys k ON k.id=u.key_id
-			WHERE u.hour>=? AND u.hour<? GROUP BY u.key_id HAVING v>0 ORDER BY v DESC LIMIT 3`, "%s $%.2f"},
-		{"失败最多", `SELECT model_id n, SUM(errors) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY model_id HAVING v>0 ORDER BY v DESC LIMIT 3`, "%s %.0f 次"},
+			WHERE u.hour>=? AND u.hour<? GROUP BY u.key_id HAVING v>0 ORDER BY v DESC LIMIT 3`, "%s $%.2f", false},
+		{"失败最多", `SELECT model_id n, SUM(errors) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY model_id HAVING v>0 ORDER BY v DESC LIMIT 3`, "%s %.0f 次", true},
 	}
+	cfg := a.Store.Config()
 	for _, sec := range sections {
 		rows, err := q(sec.sql)
 		if err != nil {
@@ -138,7 +142,11 @@ func (a *App) dailyReport(c scheduleConfig, t time.Time) (string, error) {
 		}
 		items := []string{}
 		for _, r := range rows {
-			items = append(items, fmt.Sprintf(sec.format, str(r, "n"), num(r, "v")))
+			name := str(r, "n")
+			if m, ok := cfg.model(name); sec.model && ok && m.Name != "" {
+				name = m.Name
+			}
+			items = append(items, fmt.Sprintf(sec.format, name, num(r, "v")))
 		}
 		if len(items) > 0 {
 			lines = append(lines, sec.title+"："+strings.Join(items, " · "))
