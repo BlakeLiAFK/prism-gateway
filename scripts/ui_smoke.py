@@ -74,6 +74,54 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     page.wait_for_selector('.sidebar', timeout=15000)
     results.append('login + shell render')
 
+    # 共用 Token 格式化与总览按钮：大数默认使用 B，精确显示在切页后保留。
+    page.evaluate("""async () => {
+        const {state,formatTokens} = await import('/assets/core.js');
+        const {renderPage} = await import('/assets/app.js');
+        for (const [value,want] of [[999,'999'],[1000,'1.0K'],[999950,'1.00M'],[1000000,'1.00M'],[999995000,'1.00B'],[6840810000,'6.84B']]) {
+            if (formatTokens(value) !== want) throw new Error(`Token 格式错误: ${value}`);
+        }
+        state.data.summary.input_tokens = 6840810000;
+        state.data.summary.output_tokens = 0;
+        renderPage(false);
+    }""")
+    token_button = page.locator('[data-action="toggle-token-unit"]')
+    if token_button.inner_text() != '6.84B':
+        fail('总览 Token 默认单位不是 B')
+    token_button.click()
+    if page.locator('[data-action="toggle-token-unit"]').inner_text() != '6,840,810,000':
+        fail('点击后未显示精确 Token 数量')
+    desktop_size = page.viewport_size
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(250)
+    if page.evaluate('document.documentElement.scrollWidth > innerWidth'):
+        fail('390px 下精确 Token 数量造成横向溢出')
+    if artifacts:
+        page.locator('.stat:has([data-action="toggle-token-unit"])').screenshot(path=str(artifacts / 'token-exact-mobile.png'))
+    page.set_viewport_size(desktop_size)
+    if artifacts:
+        page.screenshot(path=str(artifacts / 'token-exact-desktop.png'))
+    page.locator('[data-action="toggle-token-unit"]').focus()
+    page.keyboard.press('Enter')
+    if page.locator('[data-action="toggle-token-unit"]').inner_text() != '6.84B':
+        fail('键盘未切回自动单位')
+    page.locator('[data-action="toggle-token-unit"]').click()
+    page.click('.nav-item[data-nav="usage"]')
+    page.wait_for_selector('.usage-card-head')
+    page.evaluate("""async () => {
+        const {state} = await import('/assets/core.js');
+        const {renderPage} = await import('/assets/app.js');
+        if (state.tokenDisplay !== 'exact') throw new Error('切页丢失 Token 单位');
+        state.data.top_models = [{model_id:'demo',requests:1,tokens:6840810000,cost_nano:0,latency_ms:0}];
+        renderPage(false);
+        if (!document.querySelector('main').innerText.includes('6,840,810,000'))
+            throw new Error('用量页没有沿用精确 Token 单位');
+    }""")
+    page.click('.nav-item[data-nav="overview"]')
+    page.wait_for_selector('[data-action="toggle-token-unit"]')
+    page.locator('[data-action="toggle-token-unit"]').click()
+    results.append('token units: B, exact, keyboard, cross-page')
+
     for name in PAGES:
         page.click(f'.nav-item[data-nav="{name}"]')
         page.wait_for_timeout(250)

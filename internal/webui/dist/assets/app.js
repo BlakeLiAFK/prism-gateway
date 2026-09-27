@@ -296,6 +296,10 @@ export async function handleAction(el){
     await loadPage(false);
     break;
 
+ case 'toggle-token-unit':state.tokenDisplay=state.tokenDisplay==='auto'?'exact':'auto';
+    renderPage(false);
+    break;
+
  case 'guide':showDialog('客户端接入指南','管理调用走 /api.json；模型调用保持各自协议。',connectionGuide(),null,'',true);
     break;
 
