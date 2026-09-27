@@ -38,6 +38,9 @@ func (e *Engine) rollup(id string) {
 	if err := e.store.DB.Exec(rollupOne, id); err != nil {
 		slog.Error("usage rollup write failed", "request_id", id, "err", err)
 	}
+	if err := e.store.DB.Exec(cacheRollupOne, id); err != nil {
+		slog.Error("cache rollup write failed", "request_id", id, "err", err)
+	}
 }
 
 // rebuildRollup 从 fromMS 所在小时起用请求明细重建汇总，计价补录这类批量改写之后调用
@@ -46,5 +49,11 @@ func rebuildRollup(t *sqlite.Tx, fromMS int64) error {
 	if err := t.Exec("DELETE FROM usage_hourly WHERE hour>=?", hour); err != nil {
 		return err
 	}
-	return t.Exec(rollupFill, hour*3600000)
+	if err := t.Exec(rollupFill, hour*3600000); err != nil {
+		return err
+	}
+	if err := t.Exec("DELETE FROM cache_hourly WHERE hour>=?", hour); err != nil {
+		return err
+	}
+	return t.Exec(cacheRollupFill, hour*3600000)
 }

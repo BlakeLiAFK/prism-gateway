@@ -35,7 +35,17 @@ func (a *App) routeStats(p Object) (any, error) {
 		}
 		m[r.String("model_id")] = Object{"attempts": r.Int("attempts"), "success": r.Int("success"), "affinity": r.Int("affinity")}
 	}
-	return Object{"minutes": minutes, "share": share, "runtime": a.Engine.Health(), "now": now()}, nil
+	rows, err = a.Store.DB.Query(`SELECT u.requested_model, `+cacheColumns+`
+		FROM usage_hourly u LEFT JOIN cache_hourly c USING(hour,key_id,requested_model,model_id,provider_id)
+		WHERE u.hour>=? GROUP BY u.requested_model`, (now()-int64(minutes)*60000)/3600000)
+	if err != nil {
+		return nil, err
+	}
+	cache := Object{}
+	for _, r := range rows {
+		cache[r.String("requested_model")] = cacheStat(r)
+	}
+	return Object{"minutes": minutes, "share": share, "cache": cache, "runtime": a.Engine.Health(), "now": now()}, nil
 }
 
 // deleteSessions 解除会话亲和：给 id 删单个；给 model_id 删绑定到该模型的全部会话

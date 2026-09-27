@@ -129,15 +129,6 @@ func (e *Engine) Quotas() ([]any, error) {
 	}
 	return out, nil
 }
-func cost(m Model, u Usage) int64 {
-	if !m.PricingSet {
-		return 0
-	}
-	uncached := max(int64(0), u.Input-u.Cache-u.Write)
-	v := (float64(uncached)*m.InputPrice + float64(u.Output)*m.OutputPrice + float64(u.Cache)*m.CachePrice + float64(u.Write)*m.WritePrice) * 1000
-	return int64(math.Ceil(v))
-}
-func estimateInput(body Object) int64 { return int64((len(raw(body))+2)/3 + 16) }
 
 type selection struct {
 	Model    Model
@@ -402,7 +393,13 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 			known = false
 		}
 	}
-	if err := e.store.DB.Exec(`UPDATE requests SET status=?,http_status=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_tokens=?,write_tokens=?,cost_nano=?,cost_known=?,usage_mode=?,error_code=? WHERE id=?`, state, status, now()-start, u.Input, u.Output, u.Cache, u.Write, value, known, mode, code, id); err != nil {
+	cacheKnown := 0
+	if u.CacheKnown {
+		cacheKnown = 1
+	} else if u.CacheNull {
+		cacheKnown = 2
+	}
+	if err := e.store.DB.Exec(`UPDATE requests SET status=?,http_status=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_tokens=?,write_tokens=?,cache_known=?,cost_nano=?,cost_known=?,usage_mode=?,error_code=? WHERE id=?`, state, status, now()-start, u.Input, u.Output, u.Cache, u.Write, cacheKnown, value, known, mode, code, id); err != nil {
 		slog.Error("request accounting write failed", "request_id", id, "model", s.Model.ID, "err", err)
 	}
 	e.rollup(id)
@@ -493,6 +490,7 @@ func (e *Engine) pruneOnce() {
 		{"sessions", "DELETE FROM sessions WHERE updated_at<?", now() - int64(s.SessionTTLHours)*3600000},
 		// 汇总表很小，保留比请求明细长，历史用量不随明细一起清掉
 		{"usage_hourly", "DELETE FROM usage_hourly WHERE hour<?", (now() - 400*86400000) / 3600000},
+		{"cache_hourly", "DELETE FROM cache_hourly WHERE hour<?", (now() - 400*86400000) / 3600000},
 	} {
 		if err := e.store.DB.Exec(job.query, job.cutoff); err != nil {
 			slog.Error("retention cleanup failed", "table", job.name, "err", err)

@@ -49,6 +49,9 @@ type Usage struct {
 	Cache  int64
 	Write  int64
 	Known  bool
+	// CacheKnown 区分显式 0 与字段缺失；CacheNull 单独记录上游显式 null。
+	CacheKnown bool
+	CacheNull  bool
 	// ReportedCost* 与 token 是否完整无关；只有可信供应商会在落库时采用。
 	ReportedCostNano  int64
 	ReportedCostKnown bool

@@ -11,12 +11,16 @@ const usageColumns = `COUNT(*) requests,
 	COALESCE(SUM(input_tokens),0) input_tokens,
 	COALESCE(SUM(output_tokens),0) output_tokens,
 	COALESCE(SUM(cache_tokens),0) cache_tokens,
+	COALESCE(SUM(cache_known=1),0) cache_known_requests,
+	COALESCE(SUM(cache_known=2),0) cache_null_requests,
+	COALESCE(SUM(CASE WHEN cache_known=1 THEN input_tokens ELSE 0 END),0) cache_input_tokens,
+	COALESCE(SUM(CASE WHEN cache_known=1 THEN cache_tokens ELSE 0 END),0) cache_hit_tokens,
 	COALESCE(SUM(CASE WHEN status!='running' AND is_demo=0 THEN cost_nano ELSE 0 END),0) cost_nano,
 	COALESCE(SUM(status='success' AND cost_known=0),0) unpriced,
 	COALESCE(AVG(CASE WHEN status='success' THEN duration_ms END),0) latency_ms,
 	COALESCE(MAX(started_at),0) last_used`
 
-var usageInts = []string{"requests", "success", "errors", "input_tokens", "output_tokens", "cache_tokens", "unpriced", "last_used"}
+var usageInts = []string{"requests", "success", "errors", "input_tokens", "output_tokens", "cache_tokens", "cache_known_requests", "cache_null_requests", "cache_input_tokens", "cache_hit_tokens", "unpriced", "last_used"}
 
 // usageStat 把一行聚合结果转成接口返回的对象
 func usageStat(r sqlite.Row) Object {
@@ -24,6 +28,7 @@ func usageStat(r sqlite.Row) Object {
 	for _, k := range usageInts {
 		o[k] = r.Int(k)
 	}
+	cacheRates(o)
 	return o
 }
 
@@ -37,6 +42,7 @@ func addUsage(a, b Object) {
 		a[k] = int64(num(a, k)) + int64(num(b, k))
 	}
 	a["cost"] = num(a, "cost") + num(b, "cost")
+	cacheRates(a)
 }
 
 type statsCacheEntry struct {
@@ -71,8 +77,9 @@ func (a *App) modelStats(p Object) (any, error) {
 }
 
 func (a *App) computeModelStats(days int) (Object, error) {
-	rows, err := a.Store.DB.Query(`SELECT model_id, provider_id, `+rollupColumns+`
-		FROM usage_hourly WHERE hour >= ? GROUP BY model_id, provider_id`, sinceHour(days))
+	rows, err := a.Store.DB.Query(`SELECT u.model_id, u.provider_id, `+rollupColumns+`, `+cacheColumns+`
+		FROM usage_hourly u LEFT JOIN cache_hourly c USING(hour,key_id,requested_model,model_id,provider_id)
+		WHERE u.hour >= ? GROUP BY u.model_id, u.provider_id`, sinceHour(days))
 	if err != nil {
 		return nil, err
 	}

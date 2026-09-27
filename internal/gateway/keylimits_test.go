@@ -53,7 +53,8 @@ func TestKeyExpiryAndUpdate(t *testing.T) {
 // 花费上限：近 24 小时估算花费达到上限后拒绝，列表附带当前用量
 func TestKeyBudgetLimit(t *testing.T) {
 	h, key, id := keyHarness(t, Object{"limit_day": 0.5})
-	if err := h.s.DB.Exec(`INSERT INTO usage_hourly VALUES (?,?,?,?,?,1,1,0,0,0,0,?,0,0,?)`, now()/3600000, id, "m", "m", "p_test", int64(6e8), now()); err != nil {
+	if err := h.s.DB.Exec(`INSERT INTO usage_hourly (hour,key_id,requested_model,model_id,provider_id,requests,success,errors,input_tokens,output_tokens,cache_tokens,cost_nano,unpriced,success_ms,last_at)
+		VALUES (?,?,?,?,?,1,1,0,0,0,0,?,0,0,?)`, now()/3600000, id, "m", "m", "p_test", int64(6e8), now()); err != nil {
 		t.Fatal(err)
 	}
 	w := keyCall(h, key)

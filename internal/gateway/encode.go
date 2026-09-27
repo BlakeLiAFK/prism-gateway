@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 )
 
@@ -202,20 +201,24 @@ func extractUsage(o Object, protocol string, u *Usage) {
 		if _, ok := o["prompt_tokens"]; ok {
 			u.Input = int64(num(o, "prompt_tokens"))
 			u.Output = int64(num(o, "completion_tokens"))
-			u.Cache = int64(num(obj(o["prompt_tokens_details"]), "cached_tokens"))
+			u.Cache, u.CacheKnown, u.CacheNull = cacheUsage(obj(o["prompt_tokens_details"]), "cached_tokens")
 			u.Known = true
 		}
 	case "responses", "systemone":
 		if _, ok := o["input_tokens"]; ok {
 			u.Input = int64(num(o, "input_tokens"))
 			u.Output = int64(num(o, "output_tokens"))
-			u.Cache = int64(num(obj(o["input_tokens_details"]), "cached_tokens"))
+			u.Cache, u.CacheKnown, u.CacheNull = cacheUsage(obj(o["input_tokens_details"]), "cached_tokens")
 			u.Known = true
 		}
 	case "messages":
 		if _, ok := o["input_tokens"]; ok {
-			u.Cache = int64(num(o, "cache_read_input_tokens"))
-			u.Write = int64(num(o, "cache_creation_input_tokens"))
+			var readKnown, readNull, writeKnown, writeNull bool
+			u.Cache, readKnown, readNull = cacheUsage(o, "cache_read_input_tokens")
+			u.Write, writeKnown, writeNull = cacheUsage(o, "cache_creation_input_tokens")
+			invalid := (o["cache_read_input_tokens"] != nil && !readKnown) || (o["cache_creation_input_tokens"] != nil && !writeKnown)
+			u.CacheNull = readNull || writeNull
+			u.CacheKnown = (readKnown || writeKnown) && !invalid && !u.CacheNull
 			u.Input = int64(num(o, "input_tokens")) + u.Cache + u.Write
 			u.Known = true
 		}
@@ -226,14 +229,6 @@ func extractUsage(o Object, protocol string, u *Usage) {
 	if u.Cache > u.Input {
 		u.Cache = u.Input
 	}
-}
-
-func reportedCostNano(v any) (int64, bool) {
-	n, ok := v.(float64)
-	if !ok || n < 0 || math.IsNaN(n) || math.IsInf(n, 0) || n >= float64(math.MaxInt64)/1e9 {
-		return 0, false
-	}
-	return int64(math.Ceil(n * 1e9)), true
 }
 
 func decodeCompletion(o Object, protocol string) (Completion, error) {
