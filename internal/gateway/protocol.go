@@ -49,6 +49,9 @@ type Usage struct {
 	Cache  int64
 	Write  int64
 	Known  bool
+	// ReportedCost* 与 token 是否完整无关；只有可信供应商会在落库时采用。
+	ReportedCostNano  int64
+	ReportedCostKnown bool
 	// tap 在流式片段到达时收到新增输出的字符数，供实时面板估算速度；可为空
 	tap func(chars int)
 }

@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -364,6 +365,12 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 	mode := "reported_tokens"
 	value := cost(s.Model, u)
 	known := u.Known && s.Model.PricingSet
+	reported := strings.Contains(strings.ToLower(s.Provider.BaseURL), "openrouter.ai") && u.ReportedCostKnown
+	if reported {
+		mode = "reported_cost"
+		value = u.ReportedCostNano
+		known = true
+	}
 	if err != nil || status >= 400 {
 		state = "error"
 		code = fmt.Sprintf("UPSTREAM_%d", status)
@@ -377,14 +384,14 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 			code = "CLIENT_CANCELED"
 		}
 	}
-	if !u.Known {
+	if !u.Known && !reported {
 		mode = "unknown"
 		known = false
 	}
 	// 上游回了 200 又给了可信用量，就按实际用量记账——空回答同样烧掉了推理 token，
 	// 那是真花出去的钱，退回预留值或抹成零都不对。
-	billed := status == 200 && u.Known
-	if (state == "error" || !u.Known) && !billed {
+	billed := status == 200 && (u.Known || reported)
+	if (state == "error" || (!u.Known && !reported)) && !billed {
 		if status == 429 || status == 503 || (status >= 400 && status < 500 && status != 499) {
 			value = 0
 			mode = "rejected"

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -192,6 +193,10 @@ func extractUsage(o Object, protocol string, u *Usage) {
 	if o == nil {
 		return
 	}
+	if v, ok := reportedCostNano(o["cost"]); ok {
+		u.ReportedCostNano = v
+		u.ReportedCostKnown = true
+	}
 	switch protocol {
 	case "chat":
 		if _, ok := o["prompt_tokens"]; ok {
@@ -221,6 +226,14 @@ func extractUsage(o Object, protocol string, u *Usage) {
 	if u.Cache > u.Input {
 		u.Cache = u.Input
 	}
+}
+
+func reportedCostNano(v any) (int64, bool) {
+	n, ok := v.(float64)
+	if !ok || n < 0 || math.IsNaN(n) || math.IsInf(n, 0) || n >= float64(math.MaxInt64)/1e9 {
+		return 0, false
+	}
+	return int64(math.Ceil(n * 1e9)), true
 }
 
 func decodeCompletion(o Object, protocol string) (Completion, error) {
