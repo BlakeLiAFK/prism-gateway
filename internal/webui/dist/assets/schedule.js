@@ -14,7 +14,8 @@ const TASKS=[
   ['expiry','Key 到期提醒','每小时检查一次，设了到期时间的网关 Key 在到期前推送一次提醒。',[['expiry_days','提前天数',1,90]]],
   ['maintain','数据库维护','更新 SQLite 查询统计（PRAGMA optimize），并把 WAL 合并回主库后截断，防止 WAL 文件持续增大。',[['maintain_hour','执行时刻 · 点',0,23]]],
   ['upstream','上游检查','对照上游模型列表，找出可能已下架的模型与价格变动；只提示，不自动修改。有新发现时推送。',[['upstream_hours','间隔 · 小时',1,168]]],
-  ['price','OpenRouter 价格同步','定时读取已启用 OpenRouter 供应商的公开模型价格，更新未锁定的本地模型；已锁定价格保持不变。',[['price_hours','间隔 · 小时',1,168]]]
+  ['price','OpenRouter 价格同步','定时读取已启用 OpenRouter 供应商的公开模型价格，更新未锁定的本地模型；已锁定价格保持不变。',[['price_hours','间隔 · 小时',1,168]]],
+  ['spend','花费异常','每小时比较今日已知花费与前 7 个完整自然日的日均值；达到最低金额和倍数阈值时推送，同一自然日只提醒一次。',[['spend_multiple','异常倍数',1,100],['spend_minimum','最低花费 · $',0,1000000000]]]
 ];
 
 export const scheduleCard=()=>'<section class="card setting-card" id="schedule-card" ><h2>定时任务</h2><div class="skeleton skeleton-line" style="margin-top:14px"></div></section>';

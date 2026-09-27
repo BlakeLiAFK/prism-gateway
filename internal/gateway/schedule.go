@@ -17,29 +17,32 @@ import (
 )
 
 type scheduleConfig struct {
-	UTCOffset       int  `json:"utc_offset"`
-	BackupEnabled   bool `json:"backup_enabled"`
-	BackupHour      int  `json:"backup_hour"`
-	BackupKeep      int  `json:"backup_keep"`
-	RemoteEnabled   bool `json:"remote_enabled"`
-	RemoteMinutes   int  `json:"remote_minutes"`
-	RemoteKeep      int  `json:"remote_keep"`
-	QuotaEnabled    bool `json:"quota_enabled"`
-	QuotaPercent    int  `json:"quota_percent"`
-	QuotaMinutes    int  `json:"quota_minutes"`
-	ReportEnabled   bool `json:"report_enabled"`
-	ReportHour      int  `json:"report_hour"`
-	WeeklyEnabled   bool `json:"weekly_enabled"`
-	WeeklyWeekday   int  `json:"weekly_weekday"` // 1 周一至 7 周日
-	WeeklyHour      int  `json:"weekly_hour"`
-	ExpiryEnabled   bool `json:"expiry_enabled"`
-	ExpiryDays      int  `json:"expiry_days"`
-	MaintainEnabled bool `json:"maintain_enabled"`
-	MaintainHour    int  `json:"maintain_hour"`
-	UpstreamEnabled bool `json:"upstream_enabled"`
-	UpstreamHours   int  `json:"upstream_hours"`
-	PriceEnabled    bool `json:"price_enabled"`
-	PriceHours      int  `json:"price_hours"`
+	UTCOffset       int     `json:"utc_offset"`
+	BackupEnabled   bool    `json:"backup_enabled"`
+	BackupHour      int     `json:"backup_hour"`
+	BackupKeep      int     `json:"backup_keep"`
+	RemoteEnabled   bool    `json:"remote_enabled"`
+	RemoteMinutes   int     `json:"remote_minutes"`
+	RemoteKeep      int     `json:"remote_keep"`
+	QuotaEnabled    bool    `json:"quota_enabled"`
+	QuotaPercent    int     `json:"quota_percent"`
+	QuotaMinutes    int     `json:"quota_minutes"`
+	ReportEnabled   bool    `json:"report_enabled"`
+	ReportHour      int     `json:"report_hour"`
+	WeeklyEnabled   bool    `json:"weekly_enabled"`
+	WeeklyWeekday   int     `json:"weekly_weekday"` // 1 周一至 7 周日
+	WeeklyHour      int     `json:"weekly_hour"`
+	ExpiryEnabled   bool    `json:"expiry_enabled"`
+	ExpiryDays      int     `json:"expiry_days"`
+	MaintainEnabled bool    `json:"maintain_enabled"`
+	MaintainHour    int     `json:"maintain_hour"`
+	UpstreamEnabled bool    `json:"upstream_enabled"`
+	UpstreamHours   int     `json:"upstream_hours"`
+	PriceEnabled    bool    `json:"price_enabled"`
+	PriceHours      int     `json:"price_hours"`
+	SpendEnabled    bool    `json:"spend_enabled"`
+	SpendMultiple   float64 `json:"spend_multiple"`
+	SpendMinimum    float64 `json:"spend_minimum"`
 	// 免费模型自动维护：目标路由、上下文下限、是否要求 tools、是否开启丢弃推理内容、排除的上游 ID（逗号分隔）
 	FreeEnabled       bool   `json:"free_enabled"`
 	FreeHours         int    `json:"free_hours"`
@@ -53,7 +56,7 @@ type scheduleConfig struct {
 // 自动备份、远程备份与每日日报默认关闭，由管理员自己开启
 var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, RemoteMinutes: 60, RemoteKeep: 48, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
 	ReportHour: 9, WeeklyWeekday: 1, WeeklyHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6,
-	PriceHours: 24, FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
+	PriceHours: 24, SpendMultiple: 2, SpendMinimum: 10, FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
 
 type taskRun struct {
 	At     int64  `json:"at"`
@@ -103,6 +106,9 @@ var scheduledTasks = []scheduledTask{
 	{"price", "价格同步", func(c scheduleConfig, last, t time.Time) bool {
 		return c.PriceEnabled && t.Sub(last) >= time.Duration(c.PriceHours)*time.Hour
 	}, (*App).taskPriceSync},
+	{"spend", "花费异常", func(c scheduleConfig, last, t time.Time) bool {
+		return c.SpendEnabled && t.Sub(last) >= time.Hour
+	}, (*App).taskSpendAnomaly},
 	{"free", "免费模型", func(c scheduleConfig, last, t time.Time) bool {
 		return c.FreeEnabled && t.Sub(last) >= time.Duration(c.FreeHours)*time.Hour
 	}, (*App).taskFreeModels},
@@ -176,6 +182,10 @@ func (c scheduleConfig) validate() error {
 		return fail("INVALID_PARAMS", "上游检查间隔应在 1–168 小时之间", 400)
 	case c.PriceHours < 1 || c.PriceHours > 168:
 		return fail("INVALID_PARAMS", "价格同步间隔应在 1–168 小时之间", 400)
+	case c.SpendMultiple < 1 || c.SpendMultiple > 100:
+		return fail("INVALID_PARAMS", "花费异常倍数应在 1–100 之间", 400)
+	case c.SpendMinimum < 0 || c.SpendMinimum > 1000000000:
+		return fail("INVALID_PARAMS", "花费异常最低金额应在 0–1000000000 美元之间", 400)
 	case c.FreeHours < 1 || c.FreeHours > 168:
 		return fail("INVALID_PARAMS", "免费模型检查间隔应在 1–168 小时之间", 400)
 	case c.FreeMinContext < 0 || c.FreeMinContext > 10000000:
@@ -333,7 +343,7 @@ func (a *App) runTask(task scheduledTask, c scheduleConfig) taskRun {
 	} else if err != nil {
 		run.Status, run.Result = "failed", err.Error()
 		slog.Warn("scheduled task failed", "task", task.id, "err", err)
-		if task.id != "report" && task.id != "weekly" && task.id != "quota" && task.id != "expiry" {
+		if task.id != "report" && task.id != "weekly" && task.id != "quota" && task.id != "spend" && task.id != "expiry" {
 			if e := a.notify(task.name + "失败：" + err.Error()); e != nil {
 				slog.Debug("schedule failure notice not sent", "err", e)
 			}
