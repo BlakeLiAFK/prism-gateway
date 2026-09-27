@@ -112,6 +112,7 @@ curl http://127.0.0.1:8080/api.json \
 | `job.list` | `{}` | 最近 100 个模型同步任务 |
 | `job.get` | `{id}` | 任务状态、结果或错误 |
 | `audit.list` | `{}` | 最近 200 个审计事件 |
+| `audit.search` | `{page?,page_size?,q?,action?,target?,from?,to?}` | `{items,page,page_size,total,pages}`；每页默认30、最多100；时间为毫秒；操作/目标模糊筛选 |
 | `playground.run` | `{protocol,model,prompt,session?}` | status / duration_ms / headers / response |
 | `demo.enable` | `{version}` | 新 Config，添加本地演示对象 |
 | `batch.read` | `{requests:[{action,params},...]}` | 每项独立 ok/data/error 数组 |
@@ -339,4 +340,29 @@ GET  /anthropic/v1/models/{id}
 
 一个客户端请求可能因上游 429/503产生多个 attempt。`parent_id` 是客户端 X-Request-ID，`id` 是单次 attempt。Dashboard 的请求数按 attempt 统计，不是假装所有重试只发生过一次。日志只保存元数据，不保存 prompt、回答、工具参数、完整 Key 或上游错误响应正文。
 
-`cost_nano` 是十亿分之一美元；`cost_known` 表示有上游 token 用量且手动确认计价，不等于上游已开票。`usage_mode=reserved_unknown/reserved_after_restart` 表示不确定并保留预留，不应当作实际结算金额。
+`cost_nano` 是十亿分之一美元；`usage_mode=reported_cost` 表示采用 OpenRouter `usage.cost` 实际费用（包括明确的零），`cost_known=1`，金额已知与 token 是否完整独立。其余已知费用使用确认的本地价格估算；缺失、非法及负金额不会当作免费。转换或客户端输出失败仍保留已获得的可信实际费用。`usage_mode=reserved_unknown/reserved_after_restart` 表示不确定并保留预留，不应当作实际结算金额。
+
+
+## 自动价格、报告与告警
+
+以下字段通过 `schedule.get/save` 读写，新增任务默认关闭。`schedule.run` 可手动运行对应任务。
+
+| 任务 ID | 配置字段 | 默认与范围 |
+| --- | --- | --- |
+| price | price_enabled、price_hours | 关闭；24小时，1–168 |
+| weekly | weekly_enabled、weekly_weekday、weekly_hour | 关闭；周一（1–7）、9点（0–23） |
+| spend | spend_enabled、spend_multiple、spend_minimum | 关闭；2倍、最低10美元；每小时检查 |
+| failure | failure_enabled、failure_minutes、failure_min_samples、failure_percent、failure_cooldown_minutes | 关闭；15分钟、20样本、20%、60分钟冷却；每5分钟检查 |
+| key-budget | key_budget_enabled、key_budget_percent、key_budget_cooldown_minutes | 关闭；80%、1440分钟冷却；每小时检查 |
+
+- `model.save` 的 `model.price_locked` 默认为 false；自动价格同步跳过锁定模型，仅处理启用的 OpenRouter 供应商，先完整获取再通过配置事务写入。缺失或非法价格不覆盖现值，无变化不生成配置版本。开启同步或手动运行即确认有效上游标价。
+- 周报覆盖上一个完整周一至周日，按配置时区、星期和时刻发送；错过本周时刻会补跑一次。日报、周报中的模型优先使用显示名称，删除后回退 ID。
+- 花费异常比较今日与前七个完整自然日均值；均值为零不计算倍率。统计口径包含已记录实际费用、本地估算及异常预留，不能视为供应商账单。
+- 失败率按请求尝试的精确分钟窗口统计，排除演示与进行中请求；错误与状态未知均计入，保留原有连续失败告警。
+- Key 预警沿用限额的滚动24小时/30天口径，不是自然日/月。每个 Key 和窗口独立冷却；推送失败不记录去重。
+
+## 缓存命中统计
+
+`model.stats` 和 `model.usage` 的汇总项包含 `cache_hit_rate`（0–1或null）、`cache_samples`、`cache_known_requests`、`cache_null_requests`、`cache_input_tokens`、`cache_hit_tokens`、`cache_null_rate`。`route.stats` 返回 `cache`，按请求的路由/别名 ID 索引同类统计（小时汇总覆盖所选分钟窗口所在小时）。
+
+命中率为明确报告缓存用量的请求中，缓存读取 token / 总输入 token；Messages 输入包含普通输入、缓存读取及缓存写入。缺失字段与显式 null 不算零命中，零分母返回 null；旧记录不能推断覆盖。界面显示样本数量，缓存命中不能单独证明会话亲和有效。独立缓存汇总表保留400天，不改变旧用量表结构，兼容交接时仍在排空的旧进程。
