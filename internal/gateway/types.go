@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const Version = "1.32.2"
+const Version = "1.33.0"
 
 type Object = map[string]any
 
@@ -62,6 +62,8 @@ type Model struct {
 type Candidate struct {
 	ModelID string `json:"model_id"`
 	Weight  int    `json:"weight"`
+	// Disabled 只在当前路由里暂停这个候选：位置与权重保留，会话亲和也不再命中它
+	Disabled bool `json:"disabled,omitempty"`
 }
 type Route struct {
 	ID          string      `json:"id"`

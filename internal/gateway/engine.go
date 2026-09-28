@@ -159,7 +159,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		}
 		candidates = route.Candidates
 	} else if _, ok := c.model(resolved); ok {
-		candidates = []Candidate{{resolved, 1}}
+		candidates = []Candidate{{ModelID: resolved, Weight: 1}}
 	} else {
 		return nil, nil, fail("MODEL_NOT_FOUND", "模型或路由不存在", 404)
 	}
@@ -184,6 +184,10 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		why := ""
 		if !ok || !m.Enabled || !pr.Enabled {
 			why = "disabled"
+		}
+		// 暂停的候选直接淘汰，不进入 out：亲和加分与 Pinned 等待都以「仍是合格候选」为前提，随之失效
+		if cm.Disabled {
+			why = "candidate_paused"
 		}
 		if len(arr(o["tools"])) > 0 && !m.Tools {
 			why = "tools_unsupported"

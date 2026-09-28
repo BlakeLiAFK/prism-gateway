@@ -13,7 +13,7 @@ func TestRouteLive(t *testing.T) {
 	a.Concurrency, b.Concurrency, a.RPM = 3, 5, 60
 	h.configure(t, "http://127.0.0.1:1", a, b)
 	h.change(t, func(c *Config) {
-		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "weighted", Candidates: []Candidate{{"a", 10}, {"b", 10}}}}
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "weighted", Candidates: []Candidate{{ModelID: "a", Weight: 10}, {ModelID: "b", Weight: 10}}}}
 	})
 	n := now()
 	// 近 60 秒：a 成功 2 次（各 5 个输出 token，耗时 100ms）、b 失败 1 次；5 分钟前的旧记录不计入 60 秒窗口
@@ -73,6 +73,15 @@ func TestRouteLive(t *testing.T) {
 	if num(obj(obj(obj(out["data"])["models"])["a"]), "requests_5m") != 3 {
 		t.Error("5 秒内应返回缓存结果")
 	}
+	// 暂停 b 后路由容量只剩 a 的 3
+	h.change(t, func(c *Config) { c.Routes[0].Candidates[1].Disabled = true })
+	liveMu.Lock()
+	delete(liveCache, h.a)
+	liveMu.Unlock()
+	_, out = h.rpc(t, "route.live", Object{}, h.token)
+	if got := num(obj(obj(obj(out["data"])["routes"])["auto"]), "capacity"); got != 3 {
+		t.Errorf("暂停候选不应计入路由容量，capacity = %v，期望 3", got)
+	}
 }
 
 // 并发满导致所有候选准入被拒：客户端收到 429，请求日志留下 rejected 记录，实时面板计入拒绝次数
@@ -82,7 +91,7 @@ func TestAdmissionRejectRecorded(t *testing.T) {
 	m.Concurrency = 1
 	h.configure(t, "http://127.0.0.1:1", m)
 	h.change(t, func(c *Config) {
-		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"a", 10}}}}
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "a", Weight: 10}}}}
 	})
 	h.a.Engine.mu.Lock()
 	h.a.Engine.state("a").Active = 1

@@ -45,7 +45,7 @@ func freeHarness(t *testing.T) (*harness, *atomic.Bool) {
 			orm("lite-excl", "v/excl:free", false), // 排除 → 不动
 			orm("paid-model", "v/paid", true),      // 收费模型 → 不动
 		}
-		c.Routes = []Route{{ID: "lite", Name: "lite", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"lite-old", 30}, {"lite-back", 20}, {"lite-excl", 10}, {"paid-model", 10}}}}
+		c.Routes = []Route{{ID: "lite", Name: "lite", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "lite-old", Weight: 30}, {ModelID: "lite-back", Weight: 20}, {ModelID: "lite-excl", Weight: 10}, {ModelID: "paid-model", Weight: 10}}}}
 	})
 	w, _ := h.rpc(t, "schedule.save", Object{"free_enabled": true, "free_exclude": " v/excl:free "}, h.token)
 	requireStatus(t, w, 200)

@@ -60,7 +60,7 @@ func TestLiveStreamAndSessionHeader(t *testing.T) {
 	h := newHarness(t)
 	h.configure(t, up.URL, modelFixture("a", "chat"))
 	h.change(t, func(c *Config) {
-		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"a", 10}}}}
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "a", Weight: 10}}}}
 	})
 	body := requestFixture("chat", "auto")
 	body["stream"] = true

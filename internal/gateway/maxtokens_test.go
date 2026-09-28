@@ -78,7 +78,7 @@ func TestTruncatedErrorNamesMaxTokens(t *testing.T) {
 	up, _ := captureUpstream(t, true)
 	h.configure(t, up.URL, modelFixture("a", "chat"), modelFixture("b", "chat"))
 	h.change(t, func(c *Config) {
-		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"a", 10}, {"b", 10}}}}
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "a", Weight: 10}, {ModelID: "b", Weight: 10}}}}
 	})
 	body := requestFixture("chat", "auto")
 	body["max_tokens"] = 8

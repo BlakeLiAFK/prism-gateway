@@ -22,7 +22,7 @@ func strategyFixture(t *testing.T, h *harness, strategy string) {
 		b.InputPrice, b.OutputPrice, b.PricingSet = 0.3, 1.2, true
 		c.Models = []Model{a, b, cc}
 		c.Routes = []Route{{ID: "r", Name: "r", Strategy: strategy, Enabled: true,
-			Candidates: []Candidate{{"a", 30}, {"b", 20}, {"c", 10}}}}
+			Candidates: []Candidate{{ModelID: "a", Weight: 30}, {ModelID: "b", Weight: 20}, {ModelID: "c", Weight: 10}}}}
 	})
 }
 
@@ -78,7 +78,7 @@ func TestWeightedFollowsWeights(t *testing.T) {
 		a.ProviderID, b.ProviderID, cc.ProviderID = "p_x", "p_y", "p_z"
 		c.Models = []Model{a, b, cc}
 		c.Routes = []Route{{ID: "r", Name: "r", Strategy: "weighted", Enabled: true,
-			Candidates: []Candidate{{"a", 30}, {"b", 20}, {"c", 10}}}}
+			Candidates: []Candidate{{ModelID: "a", Weight: 30}, {ModelID: "b", Weight: 20}, {ModelID: "c", Weight: 10}}}}
 	})
 	const n = 3000
 	first := map[string]int{}

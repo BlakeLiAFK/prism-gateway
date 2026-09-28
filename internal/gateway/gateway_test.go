@@ -459,7 +459,7 @@ func TestFallback429AndNoMidStreamFallback(t *testing.T) {
 			defer up.Close()
 			h.configure(t, up.URL, modelFixture("first", "chat"), modelFixture("second", "chat"))
 			h.change(t, func(c *Config) {
-				c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"first", 10}, {"second", 10}}}}
+				c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "first", Weight: 10}, {ModelID: "second", Weight: 10}}}}
 			})
 			body := requestFixture("chat", "auto")
 			body["stream"] = partial
@@ -2533,7 +2533,7 @@ func TestSystemOne529FallsOverLike503(t *testing.T) {
 		second.ProviderID = "p_ok"
 		c.Models = []Model{first, second}
 		c.Routes = []Route{{ID: "jev", Name: "jev", Strategy: "priority", Enabled: true,
-			Candidates: []Candidate{{"jev-busy", 20}, {"jev-ok", 10}}}}
+			Candidates: []Candidate{{ModelID: "jev-busy", Weight: 20}, {ModelID: "jev-ok", Weight: 10}}}}
 	})
 	w := h.generate(t, "systemone", systemOneFixture("jev"))
 	requireStatus(t, w, 200)
@@ -2702,7 +2702,7 @@ func TestExhaustedFallsOverAndCoolsDownLonger(t *testing.T) {
 			defer up.Close()
 			h.configure(t, up.URL, modelFixture("first", "chat"), modelFixture("second", "chat"))
 			h.change(t, func(c *Config) {
-				c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"first", 10}, {"second", 10}}}}
+				c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "first", Weight: 10}, {ModelID: "second", Weight: 10}}}}
 			})
 			w := h.generate(t, "chat", requestFixture("chat", "auto"))
 			requireStatus(t, w, 200)
@@ -2897,7 +2897,7 @@ func failoverHarness(t *testing.T, bad http.HandlerFunc) *harness {
 		ok.ProviderID = "p_ok"
 		c.Models = []Model{bad, ok}
 		c.Routes = []Route{{ID: "pair", Name: "pair", Strategy: "priority", Enabled: true,
-			Candidates: []Candidate{{"cand-bad", 20}, {"cand-ok", 10}}}}
+			Candidates: []Candidate{{ModelID: "cand-bad", Weight: 20}, {ModelID: "cand-ok", Weight: 10}}}}
 	})
 	return h
 }

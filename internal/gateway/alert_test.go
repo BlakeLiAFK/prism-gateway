@@ -57,7 +57,7 @@ func TestAlertDelivery(t *testing.T) {
 	}
 	// 路由全部候选不可用：并发占满
 	h.change(t, func(c *Config) {
-		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{"m", 10}}}}
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "m", Weight: 10}}}}
 	})
 	h.a.Engine.mu.Lock()
 	h.a.Engine.state("m").Active = m.Concurrency

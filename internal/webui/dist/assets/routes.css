@@ -40,6 +40,10 @@
   .cand-share-bar,.cand-live-bar{max-width:none}
   .candidate-flags{gap:4px}
   .route-live{padding:13px 17px}
+  /* 窄屏上下堆叠：三列布局会把候选右侧的开关与排序按钮挤出卡片 */
+  .route-canvas{grid-template-columns:minmax(0,1fr);gap:12px}
+  .route-connector{display:none}
+  .router-node{flex-direction:row;justify-content:flex-start;padding:10px 13px}
 }
 
 @media(max-width:420px){

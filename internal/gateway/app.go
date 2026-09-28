@@ -306,7 +306,7 @@ func (a *App) EnableDemo(version int64) (Config, error) {
 		for i, p := range []string{"chat", "messages", "responses"} {
 			c.Models = append(c.Models, Model{ID: "demo-" + p, Name: []string{"Demo / Chat", "Demo / Messages", "Demo / Responses"}[i], ProviderID: "local-demo", Upstream: "demo-" + p, Protocol: p, Enabled: true, Tools: true, Context: 128000, MaxOutput: 4096, Concurrency: 2, RPM: 60, PricingSet: true})
 		}
-		c.Routes = append(c.Routes, Route{ID: "demo-auto", Name: "Sandbox route", Enabled: true, Strategy: "balanced", Affinity: true, Candidates: []Candidate{{"demo-chat", 30}, {"demo-messages", 20}, {"demo-responses", 10}}, Description: "仅用于本地演示，不会混入真实生产路由"})
+		c.Routes = append(c.Routes, Route{ID: "demo-auto", Name: "Sandbox route", Enabled: true, Strategy: "balanced", Affinity: true, Candidates: []Candidate{{ModelID: "demo-chat", Weight: 30}, {ModelID: "demo-messages", Weight: 20}, {ModelID: "demo-responses", Weight: 10}}, Description: "仅用于本地演示，不会混入真实生产路由"})
 		return nil
 	})
 }
@@ -357,7 +357,7 @@ func (a *App) dashboard(p Object) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	recent, err := a.Store.DB.Query("SELECT id,parent_id,model_id,provider_id,protocol,status,http_status,started_at,duration_ms,output_tokens,cost_nano,is_demo FROM requests ORDER BY started_at DESC LIMIT 6")
+	recent, err := a.Store.DB.Query("SELECT id,parent_id,model_id,provider_id,protocol,status,http_status,started_at,duration_ms,output_tokens,cost_nano,is_demo,client_ip,user_agent,agent_role FROM requests ORDER BY started_at DESC LIMIT 6")
 	if err != nil {
 		return nil, err
 	}

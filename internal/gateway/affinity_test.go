@@ -29,7 +29,7 @@ func affinityHarness(t *testing.T) (*harness, *atomic.Bool, func(headers map[str
 	t.Cleanup(up.Close)
 	h.configure(t, up.URL, modelFixture("first", "chat"), modelFixture("second", "chat"))
 	h.change(t, func(c *Config) {
-		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Affinity: true, Strategy: "priority", Candidates: []Candidate{{"first", 10}, {"second", 10}}}}
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Affinity: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "first", Weight: 10}, {ModelID: "second", Weight: 10}}}}
 	})
 	key := h.createKey(t)
 	call := func(headers map[string]string) string {
@@ -97,5 +97,43 @@ func TestFailoverKeepsPinUnlessLongCooldown(t *testing.T) {
 	call(nil)
 	if got := boundModels(t, h); len(got) != 1 || got[0] != "second" {
 		t.Fatalf("原模型冷却超过 5 分钟应改绑到 second，实得 %v", got)
+	}
+}
+
+// 暂停候选后，已经亲和到它的会话也要改走其他候选；全部暂停时没有可用候选
+func TestPausedCandidateBreaksAffinity(t *testing.T) {
+	h, _, call := affinityHarness(t)
+	if got := call(nil); got != "first" {
+		t.Fatalf("priority 应先选 first，实得 %q", got)
+	}
+	pause := func(first, second bool) {
+		t.Helper()
+		w, out := h.rpc(t, "route.save", Object{"version": h.a.Store.Config().Version, "id": "auto", "route": Object{"candidates": []any{
+			Object{"model_id": "first", "weight": 10, "disabled": first},
+			Object{"model_id": "second", "weight": 10, "disabled": second},
+		}}}, h.token)
+		if w.Code != 200 {
+			t.Fatalf("保存路由失败: %v", out)
+		}
+	}
+	pause(true, false)
+	if got := call(nil); got != "second" {
+		t.Fatalf("first 已暂停，亲和会话应改走 second，实得 %q", got)
+	}
+	if got := boundModels(t, h); len(got) != 1 || got[0] != "second" {
+		t.Fatalf("会话应重新绑定到 second，实得 %v", got)
+	}
+	pause(false, false)
+	if got := call(nil); got != "second" {
+		t.Fatalf("恢复 first 后会话仍应保持在 second，实得 %q", got)
+	}
+	pause(true, true)
+	key := h.createKey(t)
+	r := httptest.NewRequest("POST", "http://localhost/openai/v1/chat/completions", strings.NewReader(raw(requestFixture("chat", "auto"))))
+	r.Header.Set("Authorization", "Bearer "+key)
+	w := httptest.NewRecorder()
+	h.a.ServeHTTP(w, r)
+	if w.Code == 200 || !strings.Contains(w.Body.String(), "candidate_paused") {
+		t.Fatalf("全部暂停时应拒绝并说明原因，实得 %d %s", w.Code, w.Body)
 	}
 }

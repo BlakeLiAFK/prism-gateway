@@ -54,6 +54,13 @@ def enable_demo(base, token):
     first = cfg['routes'][0]
     second = dict(first, id='demo-second', name='Second route', sort=99)
     rpc('route.save', {'version': cfg['version'], 'id': 'demo-second', 'route': second})
+    # 带 UA 的演示请求：总览最近请求要显示来源 IP 与 UA
+    key = rpc('apikey.create', {'name': 'smoke', 'allowed': []})['key']
+    body = json.dumps({'model': 'demo-auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 16}).encode()
+    req = urllib.request.Request(base + '/openai/v1/chat/completions', data=body, headers={
+        'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key, 'User-Agent': 'claude-cli/2.1.3 (external, cli)'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        r.read()
     return rpc
 
 
@@ -73,6 +80,21 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     page.click('#login-form button[type="submit"]')
     page.wait_for_selector('.sidebar', timeout=15000)
     results.append('login + shell render')
+
+    recent = page.locator('.compact-table tbody tr').first
+    recent.wait_for(timeout=5000)
+    text = recent.inner_text()
+    if '127.0.0.1' not in text or 'Claude Code' not in text or 'claude-cli/2.1.3' not in text:
+        fail(f'总览最近请求缺少 IP 或 UA: {text!r}')
+    if recent.bounding_box()['height'] > 56:
+        fail(f'最近请求行高应紧凑，实得 {recent.bounding_box()["height"]}')
+    ua = page.locator('.compact-table .ua-cell').first.bounding_box()
+    card = page.locator('.card:has(.compact-table)').bounding_box()
+    if ua['x'] + 20 > card['x'] + card['width']:
+        fail(f'最近请求的 UA 列被挤出卡片: ua={ua} card={card}')
+    if artifacts:
+        page.locator('.card:has(.compact-table)').screenshot(path=str(artifacts / 'recent-desktop.png'))
+    results.append('overview recent shows ip and ua')
 
     # 共用 Token 格式化与总览按钮：大数默认使用 B，精确显示在切页后保留。
     page.evaluate("""async () => {
@@ -254,6 +276,42 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     if reloaded != after:
         fail(f'拖拽结果没有落库: 拖后 {after}，重载后 {reloaded}')
     results.append('route drag reorder')
+
+    # 候选暂停开关：落库、重载可见、编辑路由后不被重置
+    paused = "document.querySelector('.candidate [data-action=\"toggle-candidate\"]').getAttribute('aria-checked')"
+    page.locator('.candidate [data-action="toggle-candidate"]').first.click()
+    page.wait_for_timeout(800)
+    page.reload()
+    page.wait_for_timeout(1200)
+    page.click('.nav-item[data-nav="routes"]')
+    page.wait_for_timeout(500)
+    first = page.locator('.candidate').first
+    if page.evaluate(paused) != 'false' or '已暂停' not in first.inner_text() or 'muted' not in first.get_attribute('class'):
+        fail('暂停候选后重载，开关、标记或置灰状态不对')
+    if artifacts:
+        page.locator('.route-canvas').screenshot(path=str(artifacts / 'candidate-paused.png'))
+    # 390px 下开关必须完整可见，不能被挤出卡片
+    size = page.viewport_size
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(250)
+    box = page.locator('.candidate [data-action="toggle-candidate"]').first.bounding_box()
+    if not box or box['x'] + box['width'] > 390:
+        fail(f'390px 下候选开关超出视口: {box}')
+    if artifacts:
+        page.locator('.route-canvas').screenshot(path=str(artifacts / 'candidate-paused-mobile.png'))
+    page.set_viewport_size(size)
+    page.wait_for_timeout(250)
+    page.locator('[data-action="edit-route"]').first.click()
+    page.wait_for_selector('dialog button[type="submit"]')
+    page.locator('dialog button[type="submit"]').click()
+    page.wait_for_timeout(800)
+    if page.evaluate(paused) != 'false':
+        fail('编辑并保存路由后，候选的暂停状态被重置')
+    page.locator('.candidate [data-action="toggle-candidate"]').first.click()
+    page.wait_for_timeout(800)
+    if page.evaluate(paused) != 'true':
+        fail('再次点击开关应恢复候选')
+    results.append('route candidate pause toggle')
 
     # 调试台的 System One 面板：载荷形状和对话协议完全不同，必须单独验证
     page.click('.nav-item[data-nav="playground"]')

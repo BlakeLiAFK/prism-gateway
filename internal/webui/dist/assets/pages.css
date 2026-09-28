@@ -35,3 +35,12 @@
 @media(max-width:700px){.settings-tabs{margin-bottom:18px}}
 .sched-fields{flex-wrap:wrap;justify-content:flex-end;max-width:460px}.sched-wide{flex:1 1 100%}.sched-wide input{width:100%}.sched-check{flex-direction:row!important;align-items:center;gap:6px!important;font-size:11px!important;color:var(--sub)!important;align-self:flex-end;min-height:30px}.sched-check input{width:auto;min-height:0}
 @media(max-width:700px){.sched-fields{justify-content:flex-start;max-width:none}}
+
+/* 总览最近请求：压低行高，UA 单行截断，悬停看全文 */
+.compact-table th,.compact-table td{padding:7px 12px}
+.compact-table .cell-title{gap:6px}
+.compact-table .recent-model{max-width:150px}
+.compact-table .ua-cell{width:100%;max-width:0}
+.compact-table .ua-cell>div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px}
+.compact-table .ua-cell .cell-sub{margin-top:1px}
+.compact-table .ua-cell b{font-weight:550;color:var(--text)}

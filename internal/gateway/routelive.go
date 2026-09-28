@@ -163,7 +163,7 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 		seen := map[string]bool{}
 		for _, cm := range rt.Candidates {
 			m, ok := c.model(cm.ModelID)
-			if !ok || seen[cm.ModelID] {
+			if !ok || cm.Disabled || seen[cm.ModelID] {
 				continue
 			}
 			seen[cm.ModelID] = true

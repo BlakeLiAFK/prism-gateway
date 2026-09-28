@@ -418,6 +418,15 @@ export async function handleAction(el){
  case 'candidate-down':moveCandidate(Number(el.dataset.index),Number(el.dataset.index)+1);
     break;
 
+ case 'toggle-candidate':{
+      // 在画布当前顺序上翻转；有未应用的排序时一并保存，不让拖好的顺序丢失
+      const r=state.config.routes.find(x=>x.id===state.routeID);
+      const candidates=(state.routeDraft||r.candidates).map(x=>x.model_id===id?{...x,disabled:!x.disabled}:x);
+      await save('route.save',{id:state.routeID,route:{candidates}});
+      break;
+
+    }
+
  case 'save-route-order':await save('route.save',{id:state.routeID,route:{candidates:state.routeDraft}});
     break;
 
