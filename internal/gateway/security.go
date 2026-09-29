@@ -274,33 +274,90 @@ type cachedKey struct {
 
 const lastUsedEvery = 60000
 
-// lookupKey 先查内存，未命中再查库并缓存。查库期间持锁，
-// 保证与 forgetKeys 互斥：吊销写库后清缓存，不会被并发的旧查询结果回填。
-func (e *Engine) lookupKey(d string) (*cachedKey, error) {
+// keyRefreshEvery：快照里查不到某个 Key 时，快照足够新就直接判无效，不查库；
+// 超过这个时间才重载一次。无效 Key 因此最多每 5 秒引发一次查库，
+// 同时兼顾别的进程刚创建的 Key（最多晚 5 秒生效；本进程内的创建与吊销会立即失效快照）。
+const keyRefreshEvery = 5000
+
+// peekKey 只看内存快照。decided 为 false 表示快照缺失或过期，需要重载才能下结论。
+func (e *Engine) peekKey(d string) (k *cachedKey, decided bool) {
 	e.keyMu.Lock()
 	defer e.keyMu.Unlock()
-	if k := e.keys[d]; k != nil {
-		return k, nil
+	if e.keysAt == 0 {
+		return nil, false
 	}
-	rows, err := e.store.DB.Query("SELECT id,allowed,"+keyPolicyColumns+" FROM api_keys WHERE digest=? AND enabled=1", d)
+	if k := e.keys[d]; k != nil {
+		return k, true
+	}
+	return nil, now()-e.keysAt < keyRefreshEvery
+}
+
+// lookupKey 按 digest 找到启用中的网关 Key。命中快照或快照够新时不碰数据库，
+// 所以随机字符串的无效 Key 刷不到数据库上。
+func (e *Engine) lookupKey(d string) (*cachedKey, error) {
+	k, decided := e.peekKey(d)
+	if !decided {
+		// 同一时刻只让一个协程重载，其余等它做完再看快照
+		e.loadMu.Lock()
+		defer e.loadMu.Unlock()
+		if k, decided = e.peekKey(d); !decided {
+			var err error
+			if k, err = e.reloadKeys(d); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if k == nil {
+		return nil, fail("UNAUTHORIZED", "网关 API Key 无效或已撤销", 401)
+	}
+	return k, nil
+}
+
+// reloadKeys 载入全部启用的 Key 作为新快照，返回其中 d 对应的那把（没有则为 nil）。
+// 查库不持 keyMu：数据库忙时，快照里已有的 Key 不能跟着排队。
+// 载入期间 forgetKeys 推进了 keyGen（例如刚吊销了 Key），这份结果可能是吊销前读到的，
+// 只用于本次请求，不作为快照。
+func (e *Engine) reloadKeys(d string) (*cachedKey, error) {
+	e.keyMu.Lock()
+	gen := e.keyGen
+	e.keyMu.Unlock()
+	if e.onKeyLoad != nil {
+		e.onKeyLoad()
+	}
+	rows, err := e.store.DB.Query("SELECT id,digest,allowed," + keyPolicyColumns + " FROM api_keys WHERE enabled=1")
 	if err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
-		return nil, fail("UNAUTHORIZED", "网关 API Key 无效或已撤销", 401)
+	fresh := make(map[string]*cachedKey, len(rows))
+	for _, row := range rows {
+		k := &cachedKey{p: Principal{ID: row.String("id"), Policy: keyPolicy{ExpiresAt: row.Int("expires_at"), LimitDay: row.Float("limit_day"), LimitMonth: row.Float("limit_month"), RPM: int(row.Int("rpm"))}}}
+		if err := json.Unmarshal([]byte(row.String("allowed")), &k.p.Allowed); err != nil {
+			// 一条损坏的记录只让这把 Key 不可用，不能连累其他 Key
+			slog.Error("api key record unreadable", "key_id", row.String("id"), "err", err)
+			continue
+		}
+		fresh[row.String("digest")] = k
 	}
-	r := rows[0]
-	k := &cachedKey{p: Principal{ID: r.String("id"), Policy: keyPolicy{ExpiresAt: r.Int("expires_at"), LimitDay: r.Float("limit_day"), LimitMonth: r.Float("limit_month"), RPM: int(r.Int("rpm"))}}}
-	if err = json.Unmarshal([]byte(rows[0].String("allowed")), &k.p.Allowed); err != nil {
-		return nil, err
+	e.keyMu.Lock()
+	defer e.keyMu.Unlock()
+	if gen == e.keyGen {
+		// 沿用上次写 last_used 的时刻，重载不会让每把 Key 多写一次库
+		for dig, k := range fresh {
+			if old := e.keys[dig]; old != nil {
+				k.written = old.written
+			}
+		}
+		e.keys = fresh
+		e.keysAt = now()
 	}
-	e.keys[d] = k
-	return k, nil
+	return fresh[d], nil
 }
 
 // forgetKeys 在 api_keys 写库后调用，下一次请求重新查库
 func (e *Engine) forgetKeys() {
 	e.keyMu.Lock()
 	e.keys = map[string]*cachedKey{}
+	e.keysAt = 0
+	e.keyGen++
 	e.keyMu.Unlock()
 }

@@ -2,8 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -54,9 +52,16 @@ type Engine struct {
 	clients  map[string]*http.Client
 	keyMu    sync.Mutex
 	keys     map[string]*cachedKey
-	keyHits  map[string][]int64 // 每把 Key 近 60 秒的请求时刻，用于 Key 级 RPM
-	streamed map[string]*streamWindow
-	spend    map[string]keySpendEntry
+	keysAt   int64  // 快照载入时刻，0 表示需要重载
+	keyGen   uint64 // forgetKeys 每次加一，用来丢弃吊销前读到的查库结果
+	loadMu   sync.Mutex
+	// onKeyLoad 仅供测试：快照重载读库前调用
+	onKeyLoad func()
+	keyHits   map[string][]int64 // 每把 Key 近 60 秒的请求时刻，用于 Key 级 RPM
+	streamed  map[string]*streamWindow
+	spend     map[string]keySpendEntry
+	// budgetLocks 按模型串行「预算检查 + 预留写入」，值是 *sync.Mutex
+	budgetLocks sync.Map
 	// OnRateLimited 在上游返回 429 后调用，供 App 去查额度窗口
 	OnRateLimited func(Provider)
 	// OnAlert 推送告警（事件类别、限频键、正文），未设置时忽略
@@ -198,7 +203,6 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			why = "vision_unsupported"
 		}
 		var body Object
-		json.Unmarshal([]byte(raw(o)), &body)
 		cross := p != m.Protocol
 		ignored := []string{}
 		// System One 返回类型化决策，对话协议返回消息序列，两边没有共同语义。
@@ -228,7 +232,10 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 					why = err.Error()
 				}
 			}
-		} else {
+		} else if why == "" {
+			// 原生透传要改 model、输出上限和思考预算，所以每个候选各持一份副本；
+			// 被淘汰的候选和跨协议候选（body 由 encodeCanonical 生成）都不需要
+			body = cloneJSON(o).(Object)
 			body["model"] = m.Upstream
 		}
 		if why == "" && m.Protocol != "systemone" {
@@ -297,128 +304,6 @@ func containsImage(v any) bool {
 		}
 	}
 	return false
-}
-func (e *Engine) admit(s selection, key Principal, reqID, requested, p, session string, from client) (_ string, rerr error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	h := e.state(s.Model.ID)
-	t := now()
-	// 准入被拒计入内存，路由实时面板据此回答「是不是被并发 / 冷却挡住了」
-	defer func() { h.reject(rerr, t) }()
-	if h.Cooldown > t {
-		return "", fail("UPSTREAM_COOLDOWN", "上游限流冷却中", 429)
-	}
-	if e.global >= e.store.Config().Settings.GlobalConcurrency || h.Active >= s.Model.Concurrency {
-		return "", fail("CONCURRENCY_LIMIT", "并发已满，请稍后重试", 429)
-	}
-	recent := h.Recent[:0]
-	for _, ts := range h.Recent {
-		if ts > t-60000 {
-			recent = append(recent, ts)
-		}
-	}
-	h.Recent = recent
-	if s.Model.RPM > 0 && len(h.Recent) >= s.Model.RPM {
-		return "", fail("RPM_LIMIT", "本地 RPM 限额已满", 429)
-	}
-	reserve := reserveCost(s.Model, s.Body)
-	if hasBudget(s.Model) {
-		q, err := e.quota(s.Model.ID)
-		if err != nil {
-			return "", err
-		}
-		for _, v := range []struct {
-			k string
-			n float64
-		}{{"used_5h", s.Model.Limit5h}, {"used_7d", s.Model.Limit7d}, {"used_30d", s.Model.Limit30d}} {
-			if v.n > 0 && nano(num(q, v.k))+reserve > nano(v.n) {
-				return "", fail("LOCAL_QUOTA_LIMIT", "本地滚动预算不足（包含本次预留）；不是上游官方余额", 429)
-			}
-		}
-	}
-	id := randomID("att_")
-	err := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,cost_nano,cost_known,reason,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,?,?,?,?,?,'running',?,?,?,?,?,?,?,?)`, id, reqID, key.ID, requested, s.Model.ID, s.Provider.ID, p, s.Model.Protocol, session, t, reserve, s.Model.PricingSet, s.Reason, s.Provider.Kind == "mock", from.IP, from.Agent, from.Role)
-	if err != nil {
-		return "", err
-	}
-	h.Active++
-	e.global++
-	h.Recent = append(h.Recent, t)
-	return id, nil
-}
-func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status int, err error, start int64) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	h := e.state(s.Model.ID)
-	h.Active = max(0, h.Active-1)
-	e.global = max(0, e.global-1)
-	h.LastStatus = status
-	h.LatencyMS = now() - start
-	state := "success"
-	code := ""
-	mode := "reported_tokens"
-	value := cost(s.Model, u)
-	known := u.Known && s.Model.PricingSet
-	reported := isOpenRouter(s.Provider) && u.ReportedCostKnown
-	if reported {
-		mode = "reported_cost"
-		value = u.ReportedCostNano
-		known = true
-	}
-	if err != nil || status >= 400 {
-		state = "error"
-		code = fmt.Sprintf("UPSTREAM_%d", status)
-		// 带自有错误码的失败（空回答、跨协议不兼容）记它自己的码：
-		// 记成 UPSTREAM_502 会把「上游坏了」和「上游好好的但内容用不了」混为一谈
-		var ae *APIError
-		if errors.As(err, &ae) && ae.Code != "" {
-			code = ae.Code
-		}
-		if status == 499 {
-			code = "CLIENT_CANCELED"
-		}
-	}
-	if !u.Known && !reported {
-		mode = "unknown"
-		known = false
-	}
-	// OpenRouter 已报告金额时，即使后续转换或客户端写入失败也保留实际费用。
-	// 只有 token 用量时仍要求上游成功，避免把失败响应里的模糊字段当成账单。
-	billed := reported || status == 200 && u.Known
-	if (state == "error" || (!u.Known && !reported)) && !billed {
-		if status == 429 || status == 503 || (status >= 400 && status < 500 && status != 499) {
-			value = 0
-			mode = "rejected"
-		} else {
-			mode = "reserved_unknown"
-			state = "unknown"
-			value = reserveCost(s.Model, s.Body)
-			known = false
-		}
-	}
-	cacheKnown := 0
-	if u.CacheKnown {
-		cacheKnown = 1
-	} else if u.CacheNull {
-		cacheKnown = 2
-	}
-	if err := e.store.DB.Exec(`UPDATE requests SET status=?,http_status=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_tokens=?,write_tokens=?,cache_known=?,cost_nano=?,cost_known=?,usage_mode=?,error_code=? WHERE id=?`, state, status, now()-start, u.Input, u.Output, u.Cache, u.Write, cacheKnown, value, known, mode, code, id); err != nil {
-		slog.Error("request accounting write failed", "request_id", id, "model", s.Model.ID, "err", err)
-	}
-	e.rollup(id)
-	e.trackFailure(h, s.Model, state, code)
-	if session != "" && state == "success" {
-		// 冲突分支里的列要用本表限定。曾经误写成 requests.requests（另一张表），
-		// 导致整条语句编译失败、会话亲和记录一条都没写进去，而错误被丢弃因此无人察觉。
-		q := `INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET model_id=excluded.model_id,provider_id=excluded.provider_id,updated_at=excluded.updated_at,requests=sessions.requests+1`
-		if e.keepPin(s) {
-			// 原模型只是临时故障：保留绑定、只续期，冷却结束后回到原模型
-			q = `INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,requests=sessions.requests+1`
-		}
-		if e := e.store.DB.Exec(q, session, keyID, s.Model.ID, s.Provider.ID, now()); e != nil {
-			slog.Error("session affinity write failed", "request_id", id, "err", e)
-		}
-	}
 }
 func (e *Engine) cooldown(id, retry string) {
 	d := 30 * time.Second

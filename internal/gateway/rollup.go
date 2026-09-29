@@ -5,6 +5,7 @@ package gateway
 // 口径与 model.stats 相同：只算已结束的请求，演示请求不计花费，未计价指成功但价格未确认的请求。
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -33,13 +34,20 @@ var (
 	rollupFill = fmt.Sprintf(rollupFrom, "started_at>=?")
 )
 
-// rollup 把刚结束的一条请求累加进汇总表。失败只影响统计，不影响记账，记日志即可
+// execer 是 *sqlite.DB 与 *sqlite.Tx 共有的写入接口
+type execer interface {
+	Exec(sql string, args ...any) error
+}
+
+// rollupInto 把刚结束的一条请求累加进汇总表。失败只影响统计，不影响记账，由调用方记日志
+// （事务里不能打日志：日志输出阻塞会连带占着数据库锁）
+func rollupInto(x execer, id string) error {
+	return errors.Join(x.Exec(rollupOne, id), x.Exec(cacheRollupOne, id))
+}
+
 func (e *Engine) rollup(id string) {
-	if err := e.store.DB.Exec(rollupOne, id); err != nil {
+	if err := rollupInto(e.store.DB, id); err != nil {
 		slog.Error("usage rollup write failed", "request_id", id, "err", err)
-	}
-	if err := e.store.DB.Exec(cacheRollupOne, id); err != nil {
-		slog.Error("cache rollup write failed", "request_id", id, "err", err)
 	}
 }
 

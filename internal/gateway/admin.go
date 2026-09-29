@@ -320,6 +320,8 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		key := randomID("prism_sk_")
 		kid := randomID("key_")
 		er = a.Store.DB.Exec("INSERT INTO api_keys(id,name,prefix,digest,enabled,allowed,created_at,"+keyPolicyColumns+") VALUES (?,?,?,?,1,?,?,?,?,?,?)", kid, name, key[:17], digest(key), raw(allowed), now(), k.ExpiresAt, k.LimitDay, k.LimitMonth, k.RPM)
+		// 快照里没有新 Key，必须失效才能立即生效
+		a.Engine.forgetKeys()
 		if er != nil {
 			return nil, er
 		}

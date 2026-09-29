@@ -274,7 +274,12 @@ func (a *App) management(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Action == "auth.logout" {
 		if co, er := r.Cookie("prism_session"); er == nil {
-			a.Store.DB.Exec("DELETE FROM admin_sessions WHERE digest=?", digest(co.Value))
+			// 删除失败必须报错：否则界面显示已退出，会话在库里仍然有效
+			if err := a.Store.DB.Exec("DELETE FROM admin_sessions WHERE digest=?", digest(co.Value)); err != nil {
+				slog.Error("admin session delete failed", "request_id", id, "err", err)
+				send(nil, err)
+				return
+			}
 		}
 		http.SetCookie(w, &http.Cookie{Name: "prism_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
 		send(Object{}, nil)

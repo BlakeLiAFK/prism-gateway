@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -38,7 +39,7 @@ func (a *App) startSync(id string) (any, error) {
 	a.workers.Add(1)
 	go func() {
 		defer a.workers.Done()
-		a.Store.DB.Exec("UPDATE jobs SET status='running',updated_at=? WHERE id=?", now(), jid)
+		a.jobWrite("UPDATE jobs SET status='running',updated_at=? WHERE id=?", now(), jid)
 		ctx, cancel := context.WithTimeout(a.Context, 30*time.Second)
 		defer cancel()
 		result, err := a.syncModels(ctx, p, c.Version)
@@ -48,9 +49,9 @@ func (a *App) startSync(id string) (any, error) {
 			if errors.As(err, &ae) {
 				msg = ae.Message
 			}
-			a.Store.DB.Exec("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=?", msg, now(), jid)
+			a.jobWrite("UPDATE jobs SET status='failed',error=?,updated_at=? WHERE id=?", msg, now(), jid)
 		} else {
-			a.Store.DB.Exec("UPDATE jobs SET status='succeeded',result=?,updated_at=? WHERE id=?", raw(result), now(), jid)
+			a.jobWrite("UPDATE jobs SET status='succeeded',result=?,updated_at=? WHERE id=?", raw(result), now(), jid)
 		}
 	}()
 	return Object{"job_id": jid}, nil
@@ -172,5 +173,12 @@ func openCodeProtocol(id string) string {
 		return "responses"
 	default:
 		return "chat"
+	}
+}
+
+// jobWrite 写任务状态；后台任务没有调用方可以接收错误，失败必须落日志
+func (a *App) jobWrite(query string, args ...any) {
+	if err := a.Store.DB.Exec(query, args...); err != nil {
+		slog.Error("job status write failed", "err", err)
 	}
 }

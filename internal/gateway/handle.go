@@ -12,6 +12,13 @@ import (
 	"time"
 )
 
+// passHeaders 是从上游响应原样透传给调用方的限额头
+var passHeaders = []string{"retry-after", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-tokens-remaining", "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens"}
+
+// attemptHeaders 是每次候选尝试可能写入的响应头。换候选重试时必须先清掉，
+// 否则失败候选的声明（忽略了哪些字段、上游的限额）会挂在下一个候选的响应上。
+var attemptHeaders = append([]string{"X-Prism-Ignored", "X-Prism-Dropped", "X-Prism-Demo"}, passHeaders...)
+
 func pathFor(p string) string {
 	switch p {
 	case "chat":
@@ -166,6 +173,10 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				mode = "converted"
 			}
 			w.Header().Set("X-Prism-Protocol-Mode", mode)
+			// 换候选重试时，上一个候选留下的忽略字段声明不能带到这一个响应里
+			for _, h := range attemptHeaders {
+				w.Header().Del(h)
+			}
 			if len(s.Ignored) > 0 {
 				// 这些请求字段被接受但没有传给上游。忽略可以，不说不行。
 				w.Header().Set("X-Prism-Ignored", strings.Join(s.Ignored, ","))
@@ -256,7 +267,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			}
 			e.recordTTFB(s.Model.ID, now()-start)
 			e.recordLimits(s.Model.ID, res.Header)
-			for _, h := range []string{"retry-after", "anthropic-ratelimit-requests-remaining", "anthropic-ratelimit-tokens-remaining", "x-ratelimit-remaining-requests", "x-ratelimit-remaining-tokens"} {
+			for _, h := range passHeaders {
 				if v := res.Header.Get(h); v != "" {
 					w.Header().Set(h, v)
 				}

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const Version = "1.33.0"
+const Version = "1.33.1"
 
 type Object = map[string]any
 
@@ -163,10 +163,30 @@ func num(o Object, k string) float64 {
 func boolean(o Object, k string) bool { b, _ := o[k].(bool); return b }
 func obj(v any) Object                { m, _ := v.(map[string]any); return m }
 func arr(v any) []any                 { a, _ := v.([]any); return a }
-func raw(v any) string                { b, _ := json.Marshal(v); return string(b) }
-func now() int64                      { return time.Now().UnixMilli() }
-func nano(v float64) int64            { return int64(math.Ceil(v * 1e9)) }
-func dollars(n int64) float64         { return float64(n) / 1e9 }
+
+// cloneJSON 深拷贝 JSON 值（map / slice 逐层复制，字符串等标量共享）。
+// 比 Marshal 再 Unmarshal 快一个数量级，且不改变数字类型。
+func cloneJSON(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			out[k] = cloneJSON(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = cloneJSON(e)
+		}
+		return out
+	}
+	return v
+}
+func raw(v any) string        { b, _ := json.Marshal(v); return string(b) }
+func now() int64              { return time.Now().UnixMilli() }
+func nano(v float64) int64    { return int64(math.Ceil(v * 1e9)) }
+func dollars(n int64) float64 { return float64(n) / 1e9 }
 func clamp(n, lo, hi int) int {
 	if n < lo {
 		return lo

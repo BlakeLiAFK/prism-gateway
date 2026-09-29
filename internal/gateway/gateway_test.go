@@ -475,6 +475,142 @@ func TestFallback429AndNoMidStreamFallback(t *testing.T) {
 		})
 	}
 }
+
+// 预算检查与预留写入必须原子：预算只够两次预留时，并发准入恰好放行两个。
+// 预算查询已移出 e.mu，这里防止移出之后出现「各自看到同一份用量而一起放行」。
+func TestAdmitBudgetIsAtomicUnderConcurrency(t *testing.T) {
+	h := newHarness(t)
+	m := modelFixture("budgeted", "chat")
+	m.Concurrency = 64
+	m.PricingSet = true
+	m.OutputPrice = 1000 // 每 1000 输出 token 预留 1 美元
+	m.Limit30d = 2.5
+	h.configure(t, "http://127.0.0.1:1", m)
+	h.change(t, func(c *Config) { c.Settings.GlobalConcurrency = 64 })
+	// 预置大量零花费的历史记录，把汇总查询拖慢到毫秒级，放大「检查」与「写入」之间的竞争窗口；
+	// 没有预算锁时，多个并发请求会在任何一个写入前先读到同一份用量
+	err := h.s.DB.Transaction(func(tx *sqlite.Tx) error {
+		for i := 0; i < 30000; i++ {
+			if e := tx.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,started_at,reason) VALUES (?,?,?,?,?,?,?,?,?,'success',?,'seed')`,
+				fmt.Sprint("seed", i), "p", "k", "budgeted", "budgeted", "p_test", "chat", "chat", "s", now()-int64(i)); e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := h.s.Config()
+	mm, _ := c.model("budgeted")
+	pr, _ := c.provider("p_test")
+	sel := selection{Model: mm, Provider: pr, Body: Object{"max_tokens": 1000.0}}
+
+	var ok, limited atomic.Int32
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := h.a.Engine.admit(sel, Principal{ID: "k"}, "req", "budgeted", "chat", "", client{})
+			switch {
+			case err == nil:
+				ok.Add(1)
+			case strings.Contains(err.Error(), "本地滚动预算不足"):
+				limited.Add(1)
+			default:
+				t.Errorf("意外错误: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok.Load() != 2 || limited.Load() != 14 {
+		t.Fatalf("应放行 2 个、拒绝 14 个，实得 ok=%d limited=%d", ok.Load(), limited.Load())
+	}
+	// 被预算拒绝的请求不能占着并发名额
+	if h.a.Engine.global != 2 {
+		t.Fatalf("全局并发计数应为 2，实得 %d", h.a.Engine.global)
+	}
+}
+
+// 原生候选的请求体是独立副本：降输出上限、收紧思考预算只改副本，不能污染原始请求，
+// 否则同一次请求里排在后面的候选会拿到被前一个候选改过的字段。
+func TestSelectionsDoNotMutateOriginalBody(t *testing.T) {
+	h := newHarness(t)
+	h.configure(t, "http://127.0.0.1:1", modelFixture("small", "messages"))
+	o := Object{"model": "small", "max_tokens": 8000.0, "thinking": Object{"type": "enabled", "budget_tokens": 7000.0},
+		"messages": []any{Object{"role": "user", "content": "hi"}}}
+	sel, _, err := h.a.Engine.selections(h.s.Config(), o, "messages", "")
+	if err != nil || len(sel) != 1 {
+		t.Fatalf("selections: %v %v", sel, err)
+	}
+	if num(sel[0].Body, "max_tokens") != 4096 || num(obj(sel[0].Body["thinking"]), "budget_tokens") != 4095 {
+		t.Fatalf("副本应被收紧到模型上限: %v", sel[0].Body)
+	}
+	if num(o, "max_tokens") != 8000 || num(obj(o["thinking"]), "budget_tokens") != 7000 {
+		t.Fatalf("原始请求被修改: %v", o)
+	}
+}
+
+// 候选返回 200 却没有内容，换到下一个候选：上游的限额头是前一个候选的，不能挂到最终响应上，
+// 否则调用方会把另一个上游的剩余额度当成本次响应的额度。
+func TestFallbackDropsPreviousCandidatePassthroughHeaders(t *testing.T) {
+	h := newHarness(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		o := Object{}
+		json.NewDecoder(r.Body).Decode(&o)
+		w.Header().Set("Content-Type", "application/json")
+		if str(o, "model") == "upstream-first" {
+			w.Header().Set("X-Ratelimit-Remaining-Requests", "5")
+			io.WriteString(w, `{"id":"x","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":""}}],"usage":{"prompt_tokens":1,"completion_tokens":0}}`)
+			return
+		}
+		io.WriteString(w, `{"id":"x","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"second ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer up.Close()
+	h.configure(t, up.URL, modelFixture("first", "chat"), modelFixture("second", "chat"))
+	h.change(t, func(c *Config) {
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "first", Weight: 10}, {ModelID: "second", Weight: 10}}}}
+	})
+	w := h.generate(t, "chat", requestFixture("chat", "auto"))
+	requireStatus(t, w, 200)
+	if w.Header().Get("X-Prism-Model") != "second" || !strings.Contains(w.Body.String(), "second ok") {
+		t.Fatalf("应回退到 second: %v %s", w.Header(), w.Body)
+	}
+	if v := w.Header().Get("X-Ratelimit-Remaining-Requests"); v != "" {
+		t.Fatalf("不应带着 first 的限额头: %q", v)
+	}
+}
+
+// 跨协议候选被限流后换到原生候选：响应头不能残留前一个候选的 X-Prism-Ignored。
+func TestFallbackClearsIgnoredHeader(t *testing.T) {
+	h := newHarness(t)
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		o := Object{}
+		json.NewDecoder(r.Body).Decode(&o)
+		if str(o, "model") == "upstream-first" {
+			w.WriteHeader(429)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"x","type":"message","role":"assistant","content":[{"type":"text","text":"native ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer up.Close()
+	h.configure(t, up.URL, modelFixture("first", "chat"), modelFixture("second", "messages"))
+	h.change(t, func(c *Config) {
+		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "first", Weight: 10}, {ModelID: "second", Weight: 10}}}}
+	})
+	body := requestFixture("messages", "auto")
+	body["metadata"] = Object{"user_id": "u"}
+	w := h.generate(t, "messages", body)
+	requireStatus(t, w, 200)
+	if w.Header().Get("X-Prism-Model") != "second" || w.Header().Get("X-Prism-Protocol-Mode") != "native" {
+		t.Fatalf("应当落在原生候选上: %v", w.Header())
+	}
+	if v := w.Header().Get("X-Prism-Ignored"); v != "" {
+		t.Fatalf("原生响应不应携带上一个候选的 X-Prism-Ignored: %q", v)
+	}
+}
 func TestTokenCountModesAndNoFakeExact(t *testing.T) {
 	h := newHarness(t)
 	_, e := h.a.EnableDemo(h.s.Config().Version)
