@@ -336,6 +336,8 @@ GET  /anthropic/v1/models/{id}
 
 `X-Prism-Token-Count-Mode` 为 `provider` 或 `estimated`，不是 `exact`。原生计数失败不静默换成本地估算。
 
+`count_tokens` 只计数、不生成：它不计入网关 Key 的每分钟请求数与花费上限，也不写请求记录。这是有意的取舍——Claude Code 每轮会多次调用它，计入 RPM 会误伤低 RPM 的 Key；上游的原生计数接口本身不计费。已过期或已吊销的 Key 照常被拒绝，模型授权范围照常检查。
+
 ## 请求记录
 
 一个客户端请求可能因上游 429/503产生多个 attempt。`parent_id` 是客户端 X-Request-ID，`id` 是单次 attempt。Dashboard 的请求数按 attempt 统计，不是假装所有重试只发生过一次。日志只保存元数据，不保存 prompt、回答、工具参数、完整 Key 或上游错误响应正文。

@@ -1,16 +1,18 @@
 package gateway
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"strings"
 	"time"
 )
 
-const Version = "1.33.1"
+const Version = "1.33.2"
 
 type Object = map[string]any
 
@@ -163,6 +165,22 @@ func num(o Object, k string) float64 {
 func boolean(o Object, k string) bool { b, _ := o[k].(bool); return b }
 func obj(v any) Object                { m, _ := v.(map[string]any); return m }
 func arr(v any) []any                 { a, _ := v.([]any); return a }
+
+// decodeBody 把请求体解析成 JSON 对象。数字保留为 json.Number：原生透传会重新序列化请求体，
+// 按 float64 解析会把大于 2^53 的整数改写成相邻的值，也会把 1.0 写成 1。
+// 与 json.Unmarshal 一样，尾随内容视为非法。
+func decodeBody(b []byte) (Object, error) {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	var o Object
+	if err := dec.Decode(&o); err != nil {
+		return nil, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("请求体含有多余内容")
+	}
+	return o, nil
+}
 
 // cloneJSON 深拷贝 JSON 值（map / slice 逐层复制，字符串等标量共享）。
 // 比 Marshal 再 Unmarshal 快一个数量级，且不改变数字类型。
