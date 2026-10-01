@@ -199,7 +199,7 @@ func truncatedStreamFrame(o Object, p, typ string) bool {
 		stop := str(obj(o["delta"]), "stop_reason")
 		return stop == "max_tokens" || stop == "model_context_window_exceeded"
 	case "responses":
-		return typ == "response.incomplete"
+		return typ == "response.incomplete" && str(obj(obj(o["response"])["incomplete_details"]), "reason") == "max_output_tokens"
 	}
 	return false
 }
@@ -216,7 +216,7 @@ func nativeStream(w http.ResponseWriter, r io.Reader, p string, u *Usage) error 
 		visible = visible || output
 		reasoning = reasoning || thought
 		truncated = truncated || limited
-		if terminal && !visible && (!reasoning || truncated) {
+		if terminal && !visible && !reasoning && !truncated {
 			return errors.New("upstream returned empty output")
 		}
 		if _, e := io.WriteString(w, f.Raw); e != nil {

@@ -326,14 +326,8 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			extractUsage(obj(ro["usage"]), s.Model.Protocol, &u)
 			pending := !s.Cross && s.Model.Protocol == "responses" && str(ro, "id") != "" &&
 				(str(ro, "status") == "queued" || str(ro, "status") == "in_progress")
-			if !pending && !hasVisibleOutput(ro, s.Model.Protocol) {
-				// 上游 200 了却没给出任何可用内容。静默把空回答转出去，调用方只会
-				// 以为模型答不上来；实际是这个候选本次不可用，该换下一个。
-				if truncatedStop(ro, s.Model.Protocol) {
-					runErr = fail("EMPTY_OUTPUT_TRUNCATED", "上游在触及输出上限前没有产出正文（推理模型常见：输出预算被思考占满）", 502)
-				} else {
-					runErr = fail("EMPTY_OUTPUT", "上游返回了空内容", 502)
-				}
+			if !pending && !hasVisibleOutput(ro, s.Model.Protocol) && !truncatedStop(ro, s.Model.Protocol) {
+				runErr = fail("EMPTY_OUTPUT", "上游返回了空内容", 502)
 				return
 			}
 			if s.Cross {
@@ -380,11 +374,6 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		if emptyOutput(runErr) && safeFallback {
 			// 换一个候选才有意义：同一个模型再来一次大概率还是同样的结果
 			lastErr = fail("EMPTY_OUTPUT", "候选模型没有返回任何可用内容，已尝试可用候选", 502)
-			var ae *APIError
-			if n := requestedMaxTokens(o); n > 0 && errors.As(runErr, &ae) && ae.Code == "EMPTY_OUTPUT_TRUNCATED" {
-				// 仍然换候选：路由里可能有不思考的模型，同样的上限也能答出来
-				lastErr = fail("EMPTY_OUTPUT_TRUNCATED", fmt.Sprintf("max_tokens=%d 太小：推理模型的思考用完了输出预算，没来得及输出正文，请调大 max_tokens", n), 502)
-			}
 			continue
 		}
 		if status == 499 {
@@ -432,7 +421,7 @@ func demoCompletion(o Object, p string) Completion {
 // 只在非流式路径产生：流式一旦开始写就不能回退换候选了。
 func emptyOutput(err error) bool {
 	var ae *APIError
-	return errors.As(err, &ae) && (ae.Code == "EMPTY_OUTPUT" || ae.Code == "EMPTY_OUTPUT_TRUNCATED")
+	return errors.As(err, &ae) && ae.Code == "EMPTY_OUTPUT"
 }
 
 // recordLimits 留存上游这次声明的限额，并在它明说额度已经归零时

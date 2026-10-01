@@ -310,7 +310,7 @@ func (e *emitter) finish() error {
 			visible = true
 		}
 	}
-	if !visible {
+	if !visible && e.stop != "length" {
 		return errors.New("upstream returned empty output")
 	}
 	if err := e.begin(); err != nil {

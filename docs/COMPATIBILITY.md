@@ -142,3 +142,9 @@ ZDR 为供应商专属约束：`x-cmd-zdr: 1` 只走 Command Code 候选并原�
 - 跨协议流必须确认每个工具调用完成；缺少完成证据、截断或不可表示的停止原因返回错误。Messages 上下文窗口耗尽映射为 length/incomplete，绝不伪装正常完成。
 
 本轮规范依据（2026-10-01核对）：[Anthropic工具类型](https://platform.claude.com/docs/en/api/typescript/messages)、[工具默认值](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference)、[停止原因](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)、[DeepSeek推理控制](https://api-docs.deepseek.com/guides/thinking_mode/)。
+
+### 输出上限与客户端模型校验
+
+合法的 `length` / `max_tokens` / `incomplete(max_output_tokens)` 结束即使正文为空也保持成功、停止原因和实际用量，不自动换候选或增加输出预算。Claude Code `/model` 使用 `max_tokens=1` 校验可调用性，适用相同规则。没有合法结束原因的空响应仍按失败处理；跨协议推理丢弃仍需显式开启，截断工具仍不得冒充完整调用。
+
+依据：[Anthropic 停止原因](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)、[OpenAI 推理预算](https://developers.openai.com/api/docs/guides/reasoning#allocating-space-for-reasoning)。

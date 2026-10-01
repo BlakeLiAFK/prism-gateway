@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// captureUpstream 记录上游收到的最后一个请求体；empty 为真时回一个被输出上限截断的空回答
+// captureUpstream 记录上游收到的最后一个请求体；empty 为真时回一个没有输出上限原因的空回答
 func captureUpstream(t *testing.T, empty bool) (*httptest.Server, func() Object) {
 	t.Helper()
 	var mu sync.Mutex
@@ -28,7 +28,7 @@ func captureUpstream(t *testing.T, empty bool) (*httptest.Server, func() Object)
 		case strings.HasSuffix(r.URL.Path, "/messages"):
 			io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"x","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
 		case empty:
-			io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":""},"finish_reason":"length"}],"usage":{"prompt_tokens":1,"completion_tokens":8}}`)
+			io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":""},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":8}}`)
 		default:
 			io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 		}
@@ -72,8 +72,8 @@ func TestMaxTokensClampedToModel(t *testing.T) {
 	}
 }
 
-// 所有候选都因输出预算被思考占满而没有正文：报错写明客户端给的 max_tokens
-func TestTruncatedErrorNamesMaxTokens(t *testing.T) {
+// 普通空回答仍应尝试候选并报错，不能仅凭请求包含 max_tokens 就当成功。
+func TestEmptyOutputWithMaxTokensStillFails(t *testing.T) {
 	h := newHarness(t)
 	up, _ := captureUpstream(t, true)
 	h.configure(t, up.URL, modelFixture("a", "chat"), modelFixture("b", "chat"))
@@ -83,8 +83,8 @@ func TestTruncatedErrorNamesMaxTokens(t *testing.T) {
 	body := requestFixture("chat", "auto")
 	body["max_tokens"] = 8
 	w := h.generate(t, "chat", body)
-	if w.Code != 502 || !strings.Contains(w.Body.String(), "max_tokens=8 太小") {
-		t.Fatalf("应明确提示 max_tokens 太小: %d %s", w.Code, w.Body)
+	if w.Code != 502 || !strings.Contains(w.Body.String(), "候选模型没有返回任何可用内容") {
+		t.Fatalf("普通空回答仍应失败: %d %s", w.Code, w.Body)
 	}
 }
 

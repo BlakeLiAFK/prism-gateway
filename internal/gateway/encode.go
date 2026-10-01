@@ -377,7 +377,7 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 			}
 		}
 	}
-	if len(c.Blocks) == 0 {
+	if len(c.Blocks) == 0 && !truncatedStop(o, protocol) {
 		return c, errors.New("upstream returned no cross-protocol output")
 	}
 	return c, nil

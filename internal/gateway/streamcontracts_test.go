@@ -247,7 +247,7 @@ func TestNativeStreamAcceptsVendorOutputKinds(t *testing.T) {
 	}
 }
 
-func TestNativeStreamRejectsTruncatedReasoningOnly(t *testing.T) {
+func TestNativeStreamPreservesLimitedReasoningOnly(t *testing.T) {
 	source := `event: content_block_start
 data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"reason"}}
 
@@ -262,8 +262,8 @@ data: {"type":"message_stop"}
 
 `
 	w := httptest.NewRecorder()
-	if err := nativeStream(w, strings.NewReader(source), "messages", &Usage{}); err == nil || strings.Contains(w.Body.String(), "message_stop") {
-		t.Fatalf("截断且只有推理的流被当作成功: err=%v body=%s", err, w.Body.String())
+	if err := nativeStream(w, strings.NewReader(source), "messages", &Usage{}); err != nil || !strings.Contains(w.Body.String(), "message_stop") {
+		t.Fatalf("合法上限结束的推理流未被保留: err=%v body=%s", err, w.Body.String())
 	}
 }
 

@@ -3094,27 +3094,27 @@ func TestGatewaySideFailureDoesNotFallOver(t *testing.T) {
 }
 
 // 推理模型把输出预算花光在思考上时，上游回 200 但正文为空。
-// 这对调用方等同于失败：要换候选、记成错误，而推理烧掉的 token 照实记账。
-func TestEmptyOutputFallsOverAndStillBills(t *testing.T) {
+// 合法的上限结束必须保留成功和用量，不能擅自换候选。
+func TestLimitedOutputSucceedsAndStillBills(t *testing.T) {
 	h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"id":"c0","object":"chat.completion","model":"m","choices":[{"index":0,"finish_reason":"length","message":{"role":"assistant","content":"","reasoning":"想了很久"}}],"usage":{"prompt_tokens":10,"completion_tokens":16,"total_tokens":26}}`)
 	})
 	w := h.generate(t, "chat", requestFixture("chat", "pair"))
 	requireStatus(t, w, 200)
-	if got := w.Header().Get("X-Prism-Model"); got != "cand-ok" {
-		t.Fatalf("空回答应当换候选，实得 %s", got)
+	if got := w.Header().Get("X-Prism-Model"); got != "cand-bad" {
+		t.Fatalf("上限结束不应换候选，实得 %s", got)
 	}
 	rows, err := h.s.DB.Query("SELECT model_id,status,error_code,input_tokens,output_tokens,usage_mode FROM requests ORDER BY started_at")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 2 {
-		t.Fatalf("应有两条记录: %v", rows)
+	if len(rows) != 1 {
+		t.Fatalf("应只有一条记录: %v", rows)
 	}
 	first := rows[0]
-	if first.String("status") != "error" || first.String("error_code") != "EMPTY_OUTPUT_TRUNCATED" {
-		t.Fatalf("空回答要记成错误并带自己的错误码: %v", first)
+	if first.String("status") != "success" || first.String("error_code") != "" {
+		t.Fatalf("上限结束应记为成功: %v", first)
 	}
 	// 推理 token 是真花掉的，不能抹成零，也不能退回预留值
 	if first.Int("input_tokens") != 10 || first.Int("output_tokens") != 16 || first.String("usage_mode") != "reported_tokens" {

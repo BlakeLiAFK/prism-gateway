@@ -231,19 +231,19 @@ func hasTypedContent(value any) bool {
 	return false
 }
 
+// 正文为空也可能是合法的输出上限结束，必须有对应的响应结构和终止原因。
 func truncatedStop(o Object, protocol string) bool {
 	switch protocol {
 	case "chat":
-		for _, v := range arr(o["choices"]) {
-			if str(obj(v), "finish_reason") == "length" {
-				return true
-			}
-		}
+		choices := arr(o["choices"])
+		return len(choices) == 1 && obj(obj(choices[0])["message"]) != nil && str(obj(choices[0]), "finish_reason") == "length"
 	case "messages":
+		_, content := o["content"].([]any)
 		stop := str(o, "stop_reason")
-		return stop == "max_tokens" || stop == "model_context_window_exceeded"
+		return content && (stop == "max_tokens" || stop == "model_context_window_exceeded")
 	case "responses":
-		return str(o, "status") == "incomplete"
+		_, output := o["output"].([]any)
+		return output && str(o, "status") == "incomplete" && str(obj(o["incomplete_details"]), "reason") == "max_output_tokens"
 	}
 	return false
 }
