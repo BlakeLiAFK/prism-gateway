@@ -2,7 +2,7 @@
 
 ## 路由原则
 
-客户端协议与所选模型原生协议相同：原生转发。改写 model、使用供应商凭证、加入自己的 User-Agent、保留允许的会话与版本头；高级请求字段和模型响应不经过公共 IR，因此不会为了统一而丢失厂商专属状态。请求体里的数字按原字面量转发（大于 2^53 的整数、`1.0` 这样的写法都不会被改写）。网关仍检查体积、权限和输出上限。
+客户端协议在模型的 `supported_protocols` 列表中（旧配置沿用 `protocol`）：原生转发。改写 model、使用供应商凭证、加入自己的 User-Agent、保留允许的会话与版本头；高级请求字段和模型响应不经过公共 IR，因此不会为了统一而丢失厂商专属状态。请求体里的数字按原字面量转发（大于 2^53 的整数、`1.0` 这样的写法都不会被改写）。网关仍检查体积、权限和输出上限。
 
 协议不相同：先解析显式白名单，然后转换公共中间表示。无法转换则拒绝这个候选，尝试别的兼容候选；没有合适候选返回 400，而不是静默删除字段。响应出现未支持的内容时也不伪装转换成功。
 
@@ -13,7 +13,7 @@
 | Responses → Chat / Messages | 已实现并测 | 已实现并测 | 普通 input、文本消息、function_call / output |
 | 三种协议 → 同协议 | 原生转发并测 | 原生转发并测 | 保留原生字段，但仅提供列出的 HTTP 端点 |
 
-常用图片 URL / data URI 引用可转换，前提是模型手动声明支持图片，且目标协议能无损表示。不由网关下载任意图片 URL。图片不是该交付的真实模型识别测试项目。
+常用图片 URL / data URI 引用可转换，前提是模型允许图像或能力尚未确认，且目标协议能表示。未知能力交上游裁决，不标成已验证支持。不由网关下载任意图片 URL。v1.33.3 已单独验证生产工具结果图片识别；本地测试不代表每个云模型都具备视觉能力。
 
 Claude Code 等客户端的 `tool_result` 也支持文本、图片及混合内容：
 
@@ -25,7 +25,7 @@ Claude Code 等客户端的 `tool_result` 也支持文本、图片及混合内�
 
 ## 不做“假兼容”
 
-跨协议不支持 Thinking / adaptive thinking、思考签名、redacted thinking、OpenAI reasoning / encrypted reasoning 项、任意 PDF/音频/视频、多模态服务端文件、内建 web search / code interpreter / computer-use tools、store=true / previous_response_id 等服务端状态、批量多候选、任意结构化输出约束、未映射 beta 字段。
+跨协议不支持 Thinking / adaptive thinking、思考签名、redacted thinking、OpenAI reasoning / encrypted reasoning 项、任意 PDF/音频/视频、多模态服务端文件、内建 web search / code interpreter / computer-use tools、store=true / previous_response_id 等服务端状态、批量多候选、未支持的结构化输出约束、未映射 beta 字段。
 
 遇到这些字段，应使用兼容的原生协议模型。原生透传也不意味着上游一定接受；最终由上游和客户端版本决定。原生不伪造模型身份，响应可包含上游的真实 model ID；网关自定义名称显示在诊断头与记录中。
 
@@ -94,8 +94,8 @@ OpenRouter 上的 DeepSeek、Nemotron 等）。
 | 字段 | 说明 |
 | --- | --- |
 | `metadata` | Anthropic 规范中它不参与生成 |
-| `context_management` | 上下文管理由客户端负责 |
-| `output_config` | 生成偏好提示 |
+| `context_management.edits.clear_thinking_20251015` | 仅无推理历史的精确清除子集；其他服务端上下文编辑不转换 |
+| `output_config.effort` | 仅努力程度偏好；`format` 单独转换并保留约束 |
 | `cache_control` | 提示缓存标记，只影响成本不影响内容 |
 | `service_tier` / `store` / `user` | 供应商侧调度、留存与调用方标识 |
 
@@ -104,3 +104,30 @@ OpenRouter 上的 DeepSeek、Nemotron 等）。
 
 无候选可用时，错误信息会逐个列出候选被排除的原因，例如
 `没有兼容此请求的候选模型（m_x: 跨协议转换不支持字段 "thinking"…）`。
+
+
+## v1.34.0：三家主力供应商的能力接入
+
+核对日期：2026-10-01。供应商原生协议是各家的兼容接口，不代表底层模型实现了全部参数。
+
+| 供应商 | 原生协议选择 | 多模态与工具边界 |
+| --- | --- | --- |
+| OpenRouter | Chat / Messages / Responses；模型同步保留三种兼容入口 | Chat 原样支持图片、PDF `file`、`input_audio`、`video_url` 等消息；Messages 支持图片/PDF。实际能力看模型和上游；不把 Chat 媒体块塞进另一协议 |
+| DeepSeek | 官方当前 `deepseek-flash` / `deepseek-v4-pro` 配置三种协议；Messages 使用独立地址 | Flash 视觉、工具调用及历史推理原样传递；Responses 为无状态。Messages 不支持 `output_config.format`，网关拒绝该候选以免忽略格式约束 |
+| Command Code | 以每个模型 `supported_endpoints` 为准，不推断全模型都支持三协议 | API 接受文本/图片，拒绝文件/音频；工具和推理仍取决于具体模型 |
+
+模型保存 `supported_protocols`，`protocol` 是跨协议时使用的默认目标。请求匹配原生入口时不经过公共转换结构，因此推理签名、工具类型、JSON Schema、媒体、供应商参数保留。供应商的 `protocol_urls` 可分别覆盖各协议 Base URL，管理界面可运行时修改；所有地址仍受 SSRF 和配置版本检查。
+
+同步刷新未锁定的协议声明，`protocols_locked` 可保护人工协议配置。旧模型的能力开关保持原意；新同步且未声明的工具/视觉能力使用 `tools_unknown` / `vision_unknown` 标为未知，交上游决定。显式禁用仍在本地拒绝。缺失协议列表的旧记录沿用默认协议，显式空列表表示协议未确认、不能路由。
+
+跨协议 JSON Schema：Messages `output_config.format`、Chat `response_format.json_schema`、Responses `text.format` 已映射公共子集。不能等价表达的格式或语义字段明确拒绝，不删掉硬约束再继续生成。严格工具参数约束、并行调用控制、文本数组工具结果纳入转换回归。中途 system/developer 消息在 Chat/Responses 保留位置，Messages 无法表达时拒绝。
+
+非流式与流式的 `reasoning_details` 纳入推理检测。`drop_reasoning` 默认关闭；显式开启才丢弃，并披露 `X-Prism-Dropped`。推理内容不是普通文本，不能编造签名来跨协议冒充。完整工具参数必须是有效对象，不把截断 JSON 转成 `input:null`。
+
+ZDR 为供应商专属约束：`x-cmd-zdr: 1` 只走 Command Code 候选并原样转发；OpenRouter 的 `provider.zdr:true` 只走 OpenRouter。两种隐私机制不互转，也不能通过失败切换把约束交给不支持的供应商。
+
+流在终止事件停止读取，无终止事件、损坏参数及空正文耗尽等不会伪装成功。原生音频、图片、拒绝和服务端工具输出不再按空正文误判。502/504 无法证明上游未执行，现不自动重放；`store:true` 与其他服务端状态或工具执行同样禁止自动重放。
+
+此版本覆盖已开放的对话 HTTP/SSE 端点。独立的文件上传、Batch、语音转写/TTS、视频生成作业、Realtime 和 WebSocket 端点尚未实现；消息内媒体保真不等于这些独立 API 已支持。真实上游验证与离线契约测试应分开记录。
+
+参考：[OpenRouter Messages](https://openrouter.ai/docs/api/api-reference/anthropic-messages/create-messages)、[OpenRouter 多模态](https://openrouter.ai/docs/guides/overview/multimodal/overview)、[DeepSeek Responses](https://api-docs.deepseek.com/guides/responses_api/)、[DeepSeek Messages](https://api-docs.deepseek.com/guides/anthropic_api/)、[Command Code Provider](https://commandcode.ai/docs/provider)。

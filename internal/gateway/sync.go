@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 )
@@ -93,8 +94,19 @@ func (a *App) upstreamModels(ctx context.Context, p Provider) ([]any, error) {
 }
 
 func (a *App) applySyncedModels(p Provider, version int64, items []any) (any, error) {
-	added := 0
+	added, updated := 0, 0
 	_, err := a.Store.Change(version, "provider.sync_models", p.ID, func(c *Config) error {
+		// 官方 DeepSeek 的 Messages 使用独立前缀；自定义地址必须由管理员指定。
+		if p.Kind == "deepseek" && (p.BaseURL == "https://api.deepseek.com" || p.BaseURL == "https://api.deepseek.com/v1") && p.ProtocolURLs["messages"] == "" {
+			for i := range c.Providers {
+				if c.Providers[i].ID == p.ID {
+					if c.Providers[i].ProtocolURLs == nil {
+						c.Providers[i].ProtocolURLs = map[string]string{}
+					}
+					c.Providers[i].ProtocolURLs["messages"] = "https://api.deepseek.com/anthropic/v1"
+				}
+			}
+		}
 		for _, v := range items {
 			v := obj(v)
 			up := str(v, "id")
@@ -102,8 +114,16 @@ func (a *App) applySyncedModels(p Provider, version int64, items []any) (any, er
 				continue
 			}
 			exists := false
-			for _, m := range c.Models {
+			for i, m := range c.Models {
 				if m.ProviderID == p.ID && m.Upstream == up {
+					protocols := syncedProtocols(p, v)
+					if !m.ProtocolsLocked && protocols != nil && (m.Protocols == nil || !slices.Equal(protocols, m.Protocols)) {
+						c.Models[i].Protocols = protocols
+						if len(protocols) > 0 && !slices.Contains(protocols, m.Protocol) {
+							c.Models[i].Protocol = protocols[0]
+						}
+						updated++
+					}
 					exists = true
 					break
 				}
@@ -134,7 +154,15 @@ func (a *App) applySyncedModels(p Provider, version int64, items []any) (any, er
 			if !validID(mid) {
 				mid = "model_" + digest(p.ID + up)[:20]
 			}
-			c.Models = append(c.Models, newSyncedModel(mid, p.ID, up, name, protocol, v))
+			m := newSyncedModel(mid, p.ID, up, name, protocol, v)
+			m.Protocols = syncedProtocols(p, v)
+			if p.Kind == "commandcode" && m.Protocols == nil {
+				m.Protocols = []string{}
+			}
+			if len(m.Protocols) > 0 && !slices.Contains(m.Protocols, m.Protocol) {
+				m.Protocol = m.Protocols[0]
+			}
+			c.Models = append(c.Models, m)
 			added++
 		}
 		return nil
@@ -142,7 +170,31 @@ func (a *App) applySyncedModels(p Provider, version int64, items []any) (any, er
 	if err != nil {
 		return nil, err
 	}
-	return Object{"added": added, "note": "新模型已启用，能力与上下文取自上游声明（未声明的按常用值）。计价需在模型库确认后才计入预算；跨协议丢弃推理内容需逐个模型开启。"}, nil
+	return Object{"added": added, "updated": updated, "note": "已刷新未锁定的协议声明；工具与图像未声明时标为未知，由上游判定。既有能力开关、名称、价格与限额保持不变。"}, nil
+}
+
+func syncedProtocols(p Provider, src Object) []string {
+	if isOpenRouter(p) {
+		return []string{"chat", "messages", "responses"}
+	}
+	// DeepSeek /models 没有端点字段，以下来自官方公开的当前模型能力表。
+	if p.Kind == "deepseek" && (str(src, "id") == "deepseek-flash" || str(src, "id") == "deepseek-v4-pro") {
+		return []string{"chat", "messages", "responses"}
+	}
+	value, declared := src["supported_endpoints"].([]any)
+	if !declared {
+		return nil
+	}
+	out := []string{}
+	for _, protocol := range []string{"messages", "chat", "responses", "systemone"} {
+		for _, endpoint := range arr(value) {
+			if endpoint == pathFor(protocol) {
+				out = append(out, protocol)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // commandCodeProtocol 按上游 supported_endpoints 判定原生协议：

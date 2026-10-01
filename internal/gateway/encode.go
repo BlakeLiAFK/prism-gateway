@@ -18,6 +18,7 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 	}
 	messages := []any{}
 	systems := []string{}
+	seenConversation := false
 	// Chat 工具消息不能放图片；等并行工具结果齐全后再附带带来源标记的图文。
 	toolImages := []any{}
 	flushToolImages := func() {
@@ -27,7 +28,10 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 		}
 	}
 	for _, m := range c.Messages {
-		if protocol != "chat" && m.Role == "system" {
+		if protocol == "messages" && (m.Role == "system" || m.Role == "developer") {
+			if seenConversation {
+				return nil, unsupported("Messages 不能保持中途 system/developer 消息的顺序")
+			}
 			for _, b := range m.Blocks {
 				if b.Kind != "text" {
 					return nil, unsupported("system 仅支持文本")
@@ -36,6 +40,7 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 			}
 			continue
 		}
+		seenConversation = true
 		bs := []any{}
 		calls := []any{}
 		flush := func() {
@@ -115,6 +120,11 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 		flush()
 	}
 	flushToolImages()
+	if key, value, err := encodeJSONSchemaFormat(c.Format, protocol); err != nil {
+		return nil, err
+	} else if key != "" {
+		o[key] = value
+	}
 	// 客户端没写输出上限时不带这个字段，由 selections 按上游协议决定是否补
 	if f := map[string]string{"chat": "max_tokens", "messages": "max_tokens", "responses": "max_output_tokens"}[protocol]; f != "" && c.MaxOutput > 0 {
 		o[f] = c.MaxOutput
@@ -154,6 +164,9 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 		tools := []any{}
 		for _, t := range c.Tools {
 			f := Object{"name": t.Name, "description": t.Description}
+			if t.Strict != nil {
+				f["strict"] = *t.Strict
+			}
 			if protocol == "messages" {
 				f["input_schema"] = t.Schema
 				tools = append(tools, f)
@@ -260,18 +273,32 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 		if str(m, "refusal") != "" {
 			return c, unsupported("无法等价转换 refusal 内容")
 		}
-		if str(m, "reasoning_content") != "" || str(m, "reasoning") != "" {
+		for _, field := range []string{"audio", "images", "annotations"} {
+			if hasNonEmptyValue(m[field]) {
+				return c, unsupported("无法等价转换 Chat " + field + " 内容")
+			}
+		}
+		if hasReasoningField(m) {
 			return c, unsupported("无法跨协议无损转换 reasoning 内容")
 		}
-		if s := str(m, "content"); s != "" {
-			c.Blocks = append(c.Blocks, Block{Kind: "text", Text: s})
+		if content := m["content"]; content != nil {
+			s, ok := content.(string)
+			if !ok {
+				return c, unsupported("无法跨协议转换非字符串 Chat content")
+			}
+			if s != "" {
+				c.Blocks = append(c.Blocks, Block{Kind: "text", Text: s})
+			}
 		}
 		for _, v := range arr(m["tool_calls"]) {
 			t := obj(v)
+			if str(t, "type") != "function" {
+				return c, unsupported("无法跨协议转换非 function Chat tool call")
+			}
 			f := obj(t["function"])
 			args := str(f, "arguments")
-			if !json.Valid([]byte(args)) {
-				return c, errors.New("upstream returned invalid tool JSON")
+			if err := validateToolCall(str(t, "id"), str(f, "name"), args); err != nil {
+				return c, err
 			}
 			c.Blocks = append(c.Blocks, Block{Kind: "tool", ID: str(t, "id"), Name: str(f, "name"), Arguments: args})
 		}
@@ -281,9 +308,16 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 			b := obj(v)
 			switch str(b, "type") {
 			case "text":
+				if len(arr(b["citations"])) > 0 {
+					return c, unsupported("无法无损转换带 citations 的 Messages 文本")
+				}
 				c.Blocks = append(c.Blocks, Block{Kind: "text", Text: str(b, "text")})
 			case "tool_use":
-				c.Blocks = append(c.Blocks, Block{Kind: "tool", ID: str(b, "id"), Name: str(b, "name"), Arguments: raw(b["input"])})
+				id, name, arguments := str(b, "id"), str(b, "name"), raw(b["input"])
+				if err := validateToolCall(id, name, arguments); err != nil {
+					return c, err
+				}
+				c.Blocks = append(c.Blocks, Block{Kind: "tool", ID: id, Name: name, Arguments: arguments})
 			default:
 				return c, unsupported("上游返回不能无损转换的 " + str(b, "type"))
 			}
@@ -307,11 +341,21 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 					c.Blocks = append(c.Blocks, Block{Kind: "text", Text: str(x, "text")})
 				}
 			case "function_call":
-				c.Blocks = append(c.Blocks, Block{Kind: "tool", ID: str(b, "call_id"), Name: str(b, "name"), Arguments: str(b, "arguments")})
+				id, name, arguments := str(b, "call_id"), str(b, "name"), str(b, "arguments")
+				if status := str(b, "status"); status != "" && status != "completed" {
+					return c, errors.New("upstream returned incomplete tool call")
+				}
+				if err := validateToolCall(id, name, arguments); err != nil {
+					return c, err
+				}
+				c.Blocks = append(c.Blocks, Block{Kind: "tool", ID: id, Name: name, Arguments: arguments})
 			default:
 				return c, unsupported("无法无损转换 Responses item " + str(b, "type"))
 			}
 		}
+	}
+	if len(c.Blocks) == 0 {
+		return c, errors.New("upstream returned no cross-protocol output")
 	}
 	return c, nil
 }
@@ -374,108 +418,4 @@ func completionObject(c Completion, p, model, id string) Object {
 		}
 		return Object{"id": "resp_" + id, "object": "response", "created_at": now() / 1000, "status": status, "error": nil, "incomplete_details": details, "model": model, "output": items, "usage": usageObject(c.Usage, p), "parallel_tool_calls": true, "store": false}
 	}
-}
-
-// stripReasoning 从上游响应里移除推理内容，供显式开启 drop_reasoning 的模型使用。
-// 返回是否确实移除了东西——只有真的移除了，才值得重试解码并在响应头上标注。
-// 它只动推理相关的部分；refusal、annotations 等其它不可转换内容仍然会被拒绝。
-func stripReasoning(o Object, protocol string) bool {
-	dropped := false
-	switch protocol {
-	case "chat":
-		for _, v := range arr(o["choices"]) {
-			m := obj(obj(v)["message"])
-			if m == nil {
-				continue
-			}
-			for _, k := range []string{"reasoning", "reasoning_content", "reasoning_details"} {
-				if _, ok := m[k]; ok {
-					delete(m, k)
-					dropped = true
-				}
-			}
-		}
-	case "messages":
-		kept := []any{}
-		for _, v := range arr(o["content"]) {
-			switch str(obj(v), "type") {
-			case "thinking", "redacted_thinking":
-				dropped = true
-			default:
-				kept = append(kept, v)
-			}
-		}
-		if dropped {
-			o["content"] = kept
-		}
-	case "responses":
-		kept := []any{}
-		for _, v := range arr(o["output"]) {
-			if str(obj(v), "type") == "reasoning" {
-				dropped = true
-				continue
-			}
-			kept = append(kept, v)
-		}
-		if dropped {
-			o["output"] = kept
-		}
-	}
-	return dropped
-}
-
-// hasVisibleOutput 判断上游响应里有没有调用方真正用得上的产出：文本或工具调用。
-// 推理内容不算数——它可能按配置被丢弃，也可能压根不会转发给调用方。
-// 推理模型把输出预算全花在思考上时，响应是 200 但正文为空，对调用方等同于失败。
-func hasVisibleOutput(o Object, protocol string) bool {
-	switch protocol {
-	case "chat":
-		for _, v := range arr(o["choices"]) {
-			m := obj(obj(v)["message"])
-			if strings.TrimSpace(str(m, "content")) != "" || len(arr(m["tool_calls"])) > 0 {
-				return true
-			}
-		}
-	case "messages":
-		for _, v := range arr(o["content"]) {
-			b := obj(v)
-			if str(b, "type") == "tool_use" || strings.TrimSpace(str(b, "text")) != "" {
-				return true
-			}
-		}
-	case "responses":
-		for _, v := range arr(o["output"]) {
-			b := obj(v)
-			if str(b, "type") == "function_call" {
-				return true
-			}
-			for _, x := range arr(b["content"]) {
-				if strings.TrimSpace(str(obj(x), "text")) != "" {
-					return true
-				}
-			}
-		}
-	case "systemone":
-		// System One 的产出是结构化答案，不是自由文本
-		return len(obj(o["answers"])) > 0
-	}
-	return false
-}
-
-// truncatedStop 判断上游是因为触到输出上限才停的。推理模型配上偏小的
-// max_tokens 时会命中这里：预算全花在推理上，正文一个字都没留下。
-func truncatedStop(o Object, protocol string) bool {
-	switch protocol {
-	case "chat":
-		for _, v := range arr(o["choices"]) {
-			if str(obj(v), "finish_reason") == "length" {
-				return true
-			}
-		}
-	case "messages":
-		return str(o, "stop_reason") == "max_tokens"
-	case "responses":
-		return str(o, "status") == "incomplete"
-	}
-	return false
 }

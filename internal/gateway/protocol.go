@@ -28,6 +28,7 @@ type Tool struct {
 	Name        string
 	Description string
 	Schema      any
+	Strict      *bool
 }
 type Canonical struct {
 	Messages    []Message
@@ -40,6 +41,7 @@ type Canonical struct {
 	ToolName    string
 	Stream      bool
 	Parallel    *bool
+	Format      *JSONSchemaFormat
 	// Ignored 记录那些被接受但未传递给上游的字段。
 	// 忽略本身可以接受，不告诉调用方不行——它们会出现在 X-Prism-Ignored 响应头里。
 	Ignored []string
@@ -69,13 +71,11 @@ type Completion struct {
 // 丢掉它们不会改变模型看到的内容，也不会改变返回内容的含义。
 // 与之相对，thinking 这类字段会真正改变行为，不在此列。
 var ignorable = map[string]string{
-	"metadata":           "Anthropic 规范中它不参与生成",
-	"context_management": "上下文管理由客户端负责，网关不介入",
-	"output_config":      "生成偏好提示，跨协议无对应字段",
-	"service_tier":       "供应商侧调度提示",
-	"store":              "上游侧留存开关，跨协议无对应语义",
-	"user":               "调用方标识，不参与生成",
-	"cache_control":      "提示缓存标记，跨协议无对应概念，只影响成本不影响内容",
+	"metadata":      "Anthropic 规范中它不参与生成",
+	"service_tier":  "供应商侧调度提示",
+	"store":         "上游侧留存开关，跨协议无对应语义",
+	"user":          "调用方标识，不参与生成",
+	"cache_control": "提示缓存标记，跨协议无对应概念，只影响成本不影响内容",
 }
 
 // containsKey 递归查找某个键是否在请求里出现过。
@@ -128,7 +128,10 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 	var e error
 	switch protocol {
 	case "chat":
-		c.Ignored, e = allowed(o, append(common, "messages", "max_tokens", "max_completion_tokens", "stop", "stream_options", "n", "parallel_tool_calls")...)
+		c.Ignored, e = allowed(o, append(common, "messages", "max_tokens", "max_completion_tokens", "stop", "stream_options", "n", "parallel_tool_calls", "response_format")...)
+		if e == nil {
+			c.Format, e = readJSONSchemaFormat(o["response_format"], protocol)
+		}
 		if num(o, "n") > 1 {
 			return c, unsupported("跨协议仅支持 n=1")
 		}
@@ -144,16 +147,16 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 				return c, er
 			}
 			cm := Message{Role: str(m, "role")}
-			if cm.Role == "developer" {
-				cm.Role = "system"
-			}
 			if cm.Role == "tool" {
 				cm.Role = "user"
-				text, ok := m["content"].(string)
-				if !ok {
-					return c, unsupported("tool result 仅支持文本")
+				result, er := readToolResult(str(m, "tool_call_id"), m["content"], protocol, false)
+				if er != nil {
+					return c, er
 				}
-				cm.Blocks = []Block{{Kind: "result", ID: str(m, "tool_call_id"), Text: text}}
+				if len(result.Content) > 0 {
+					return c, unsupported("Chat 工具结果数组跨协议仅支持文本")
+				}
+				cm.Blocks = []Block{result}
 			} else {
 				cm.Blocks, e = readBlocks(m["content"], protocol)
 				if e != nil {
@@ -171,7 +174,13 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 			c.Messages = append(c.Messages, cm)
 		}
 	case "messages":
-		c.Ignored, e = allowed(o, append(common, "messages", "system", "max_tokens", "stop_sequences")...)
+		c.Ignored, e = allowed(o, append(common, "messages", "system", "max_tokens", "stop_sequences", "output_config", "context_management")...)
+		if e == nil {
+			c.Format, e = readMessagesOutputConfig(o["output_config"], &c.Ignored)
+		}
+		if e == nil {
+			e = readContextManagement(o["context_management"], &c.Ignored)
+		}
 		c.MaxOutput = int(num(o, "max_tokens"))
 		c.Stop = o["stop_sequences"]
 		if o["system"] != nil {
@@ -193,7 +202,10 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 			c.Messages = append(c.Messages, Message{Role: str(m, "role"), Blocks: bs})
 		}
 	case "responses":
-		c.Ignored, e = allowed(o, append(common, "input", "instructions", "max_output_tokens", "store", "parallel_tool_calls")...)
+		c.Ignored, e = allowed(o, append(common, "input", "instructions", "max_output_tokens", "store", "parallel_tool_calls", "text")...)
+		if e == nil {
+			c.Format, e = readResponsesTextFormat(o["text"])
+		}
 		if boolean(o, "store") {
 			return c, unsupported("跨协议不支持 store=true 或服务端会话状态")
 		}
@@ -231,11 +243,7 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 					if er != nil {
 						return c, er
 					}
-					role := str(m, "role")
-					if role == "developer" {
-						role = "system"
-					}
-					c.Messages = append(c.Messages, Message{Role: role, Blocks: bs})
+					c.Messages = append(c.Messages, Message{Role: str(m, "role"), Blocks: bs})
 				default:
 					return c, unsupported("跨协议不支持 Responses input item: " + str(m, "type"))
 				}
@@ -255,7 +263,7 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 		return c, unsupported("messages/input 不能为空")
 	}
 	for _, m := range c.Messages {
-		if m.Role != "system" && m.Role != "user" && m.Role != "assistant" {
+		if m.Role != "system" && m.Role != "developer" && m.Role != "user" && m.Role != "assistant" {
 			return c, unsupported("不支持的消息角色 " + m.Role)
 		}
 	}
@@ -271,19 +279,19 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 				return c, er
 			}
 			f = obj(t["function"])
-			if _, er := allowed(f, "name", "description", "parameters"); er != nil {
+			if _, er := allowed(f, "name", "description", "parameters", "strict"); er != nil {
 				return c, er
 			}
 		case "responses":
 			if str(t, "type") != "function" {
 				return c, unsupported("不支持跨协议 server tools")
 			}
-			if _, er := allowed(t, "type", "name", "description", "parameters"); er != nil {
+			if _, er := allowed(t, "type", "name", "description", "parameters", "strict"); er != nil {
 				return c, er
 			}
 			f = t
 		case "messages":
-			if _, er := allowed(t, "name", "description", "input_schema", "cache_control"); er != nil {
+			if _, er := allowed(t, "name", "description", "input_schema", "strict", "cache_control"); er != nil {
 				return c, er
 			}
 			f = t
@@ -298,7 +306,13 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 		if str(f, "name") == "" {
 			return c, unsupported("工具 name 不能为空")
 		}
-		c.Tools = append(c.Tools, Tool{str(f, "name"), str(f, "description"), schema})
+		var strict *bool
+		if value, ok := f["strict"].(bool); ok {
+			strict = &value
+		} else if f["strict"] != nil {
+			return c, unsupported("工具 strict 必须是布尔值")
+		}
+		c.Tools = append(c.Tools, Tool{Name: str(f, "name"), Description: str(f, "description"), Schema: schema, Strict: strict})
 	}
 	if v, ok := o["parallel_tool_calls"].(bool); ok {
 		c.Parallel = &v
@@ -367,8 +381,11 @@ func readBlocks(v any, protocol string) ([]Block, error) {
 				return nil, e
 			}
 			im := obj(o["image_url"])
-			if _, e := allowed(im, "url"); e != nil {
+			if _, e := allowed(im, "url", "detail"); e != nil {
 				return nil, e
+			}
+			if d := str(im, "detail"); d != "" && d != "auto" {
+				return nil, unsupported("跨协议图片 detail 仅支持 auto")
 			}
 			out = append(out, Block{Kind: "image", URL: str(im, "url")})
 		case "input_image":

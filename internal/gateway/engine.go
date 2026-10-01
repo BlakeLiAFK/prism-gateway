@@ -186,21 +186,33 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		if !ok {
 			continue
 		}
+		if m.supportsProtocol(p) {
+			m.Protocol = p
+		}
 		pr, ok := c.provider(m.ProviderID)
+		if base := pr.ProtocolURLs[m.Protocol]; base != "" {
+			pr.BaseURL = base
+		}
 		why := ""
+		if m.Protocols != nil && len(m.Protocols) == 0 {
+			why = "原生协议尚未确认，请同步上游声明或在模型设置中指定"
+		}
 		if !ok || !m.Enabled || !pr.Enabled {
 			why = "disabled"
+		}
+		if boolean(obj(o["provider"]), "zdr") && !isOpenRouter(pr) {
+			why = "provider.zdr 只能交给 OpenRouter 执行，不能切换到其他供应商"
 		}
 		// 暂停的候选直接淘汰，不进入 out：亲和加分与 Pinned 等待都以「仍是合格候选」为前提，随之失效
 		if cm.Disabled {
 			why = "candidate_paused"
 		}
-		if len(arr(o["tools"])) > 0 && !m.Tools {
+		if len(arr(o["tools"])) > 0 && !m.Tools && !m.ToolsUnknown {
 			why = "tools_unsupported"
 		}
 		// state 是调用方自定义的 JSON，可能恰好含 image_url 这类键；
 		// System One 只吃文本，不该被图像检测误伤。
-		if m.Protocol != "systemone" && containsImage(o) && !m.Vision {
+		if m.Protocol != "systemone" && requestHasImage(o, p) && !m.Vision && !m.VisionUnknown {
 			why = "vision_unsupported"
 		}
 		var body Object
@@ -240,6 +252,9 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			// 被淘汰的候选和跨协议候选（body 由 encodeCanonical 生成）都不需要
 			body = cloneJSON(o).(Object)
 			body["model"] = m.Upstream
+		}
+		if why == "" {
+			why = providerRequestError(pr, m.Protocol, body)
 		}
 		if why == "" && m.Protocol != "systemone" {
 			field := "max_tokens"
@@ -288,26 +303,6 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 	}
 	return out, reasons, nil
 }
-func containsImage(v any) bool {
-	switch x := v.(type) {
-	case map[string]any:
-		if t := str(x, "type"); t == "image" || t == "input_image" || t == "image_url" {
-			return true
-		}
-		for _, v := range x {
-			if containsImage(v) {
-				return true
-			}
-		}
-	case []any:
-		for _, v := range x {
-			if containsImage(v) {
-				return true
-			}
-		}
-	}
-	return false
-}
 func (e *Engine) cooldown(id, retry string) {
 	d := 30 * time.Second
 	if n, er := strconv.Atoi(retry); er == nil && n > 0 {
@@ -328,14 +323,6 @@ func (e *Engine) cooldownFor(id string, d time.Duration) {
 // 529 是 TypeSafe 的过载码，语义与 503 相同。
 func retryable(status int) bool {
 	return status == 429 || status == 503 || status == 529
-}
-
-// gatewayFailure 判断上游自己的网关层报错。只在「上游确实回了一个 HTTP 响应」
-// 时才成立——这种响应到不了模型，用量为零，换候选是安全的。
-// 网关自己标成 502 的那些情况（连不上、SSE 类型不对、响应读不懂）不走这里：
-// 请求可能已经被部分处理，重放并不安全。
-func gatewayFailure(upstreamStatus int) bool {
-	return upstreamStatus == 502 || upstreamStatus == 504
 }
 
 // exhausted 是「这个上游对本次请求确定性不可用」：额度用尽（402）、

@@ -118,6 +118,9 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		}
 	}
 	selections, whys, err := e.selections(c, o, p, session)
+	if err == nil {
+		selections, err = constrainSelections(selections, r.Header)
+	}
 	if err != nil {
 		status, code, msg := errorParts(err)
 		protocolError(w, p, status, code, msg, id)
@@ -142,7 +145,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		return
 	}
 	// Requests with server-managed state or built-in tools must never be replayed.
-	safeFallback := o["previous_response_id"] == nil && o["conversation"] == nil && !boolean(o, "background")
+	safeFallback := o["previous_response_id"] == nil && o["conversation"] == nil && !boolean(o, "background") && !boolean(o, "store")
 	for _, t := range arr(o["tools"]) {
 		tt := str(obj(t), "type")
 		if tt != "" && tt != "function" {
@@ -161,7 +164,6 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		start := now()
 		u := Usage{tap: func(n int) { e.addStreamed(s.Model.ID, n) }}
 		status := 200
-		upstreamStatus := 0
 		var runErr error
 		func() {
 			defer func() { e.finish(s, att, session, key.ID, u, status, runErr, start) }()
@@ -252,7 +254,6 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			}
 			defer res.Body.Close()
 			status = res.StatusCode
-			upstreamStatus = res.StatusCode
 			if status < 200 || status >= 300 {
 				io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 				runErr = fmt.Errorf("upstream status %d", status)
@@ -372,10 +373,6 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		}
 		if exhausted(status) && safeFallback {
 			lastErr = fail("UPSTREAM_EXHAUSTED", "上游额度或权限不可用，已尝试可用候选", 402)
-			continue
-		}
-		if gatewayFailure(upstreamStatus) && safeFallback {
-			lastErr = fail("UPSTREAM_GATEWAY_ERROR", "上游网关错误，请求未到达模型，已尝试可用候选", 502)
 			continue
 		}
 		if emptyOutput(runErr) && safeFallback {

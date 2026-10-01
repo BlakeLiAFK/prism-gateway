@@ -150,7 +150,9 @@ func applyFreeModels(nc *Config, p Provider, items []any, c scheduleConfig) (ch 
 			continue
 		}
 		if idx < 0 {
-			nc.Models = append(nc.Models, newSyncedModel(freeModelID(nc, c.FreeRoute, p.ID, up), p.ID, up, str(item, "name"), "chat", item))
+			m := newSyncedModel(freeModelID(nc, c.FreeRoute, p.ID, up), p.ID, up, str(item, "name"), "chat", item)
+			m.Protocols = syncedProtocols(p, item)
+			nc.Models = append(nc.Models, m)
 			idx = len(nc.Models) - 1
 		}
 		enableFree(&nc.Models[idx], c)

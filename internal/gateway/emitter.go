@@ -2,11 +2,11 @@
 package gateway
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type streamBlock struct {
@@ -171,6 +171,20 @@ func (e *emitter) delta(key int, text string) error {
 	}
 }
 
+func (e *emitter) finalArguments(key int, arguments string) error {
+	i, ok := e.byKey[key]
+	if !ok || e.blocks[i].Kind != "tool" {
+		return errors.New("tool arguments done before tool start")
+	}
+	if arguments == "" || e.blocks[i].Arguments == arguments {
+		return nil
+	}
+	if e.blocks[i].Arguments != "" {
+		return errors.New("tool argument deltas do not match final arguments")
+	}
+	return e.delta(key, arguments)
+}
+
 func (e *emitter) close(key int) error {
 	i, ok := e.byKey[key]
 	if !ok {
@@ -180,8 +194,10 @@ func (e *emitter) close(key int) error {
 	if b.Closed {
 		return nil
 	}
-	if b.Kind == "tool" && !json.Valid([]byte(b.Arguments)) {
-		return errors.New("incomplete tool JSON")
+	if b.Kind == "tool" {
+		if err := validateToolCall(b.ID, b.Name, b.Arguments); err != nil {
+			return err
+		}
 	}
 	b.Closed = true
 	switch e.p {
@@ -207,6 +223,19 @@ func (e *emitter) close(key int) error {
 }
 
 func (e *emitter) finish() error {
+	visible := false
+	for _, b := range e.blocks {
+		if b.Kind == "tool" && !b.Closed && (e.stop == "length" || e.stop == "max_tokens") {
+			return errors.New("truncated tool call")
+		}
+		if b.Kind == "tool" || strings.TrimSpace(b.Text) != "" {
+			visible = true
+			break
+		}
+	}
+	if !visible {
+		return errors.New("upstream returned empty output")
+	}
 	if err := e.begin(); err != nil {
 		return err
 	}

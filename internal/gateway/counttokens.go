@@ -32,6 +32,9 @@ func (e *Engine) CountTokens(w http.ResponseWriter, r *http.Request, key Princip
 	}
 	cp["max_tokens"] = 1
 	sel, _, err := e.selections(c, cp, "messages", "")
+	if err == nil {
+		sel, err = constrainSelections(sel, r.Header)
+	}
 	if err != nil || len(sel) == 0 {
 		protocolError(w, "messages", 400, "NO_COMPATIBLE_MODEL", "没有兼容模型", id)
 		return

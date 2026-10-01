@@ -156,8 +156,11 @@ func requestHeaders(dst *http.Request, src *http.Request, p Provider, protocol, 
 	dst.Header.Set("Content-Type", "application/json")
 	dst.Header.Set("Accept", "application/json, text/event-stream")
 	dst.Header.Set("User-Agent", "Prism-Gateway/"+Version)
+	if p.Kind == "commandcode" && src.Header.Get("x-cmd-zdr") == "1" {
+		dst.Header.Set("x-cmd-zdr", "1")
+	}
 	if p.Secret != "" {
-		if p.Auth == "x-api-key" || (p.Auth == "auto" && protocol == "messages") {
+		if p.Auth == "x-api-key" || (p.Auth == "auto" && protocol == "messages" && !isOpenRouter(p) && p.Kind != "deepseek") {
 			dst.Header.Set("x-api-key", p.Secret)
 		} else if p.Auth != "none" {
 			dst.Header.Set("Authorization", "Bearer "+p.Secret)

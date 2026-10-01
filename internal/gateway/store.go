@@ -346,7 +346,18 @@ func (s *Store) Config() Config { return *s.snapshot.Load() }
 func cloneConfig(c Config) Config {
 	out := c
 	out.Providers = append([]Provider{}, c.Providers...)
+	for i, p := range out.Providers {
+		if p.ProtocolURLs != nil {
+			out.Providers[i].ProtocolURLs = map[string]string{}
+			for k, v := range p.ProtocolURLs {
+				out.Providers[i].ProtocolURLs[k] = v
+			}
+		}
+	}
 	out.Models = append([]Model{}, c.Models...)
+	for i, m := range out.Models {
+		out.Models[i].Protocols = slices.Clone(m.Protocols)
+	}
 	out.Routes = append([]Route{}, c.Routes...)
 	for i := range out.Routes {
 		out.Routes[i].Candidates = append([]Candidate{}, c.Routes[i].Candidates...)

@@ -12,21 +12,22 @@ import (
 	"time"
 )
 
-const Version = "1.33.3"
+const Version = "1.34.0"
 
 type Object = map[string]any
 
 type Provider struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Kind         string `json:"kind"`
-	BaseURL      string `json:"base_url"`
-	Auth         string `json:"auth"`
-	Enabled      bool   `json:"enabled"`
-	AllowPrivate bool   `json:"allow_private"`
-	TimeoutSec   int    `json:"timeout_sec"`
-	HasKey       bool   `json:"has_key"`
-	Secret       string `json:"-"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Kind         string            `json:"kind"`
+	BaseURL      string            `json:"base_url"`
+	ProtocolURLs map[string]string `json:"protocol_urls,omitempty"`
+	Auth         string            `json:"auth"`
+	Enabled      bool              `json:"enabled"`
+	AllowPrivate bool              `json:"allow_private"`
+	TimeoutSec   int               `json:"timeout_sec"`
+	HasKey       bool              `json:"has_key"`
+	Secret       string            `json:"-"`
 	// 组织级 admin key，只用于查 OpenAI / Anthropic 官方账单，不参与推理转发
 	HasAdminKey bool   `json:"has_admin_key"`
 	AdminSecret string `json:"-"`
@@ -35,15 +36,19 @@ type Provider struct {
 	Sort int `json:"sort"`
 }
 type Model struct {
-	ID          string `json:"id"`
-	ProviderID  string `json:"provider_id"`
-	Upstream    string `json:"upstream"`
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol"`
-	Enabled     bool   `json:"enabled"`
-	Tools       bool   `json:"tools"`
-	Vision      bool   `json:"vision"`
-	NativeCount bool   `json:"native_count"`
+	ID              string   `json:"id"`
+	ProviderID      string   `json:"provider_id"`
+	Upstream        string   `json:"upstream"`
+	Name            string   `json:"name"`
+	Protocol        string   `json:"protocol"`
+	Protocols       []string `json:"supported_protocols"`
+	ProtocolsLocked bool     `json:"protocols_locked,omitempty"`
+	Enabled         bool     `json:"enabled"`
+	Tools           bool     `json:"tools"`
+	Vision          bool     `json:"vision"`
+	ToolsUnknown    bool     `json:"tools_unknown,omitempty"`
+	VisionUnknown   bool     `json:"vision_unknown,omitempty"`
+	NativeCount     bool     `json:"native_count"`
 	// 上游会返回推理内容而又需要跨协议调用时，由管理员显式打开。
 	// 打开后跨协议转换会丢弃推理内容，并在响应头 X-Prism-Dropped 中标注。
 	DropReasoning bool    `json:"drop_reasoning"`
@@ -249,6 +254,14 @@ func (c Config) Validate() error {
 				return e
 			}
 		}
+		for protocol, base := range p.ProtocolURLs {
+			if !validProtocol(protocol) {
+				return errors.New("protocol_urls 包含未知协议")
+			}
+			if e := validateBaseURL(base, p.AllowPrivate); e != nil {
+				return e
+			}
+		}
 		if p.Auth != "auto" && p.Auth != "bearer" && p.Auth != "x-api-key" && p.Auth != "none" {
 			return errors.New("auth 必须是 auto / bearer / x-api-key / none")
 		}
@@ -269,6 +282,9 @@ func (c Config) Validate() error {
 		}
 		if m.Protocol != "chat" && m.Protocol != "messages" && m.Protocol != "responses" && m.Protocol != "systemone" {
 			return errors.New("protocol 必须是 chat / messages / responses / systemone")
+		}
+		if e := validateProtocols(m); e != nil {
+			return e
 		}
 		if m.Concurrency < 1 || m.Concurrency > 128 || m.RPM < 0 || m.RPM > 100000 {
 			return errors.New("模型并发数 / RPM 不合法")
@@ -396,14 +412,20 @@ func newSyncedModel(id, providerID, upstream, name, protocol string, src Object)
 	m.Context = clamp(m.Context, 1, 10000000)
 
 	// 声明了参数表就照声明；没声明时默认支持工具，不支持的上游会明确报错而不是静默出错
-	params, declared := src["supported_parameters"]
+	params, declared := src["supported_parameters"].([]any)
+	m.ToolsUnknown = !declared
 	m.Tools = !declared
 	for _, v := range arr(params) {
 		if s, _ := v.(string); s == "tools" {
 			m.Tools = true
 		}
 	}
-	for _, v := range arr(obj(src["architecture"])["input_modalities"]) {
+	modalities, declared := obj(src["architecture"])["input_modalities"].([]any)
+	if !declared {
+		modalities, declared = src["input_modalities"].([]any)
+	}
+	m.VisionUnknown = !declared
+	for _, v := range arr(modalities) {
 		if s, _ := v.(string); s == "image" {
 			m.Vision = true
 		}

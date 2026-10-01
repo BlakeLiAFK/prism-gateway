@@ -19,7 +19,7 @@ import (
 )
 
 func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
-	c := a.Store.Config()
+	c := cloneConfig(a.Store.Config())
 	version := int64(num(p, "version"))
 	id := str(p, "id")
 	switch action {
@@ -74,6 +74,9 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 				valsCopy[k] = x
 			}
 		}
+		if _, set := valsCopy["protocol_urls"]; set {
+			v.ProtocolURLs = nil
+		}
 		if er := decode(valsCopy, &v); er != nil {
 			return nil, fail("INVALID_PARAMS", er.Error(), 400)
 		}
@@ -103,6 +106,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		if er := decode(p["model"], &v); er != nil {
 			return nil, fail("INVALID_PARAMS", er.Error(), 400)
 		}
+		confirmCapabilities(&v, obj(p["model"]))
 		if v.ID == "" {
 			v.ID = randomID("m_")
 		}

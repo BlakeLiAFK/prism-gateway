@@ -368,3 +368,12 @@ GET  /anthropic/v1/models/{id}
 `model.stats` 和 `model.usage` 的汇总项包含 `cache_hit_rate`（0–1或null）、`cache_samples`、`cache_known_requests`、`cache_null_requests`、`cache_input_tokens`、`cache_hit_tokens`、`cache_null_rate`。`route.stats` 返回 `cache`，按请求的路由/别名 ID 索引同类统计（小时汇总覆盖所选分钟窗口所在小时）。
 
 命中率为明确报告缓存用量的请求中，缓存读取 token / 总输入 token；Messages 输入包含普通输入、缓存读取及缓存写入。缺失字段与显式 null 不算零命中，零分母返回 null；旧记录不能推断覆盖。界面显示样本数量，缓存命中不能单独证明会话亲和有效。独立缓存汇总表保留400天，不改变旧用量表结构，兼容交接时仍在排空的旧进程。
+
+
+## 模型多协议与能力状态（v1.34.0）
+
+`model.save` 支持 `supported_protocols`（chat/messages/responses/systemone 数组）和 `protocols_locked`。非空列表须包含默认 `protocol`，System One 不与对话协议混用。省略/`null` 保留旧式单协议语义，显式 `[]` 表示尚无确认协议，模型不会被路由。同步只更新未锁定的上游协议声明，不覆盖已有人工工具/视觉、名称、价格、预算设置；默认协议失效时改为新声明中的首个协议。
+
+`tools_unknown` / `vision_unknown` 为 true 时，能力未确认，由上游判断；不是已验证支持。管理员显式提交 `tools` / `vision` 而不提交对应 unknown 字段，会清除未知状态。
+
+`provider.save` 支持 `protocol_urls`，例如 `{"messages":"https://api.deepseek.com/anthropic/v1"}`。值是协议 Base URL，网关追加 `/messages` 等路径；空 map 清除覆盖，缺省沿用 `base_url`。支持运行时修改，遵循相同 URL 安全校验与配置版本约束。

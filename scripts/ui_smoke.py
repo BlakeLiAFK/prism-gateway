@@ -217,14 +217,58 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     page.locator('[data-action="edit-model"]').first.click()
     page.wait_for_selector('input[name="price_locked"]')
     page.check('input[name="price_locked"]')
+    page.check('input[name="native_protocol"][value="responses"]')
+    page.check('input[name="protocols_locked"]')
+    page.select_option('select[name="vision"]', 'unknown')
     page.locator('dialog button[type="submit"]').click()
     page.wait_for_timeout(400)
     page.locator('[data-action="edit-model"]').first.click()
     page.wait_for_selector('input[name="price_locked"]')
     if not page.locator('input[name="price_locked"]').is_checked():
         fail('模型价格锁保存未生效')
+    if not page.locator('input[name="native_protocol"][value="responses"]').is_checked():
+        fail('模型多协议保存未生效')
+    if not page.locator('input[name="protocols_locked"]').is_checked():
+        fail('模型协议锁保存未生效')
+    if page.locator('select[name="vision"]').input_value() != 'unknown':
+        fail('模型未知能力状态保存未生效')
+    if artifacts:
+        page.screenshot(path=str(artifacts / 'model-capabilities-desktop.png'))
+        desktop = page.viewport_size
+        page.set_viewport_size({'width': 390, 'height': 844})
+        page.screenshot(path=str(artifacts / 'model-capabilities-mobile.png'))
+        if page.evaluate('document.documentElement.scrollWidth > innerWidth'):
+            fail('模型能力编辑器在移动端横向溢出')
+        page.set_viewport_size(desktop)
     page.click('[data-action="close-dialog"]')
     results.append('model price lock persists')
+    results.append('model native protocols and unknown capability persist')
+
+    model_id = page.locator('[data-action="edit-model"]').first.get_attribute('data-id')
+    page.evaluate("""async id => {
+        const {rpc} = await import('/assets/api.js');
+        const c = await rpc('config.get');
+        await rpc('model.save', {version:c.version, id, model:{supported_protocols:[]}});
+    }""", model_id)
+    page.reload(wait_until='networkidle')
+    page.click('.nav-item[data-nav="models"]')
+    page.locator(f'[data-action="edit-model"][data-id="{model_id}"]').click()
+    page.wait_for_selector('input[name="name"]')
+    page.fill('input[name="name"]', '协议未确认模型')
+    page.locator('dialog button[type="submit"]').click()
+    page.wait_for_timeout(300)
+    protocols = page.evaluate("""async id => {
+        const {rpc} = await import('/assets/api.js');
+        return (await rpc('config.get')).models.find(m=>m.id===id).supported_protocols;
+    }""", model_id)
+    if protocols != []:
+        fail(f'修改名称不能启用未确认协议: {protocols}')
+    # 恢复演示模型，后续交互继续使用原来的路由。
+    page.locator(f'[data-action="edit-model"][data-id="{model_id}"]').click()
+    page.check('input[name="native_protocol"][value="chat"]')
+    page.locator('dialog button[type="submit"]').click()
+    page.wait_for_timeout(300)
+    results.append('editing unrelated fields preserves empty protocols')
 
 
     # 路由编辑器的候选搜索：模型多起来之后这是唯一能用的定位方式

@@ -2267,7 +2267,7 @@ func TestDropReasoningAnnouncedOnConvertedStream(t *testing.T) {
 }
 
 // Claude Code 真实发出的请求里带着 metadata、context_management、output_config、
-// thinking 这些字段。前三个不影响生成语义，第四个影响。
+// thinking。只有已经没有推理块时的 clear_thinking edit 是 no-op；其它上下文编辑拒绝。
 // 整个请求因此被拒绝，而错误只说「没有兼容此请求的候选模型」，
 // 连是哪个字段都不讲——这是这条测试要挡住的两件事。
 func TestClaudeCodeShapedRequestIsAcceptedAndDisclosed(t *testing.T) {
@@ -2327,7 +2327,7 @@ func TestClaudeCodeShapedRequestIsAcceptedAndDisclosed(t *testing.T) {
 		t.Fatalf("Claude Code 形状的请求应当可用: %d %s", w.Code, w.Body)
 	}
 	ignored := w.Header().Get("X-Prism-Ignored")
-	for _, want := range []string{"thinking", "metadata", "context_management", "output_config"} {
+	for _, want := range []string{"thinking", "metadata", "context_management.edits.clear_thinking_20251015", "output_config.effort"} {
 		if !strings.Contains(ignored, want) {
 			t.Fatalf("X-Prism-Ignored 应包含 %s，实得 %q", want, ignored)
 		}
@@ -3064,17 +3064,17 @@ func TestNotFoundFallsOverToNextCandidate(t *testing.T) {
 	}
 }
 
-// 上游网关层的 502 / 504 意味着请求根本没到模型，换候选是安全的。
-func TestUpstreamGatewayErrorFallsOver(t *testing.T) {
+// 502 / 504 无法证明模型未处理请求，不应自动重放。
+func TestUpstreamGatewayErrorDoesNotReplay(t *testing.T) {
 	for _, status := range []int{502, 504} {
 		h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(status)
 			io.WriteString(w, `{"error":{"message":"bad gateway"}}`)
 		})
 		w := h.generate(t, "chat", requestFixture("chat", "pair"))
-		requireStatus(t, w, 200)
-		if got := w.Header().Get("X-Prism-Model"); got != "cand-ok" {
-			t.Fatalf("上游 %d 应当换候选，实得 %s", status, got)
+		requireStatus(t, w, 502)
+		if got := w.Header().Get("X-Prism-Model"); got != "cand-bad" {
+			t.Fatalf("上游 %d 不应换候选，实得 %s", status, got)
 		}
 	}
 }
