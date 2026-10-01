@@ -94,7 +94,7 @@ OpenRouter 上的 DeepSeek、Nemotron 等）。
 | 字段 | 说明 |
 | --- | --- |
 | `metadata` | Anthropic 规范中它不参与生成 |
-| `context_management.edits.clear_thinking_20251015` | 仅无推理历史的精确清除子集；其他服务端上下文编辑不转换 |
+| `context_management.edits.clear_thinking_20251015` | 无推理历史时接受省略 keep、keep="all"、keep={type:"all"}、keep={type:"thinking_turns",value:正整数} 并通过 X-Prism-Ignored 披露；其他服务端上下文编辑不转换 |
 | `output_config.effort` | 仅努力程度偏好；`format` 单独转换并保留约束 |
 | `cache_control` | 提示缓存标记，只影响成本不影响内容 |
 | `service_tier` / `store` / `user` | 供应商侧调度、留存与调用方标识 |

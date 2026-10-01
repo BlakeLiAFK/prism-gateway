@@ -1,6 +1,9 @@
 package gateway
 
-import "sort"
+import (
+	"math"
+	"sort"
+)
 
 // JSONSchemaFormat 是三种协议都能表达的结构化输出公共部分。
 type JSONSchemaFormat struct {
@@ -107,15 +110,38 @@ func readContextManagement(v any, ignored *[]string) error {
 	}
 	for _, value := range edits {
 		edit := obj(value)
-		if _, err := allowed(edit, "type"); err != nil {
+		if _, err := allowed(edit, "type", "keep"); err != nil {
 			return err
 		}
 		if str(edit, "type") != "clear_thinking_20251015" {
 			return unsupported("跨协议仅能忽略已无推理块时的 clear_thinking context edit")
 		}
+		if keep, set := edit["keep"]; set {
+			if err := validateThinkingKeep(keep); err != nil {
+				return err
+			}
+		}
 	}
 	*ignored = append(*ignored, "context_management.edits.clear_thinking_20251015")
 	sort.Strings(*ignored)
+	return nil
+}
+
+func validateThinkingKeep(v any) error {
+	if s, ok := v.(string); ok && s == "all" {
+		return nil
+	}
+	o := obj(v)
+	if str(o, "type") == "all" && len(o) == 1 {
+		return nil
+	}
+	if _, err := allowed(o, "type", "value"); err != nil {
+		return err
+	}
+	n := num(o, "value")
+	if str(o, "type") != "thinking_turns" || n <= 0 || math.IsNaN(n) || math.IsInf(n, 0) || math.Trunc(n) != n {
+		return unsupported("clear_thinking.keep 必须为 all 或 thinking_turns 正整数")
+	}
 	return nil
 }
 
