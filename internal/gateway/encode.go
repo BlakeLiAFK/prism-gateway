@@ -18,6 +18,14 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 	}
 	messages := []any{}
 	systems := []string{}
+	// Chat 工具消息不能放图片；等并行工具结果齐全后再附带带来源标记的图文。
+	toolImages := []any{}
+	flushToolImages := func() {
+		if len(toolImages) > 0 {
+			messages = append(messages, Object{"role": "user", "content": toolImages})
+			toolImages = nil
+		}
+	}
 	for _, m := range c.Messages {
 		if protocol != "chat" && m.Role == "system" {
 			for _, b := range m.Blocks {
@@ -45,6 +53,9 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 			}
 		}
 		for _, b := range m.Blocks {
+			if b.Kind != "result" {
+				flushToolImages()
+			}
 			switch b.Kind {
 			case "text":
 				typ := "text"
@@ -56,18 +67,11 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 				}
 				bs = append(bs, Object{"type": typ, "text": b.Text})
 			case "image":
-				switch protocol {
-				case "chat":
-					bs = append(bs, Object{"type": "image_url", "image_url": Object{"url": b.URL}})
-				case "responses":
-					bs = append(bs, Object{"type": "input_image", "image_url": b.URL})
-				case "messages":
-					src, e := imageSource(b.URL)
-					if e != nil {
-						return nil, e
-					}
-					bs = append(bs, Object{"type": "image", "source": src})
+				image, err := encodeImage(b, protocol)
+				if err != nil {
+					return nil, err
 				}
+				bs = append(bs, image)
 			case "tool":
 				if b.ID == "" || b.Name == "" || !json.Valid([]byte(b.Arguments)) {
 					return nil, unsupported("工具 ID / name / arguments 不合法")
@@ -87,20 +91,30 @@ func encodeCanonical(c Canonical, protocol, model string) (Object, error) {
 				if b.ID == "" {
 					return nil, unsupported("工具结果缺少 call ID")
 				}
+				content, err := encodeToolContent(b, protocol)
+				if err != nil {
+					return nil, err
+				}
 				switch protocol {
 				case "chat":
 					flush()
-					messages = append(messages, Object{"role": "tool", "tool_call_id": b.ID, "content": b.Text})
+					if len(b.Content) > 0 {
+						toolImages = append(toolImages, Object{"type": "text", "text": toolImageLabel(b.ID)})
+						toolImages = append(toolImages, content.([]any)...)
+						content = "Tool output is attached in the following user message. " + toolImageLabel(b.ID)
+					}
+					messages = append(messages, Object{"role": "tool", "tool_call_id": b.ID, "content": content})
 				case "responses":
 					flush()
-					messages = append(messages, Object{"type": "function_call_output", "call_id": b.ID, "output": b.Text})
+					messages = append(messages, Object{"type": "function_call_output", "call_id": b.ID, "output": content})
 				case "messages":
-					bs = append(bs, Object{"type": "tool_result", "tool_use_id": b.ID, "content": b.Text, "is_error": b.IsError})
+					bs = append(bs, Object{"type": "tool_result", "tool_use_id": b.ID, "content": content, "is_error": b.IsError})
 				}
 			}
 		}
 		flush()
 	}
+	flushToolImages()
 	// 客户端没写输出上限时不带这个字段，由 selections 按上游协议决定是否补
 	if f := map[string]string{"chat": "max_tokens", "messages": "max_tokens", "responses": "max_output_tokens"}[protocol]; f != "" && c.MaxOutput > 0 {
 		o[f] = c.MaxOutput
@@ -300,32 +314,6 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 		}
 	}
 	return c, nil
-}
-
-func stopFor(c Completion, p string) string {
-	hasTool := false
-	for _, b := range c.Blocks {
-		if b.Kind == "tool" {
-			hasTool = true
-		}
-	}
-	length := c.Stop == "length" || c.Stop == "max_tokens"
-	if p == "messages" {
-		if length {
-			return "max_tokens"
-		}
-		if hasTool {
-			return "tool_use"
-		}
-		return "end_turn"
-	}
-	if length {
-		return "length"
-	}
-	if hasTool {
-		return "tool_calls"
-	}
-	return "stop"
 }
 
 func usageObject(u Usage, p string) Object {

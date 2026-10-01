@@ -17,7 +17,7 @@ var passHeaders = []string{"retry-after", "anthropic-ratelimit-requests-remainin
 
 // attemptHeaders 是每次候选尝试可能写入的响应头。换候选重试时必须先清掉，
 // 否则失败候选的声明（忽略了哪些字段、上游的限额）会挂在下一个候选的响应上。
-var attemptHeaders = append([]string{"X-Prism-Ignored", "X-Prism-Dropped", "X-Prism-Demo"}, passHeaders...)
+var attemptHeaders = append([]string{"X-Prism-Ignored", "X-Prism-Dropped", "X-Prism-Demo", "X-Prism-Adapted"}, passHeaders...)
 
 func pathFor(p string) string {
 	switch p {
@@ -176,6 +176,9 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			// 换候选重试时，上一个候选留下的忽略字段声明不能带到这一个响应里
 			for _, h := range attemptHeaders {
 				w.Header().Del(h)
+			}
+			if s.ToolImagesAdapted {
+				w.Header().Set("X-Prism-Adapted", "tool-result-images")
 			}
 			if len(s.Ignored) > 0 {
 				// 这些请求字段被接受但没有传给上游。忽略可以，不说不行。

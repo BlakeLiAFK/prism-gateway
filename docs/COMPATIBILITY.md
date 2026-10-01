@@ -15,6 +15,14 @@
 
 常用图片 URL / data URI 引用可转换，前提是模型手动声明支持图片，且目标协议能无损表示。不由网关下载任意图片 URL。图片不是该交付的真实模型识别测试项目。
 
+Claude Code 等客户端的 `tool_result` 也支持文本、图片及混合内容：
+
+- Messages 与 Responses 之间保留工具结果内的图文顺序和调用 ID；Responses 使用 `function_call_output.output` 内容数组。
+- Chat 的 `tool` 消息不能携带图片。网关保留 `tool_call_id` 和结果占位，等全部并行工具结果返回后，把完整图文附在 `user` 消息内，用调用 ID 标注为不可信工具输出，并返回 `X-Prism-Adapted: tool-result-images`。图片不会丢弃，但图片与工具的关联变为文本标记，内容所在角色也发生变化；这是兼容映射，不是协议级无损转换。依赖严格工具信任边界的客户端应使用原生 Messages 或 Responses 模型。
+- 纯文本工具结果沿用原格式；PDF、音频、嵌套工具调用等未支持的工具结果仍明确拒绝。模型必须启用“支持图像输入”，上游也必须实际具备视觉能力。
+
+上述图片工具结果已覆盖本地 HTTP handler 的普通响应和 SSE 测试；测试不代表所有真实供应商模型都能识图。字段依据：[OpenAI function calling](https://developers.openai.com/api/docs/guides/function-calling)、[Claude 工具结果](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls)。
+
 ## 不做“假兼容”
 
 跨协议不支持 Thinking / adaptive thinking、思考签名、redacted thinking、OpenAI reasoning / encrypted reasoning 项、任意 PDF/音频/视频、多模态服务端文件、内建 web search / code interpreter / computer-use tools、store=true / previous_response_id 等服务端状态、批量多候选、任意结构化输出约束、未映射 beta 字段。

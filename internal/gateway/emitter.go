@@ -244,3 +244,29 @@ func (e *emitter) finish() error {
 		return e.send(typ, Object{"type": typ, "response": r})
 	}
 }
+
+func stopFor(c Completion, p string) string {
+	hasTool := false
+	for _, b := range c.Blocks {
+		if b.Kind == "tool" {
+			hasTool = true
+		}
+	}
+	length := c.Stop == "length" || c.Stop == "max_tokens"
+	if p == "messages" {
+		if length {
+			return "max_tokens"
+		}
+		if hasTool {
+			return "tool_use"
+		}
+		return "end_turn"
+	}
+	if length {
+		return "length"
+	}
+	if hasTool {
+		return "tool_calls"
+	}
+	return "stop"
+}

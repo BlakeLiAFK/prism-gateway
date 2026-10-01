@@ -144,7 +144,8 @@ type selection struct {
 	// Ignored 是被接受但没有传给上游的请求字段，会在 X-Prism-Ignored 里告知调用方
 	Ignored []string
 	// Pinned 是会话原绑定的模型，仅当它在本次请求中仍是合格候选时非空
-	Pinned string
+	Pinned            string
+	ToolImagesAdapted bool
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
@@ -205,6 +206,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		var body Object
 		cross := p != m.Protocol
 		ignored := []string{}
+		toolImagesAdapted := false
 		// System One 返回类型化决策，对话协议返回消息序列，两边没有共同语义。
 		// 允许转换只能靠编造文本或字符串化 JSON，都会静默改变调用方拿到的东西。
 		if why == "" && cross && (p == "systemone" || m.Protocol == "systemone") {
@@ -227,6 +229,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 				why = err.Error()
 			} else {
 				ignored = append(ignored, ir.Ignored...)
+				toolImagesAdapted = m.Protocol == "chat" && hasToolResultImages(ir)
 				body, err = encodeCanonical(ir, m.Protocol, m.Upstream)
 				if err != nil {
 					why = err.Error()
@@ -273,7 +276,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			if l.Cooling || l.Full {
 				score -= unhealthyPenalty
 			}
-			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB), cross, ignored, ""})
+			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB), cross, ignored, "", toolImagesAdapted})
 		}
 		reasons = append(reasons, Object{"model_id": m.ID, "eligible": why == "", "reason": why, "native": !cross})
 	}

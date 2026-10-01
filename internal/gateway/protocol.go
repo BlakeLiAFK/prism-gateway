@@ -18,6 +18,7 @@ type Block struct {
 	Arguments string
 	URL       string
 	IsError   bool
+	Content   []Block
 }
 type Message struct {
 	Role   string
@@ -217,11 +218,11 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 					if _, er := allowed(m, "type", "id", "call_id", "output", "status"); er != nil {
 						return c, er
 					}
-					text, ok := m["output"].(string)
-					if !ok {
-						return c, unsupported("function_call_output 仅支持文本")
+					result, er := readToolResult(str(m, "call_id"), m["output"], protocol, false)
+					if er != nil {
+						return c, er
 					}
-					c.Messages = append(c.Messages, Message{Role: "user", Blocks: []Block{{Kind: "result", ID: str(m, "call_id"), Text: text}}})
+					c.Messages = append(c.Messages, Message{Role: "user", Blocks: []Block{result}})
 				case "", "message":
 					if _, er := allowed(m, "type", "id", "role", "content", "status"); er != nil {
 						return c, er
@@ -400,22 +401,11 @@ func readBlocks(v any, protocol string) ([]Block, error) {
 			if _, e := allowed(o, "type", "tool_use_id", "content", "is_error", "cache_control"); e != nil {
 				return nil, e
 			}
-			bs, e := readBlocks(o["content"], "messages")
+			result, e := readToolResult(str(o, "tool_use_id"), o["content"], "messages", boolean(o, "is_error"))
 			if e != nil {
 				return nil, e
 			}
-			parts := []string{}
-			for _, b := range bs {
-				if b.Kind != "text" {
-					return nil, unsupported("跨协议工具结果仅支持文本")
-				}
-				parts = append(parts, b.Text)
-			}
-			text := strings.Join(parts, "\n")
-			if boolean(o, "is_error") {
-				text = "[tool error]\n" + text
-			}
-			out = append(out, Block{Kind: "result", ID: str(o, "tool_use_id"), Text: text, IsError: boolean(o, "is_error")})
+			out = append(out, result)
 		default:
 			return nil, unsupported("跨协议不支持内容类型 " + typ + "；使用原生协议保留其语义")
 		}
