@@ -121,16 +121,37 @@ func allowed(o Object, keys ...string) ([]string, error) {
 	sort.Strings(ignored)
 	return ignored, nil
 }
+
+func requireEmptyList(o Object, keys ...string) error {
+	for _, key := range keys {
+		v, exists := o[key]
+		if !exists || v == nil {
+			continue
+		}
+		if list, ok := v.([]any); ok && len(list) == 0 {
+			continue
+		}
+		return unsupported("跨协议不支持非空 " + key)
+	}
+	return nil
+}
+
 func unsupported(s string) error { return fail("UNSUPPORTED_FEATURE", s, 400) }
 func decodeCanonical(o Object, protocol string) (Canonical, error) {
 	c := Canonical{Stream: boolean(o, "stream"), Temperature: o["temperature"], TopP: o["top_p"], Choice: "auto"}
 	common := []string{"model", "stream", "temperature", "top_p", "tools", "tool_choice"}
+	if boolean(o, "store") {
+		return c, unsupported("跨协议不支持 store=true 或服务端会话状态")
+	}
 	var e error
 	switch protocol {
 	case "chat":
 		c.Ignored, e = allowed(o, append(common, "messages", "max_tokens", "max_completion_tokens", "stop", "stream_options", "n", "parallel_tool_calls", "response_format")...)
 		if e == nil {
 			c.Format, e = readJSONSchemaFormat(o["response_format"], protocol)
+		}
+		if e != nil {
+			return c, e
 		}
 		if num(o, "n") > 1 {
 			return c, unsupported("跨协议仅支持 n=1")
@@ -143,7 +164,10 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 		c.Stop = o["stop"]
 		for _, v := range arr(o["messages"]) {
 			m := obj(v)
-			if _, er := allowed(m, "role", "content", "tool_calls", "tool_call_id"); er != nil {
+			if _, er := allowed(m, "role", "content", "tool_calls", "tool_call_id", "annotations"); er != nil {
+				return c, er
+			}
+			if er := requireEmptyList(m, "annotations"); er != nil {
 				return c, er
 			}
 			cm := Message{Role: str(m, "role")}
@@ -205,9 +229,6 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 		c.Ignored, e = allowed(o, append(common, "input", "instructions", "max_output_tokens", "store", "parallel_tool_calls", "text")...)
 		if e == nil {
 			c.Format, e = readResponsesTextFormat(o["text"])
-		}
-		if boolean(o, "store") {
-			return c, unsupported("跨协议不支持 store=true 或服务端会话状态")
 		}
 		if v := num(o, "max_output_tokens"); v > 0 {
 			c.MaxOutput = int(v)
@@ -291,8 +312,25 @@ func decodeCanonical(o Object, protocol string) (Canonical, error) {
 			}
 			f = t
 		case "messages":
-			if _, er := allowed(t, "name", "description", "input_schema", "strict", "cache_control"); er != nil {
+			if _, er := allowed(t, "type", "name", "description", "input_schema", "strict", "cache_control", "defer_loading", "allowed_callers"); er != nil {
 				return c, er
+			}
+			if typ, exists := t["type"]; exists && typ != nil {
+				if value, ok := typ.(string); !ok || value != "custom" {
+					return c, unsupported("跨协议仅支持 Messages custom tools")
+				}
+			}
+			if deferLoading := t["defer_loading"]; deferLoading != nil {
+				value, ok := deferLoading.(bool)
+				if !ok || value {
+					return c, unsupported("跨协议不支持 defer_loading=true")
+				}
+			}
+			if callers := t["allowed_callers"]; callers != nil {
+				list, ok := callers.([]any)
+				if !ok || len(list) != 1 || list[0] != "direct" {
+					return c, unsupported("跨协议仅支持 allowed_callers=[\"direct\"]")
+				}
 			}
 			f = t
 		}
@@ -372,7 +410,10 @@ func readBlocks(v any, protocol string) ([]Block, error) {
 		typ := str(o, "type")
 		switch typ {
 		case "text", "input_text", "output_text":
-			if _, e := allowed(o, "type", "text", "cache_control"); e != nil {
+			if _, e := allowed(o, "type", "text", "cache_control", "annotations", "citations", "logprobs"); e != nil {
+				return nil, e
+			}
+			if e := requireEmptyList(o, "annotations", "citations", "logprobs"); e != nil {
 				return nil, e
 			}
 			out = append(out, Block{Kind: "text", Text: str(o, "text")})
@@ -410,8 +451,11 @@ func readBlocks(v any, protocol string) ([]Block, error) {
 				return nil, unsupported("图片来源不受支持")
 			}
 		case "tool_use":
-			if _, e := allowed(o, "type", "id", "name", "input", "cache_control"); e != nil {
+			if _, e := allowed(o, "type", "id", "name", "input", "cache_control", "caller"); e != nil {
 				return nil, e
+			}
+			if err := validateToolCaller(o["caller"]); err != nil {
+				return nil, err
 			}
 			out = append(out, Block{Kind: "tool", ID: str(o, "id"), Name: str(o, "name"), Arguments: raw(o["input"])})
 		case "tool_result":

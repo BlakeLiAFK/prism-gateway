@@ -57,7 +57,7 @@ func TestDeepSeekIgnoredContractsAreRejectedBeforeSending(t *testing.T) {
 		{"model": "m", "input": "x", "parallel_tool_calls": false},
 		{"model": "m", "input": "x", "tools": []any{Object{"type": "web_search"}}},
 		{"model": "m", "messages": []any{}, "output_config": Object{"format": Object{"type": "json_schema"}}},
-		{"model": "m", "messages": []any{}, "context_management": Object{"edits": []any{}}},
+		{"model": "m", "messages": []any{}, "context_management": Object{"edits": []any{Object{"type": "clear_tool_uses_20250919"}}}},
 	} {
 		h := newHarness(t)
 		m := modelFixture("m", "chat")

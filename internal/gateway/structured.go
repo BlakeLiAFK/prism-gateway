@@ -18,6 +18,9 @@ func readJSONSchemaFormat(v any, protocol string) (*JSONSchemaFormat, error) {
 		return nil, nil
 	}
 	o := obj(v)
+	if protocol != "messages" && str(o, "type") == "text" && len(o) == 1 {
+		return nil, nil
+	}
 	if o == nil || str(o, "type") != "json_schema" {
 		return nil, unsupported("跨协议结构化输出仅支持 json_schema")
 	}
@@ -104,9 +107,13 @@ func readContextManagement(v any, ignored *[]string) error {
 	if _, err := allowed(o, "edits"); err != nil {
 		return err
 	}
-	edits := arr(o["edits"])
+	edits, ok := o["edits"].([]any)
+	if o["edits"] != nil && !ok {
+		return unsupported("context_management.edits 必须是数组")
+	}
 	if len(edits) == 0 {
-		return unsupported("context_management.edits 不能为空")
+		*ignored = append(*ignored, "context_management")
+		return nil
 	}
 	for _, value := range edits {
 		edit := obj(value)

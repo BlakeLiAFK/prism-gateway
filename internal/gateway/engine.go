@@ -226,9 +226,8 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		}
 		if why == "" && cross {
 			src := o
-			// 已经接受丢弃推理内容的模型，请求侧的思考开关也就没有意义了：
-			// 去掉它而不是让整个请求失败。丢弃同样会被告知调用方。
-			if m.DropReasoning && o["thinking"] != nil {
+			// 仅显式允许的推理输出偏好可忽略；禁用思考或新增控制不能改成目标默认值。
+			if m.DropReasoning && canDropThinking(o["thinking"]) {
 				src = Object{}
 				for k, v := range o {
 					src[k] = v
@@ -254,6 +253,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			body["model"] = m.Upstream
 		}
 		if why == "" {
+			ignored = append(ignored, normalizeProviderContext(pr, m.Protocol, body)...)
 			why = providerRequestError(pr, m.Protocol, body)
 		}
 		if why == "" && m.Protocol != "systemone" {

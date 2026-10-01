@@ -11,9 +11,10 @@ import (
 
 type streamBlock struct {
 	Block
-	Key       int
-	Closed    bool
-	ToolIndex int
+	Key          int
+	Closed       bool
+	SourceClosed bool
+	ToolIndex    int
 }
 
 type emitter struct {
@@ -26,6 +27,7 @@ type emitter struct {
 	usage        Usage
 	stop         string
 	toolCount    int
+	requireClose bool
 }
 
 func newEmitter(w http.ResponseWriter, p, model, id string) *emitter {
@@ -185,6 +187,25 @@ func (e *emitter) finalArguments(key int, arguments string) error {
 	return e.delta(key, arguments)
 }
 
+func (e *emitter) finalText(key int, text string) error {
+	if _, ok := e.byKey[key]; !ok {
+		if err := e.start(key, Block{Kind: "text"}); err != nil {
+			return err
+		}
+	}
+	i := e.byKey[key]
+	if e.blocks[i].Kind != "text" {
+		return errors.New("text done for non-text block")
+	}
+	if e.blocks[i].Text == text {
+		return nil
+	}
+	if e.blocks[i].Text != "" {
+		return errors.New("text deltas do not match final text")
+	}
+	return e.delta(key, text)
+}
+
 func (e *emitter) close(key int) error {
 	i, ok := e.byKey[key]
 	if !ok {
@@ -222,15 +243,71 @@ func (e *emitter) close(key int) error {
 	return nil
 }
 
+func (e *emitter) sourceClose(key int) error {
+	i, ok := e.byKey[key]
+	if !ok || e.blocks[i].Kind != "tool" {
+		return errors.New("tool stop before tool start")
+	}
+	b := e.blocks[i]
+	if err := validateToolCall(b.ID, b.Name, b.Arguments); err != nil {
+		return err
+	}
+	b.SourceClosed = true
+	return nil
+}
+
+func (e *emitter) closeForStop(stop string) error {
+	e.stop = stop
+	for _, b := range e.blocks {
+		if b.Closed || (stop == "length" && b.Kind == "tool") {
+			continue
+		}
+		if err := e.close(b.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *emitter) closeForChatStop(stop string) error {
+	stop, err := canonicalChatStop(stop)
+	if err != nil {
+		return err
+	}
+	return e.closeForStop(stop)
+}
+
+func (e *emitter) confirmMessagesStop(stop string) error {
+	canonical, err := canonicalMessagesStop(stop)
+	if err != nil {
+		return err
+	}
+	e.stop = canonical
+	if stop != "tool_use" {
+		return nil
+	}
+	for _, b := range e.blocks {
+		if b.Kind != "tool" {
+			continue
+		}
+		if !b.SourceClosed {
+			return errors.New("tool terminal before content block stop")
+		}
+		if err := e.close(b.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (e *emitter) finish() error {
 	visible := false
 	for _, b := range e.blocks {
-		if b.Kind == "tool" && !b.Closed && (e.stop == "length" || e.stop == "max_tokens") {
-			return errors.New("truncated tool call")
+		if e.requireClose && !b.Closed {
+			return errors.New("upstream block lacks completion event")
 		}
 		if b.Kind == "tool" || strings.TrimSpace(b.Text) != "" {
 			visible = true
-			break
 		}
 	}
 	if !visible {
@@ -241,8 +318,10 @@ func (e *emitter) finish() error {
 	}
 	c := Completion{Usage: e.usage, Stop: e.stop}
 	for _, b := range e.blocks {
-		if err := e.close(b.Key); err != nil {
-			return err
+		if !b.Closed {
+			if err := e.close(b.Key); err != nil {
+				return err
+			}
 		}
 		c.Blocks = append(c.Blocks, b.Block)
 	}

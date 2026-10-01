@@ -103,6 +103,47 @@ func confirmCapabilities(m *Model, patch Object) {
 	}
 }
 
+// 输出丢弃开关不授权改变禁用思考或其他硬性控制。
+func canDropThinking(value any) bool {
+	o := obj(value)
+	if str(o, "type") != "enabled" && str(o, "type") != "adaptive" {
+		return false
+	}
+	for key := range o {
+		if key != "type" && key != "budget_tokens" {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeProviderContext(p Provider, protocol string, body Object) []string {
+	if p.Kind != "deepseek" || protocol != "messages" || body["context_management"] == nil {
+		return nil
+	}
+	ignored := []string{}
+	if readContextManagement(body["context_management"], &ignored) != nil {
+		return nil
+	}
+	if len(arr(obj(body["context_management"])["edits"])) > 0 {
+		for _, value := range arr(body["messages"]) {
+			m := obj(value)
+			if hasReasoningField(m) {
+				return nil
+			}
+			for _, value := range arr(m["content"]) {
+				switch str(obj(value), "type") {
+				case "thinking", "redacted_thinking", "reasoning":
+					return nil
+				}
+			}
+		}
+	}
+	// 已确认不会改变历史的空操作无需交给不支持它的上游执行。
+	delete(body, "context_management")
+	return ignored
+}
+
 // DeepSeek 对部分参数会直接忽略；硬性输出、状态和执行约束不能因此伪装成功。
 func providerRequestError(p Provider, protocol string, o Object) string {
 	if p.Kind != "deepseek" {

@@ -268,7 +268,10 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 			return c, errors.New("expected one chat choice")
 		}
 		v := obj(choices[0])
-		c.Stop = str(v, "finish_reason")
+		var err error
+		if c.Stop, err = canonicalChatStop(str(v, "finish_reason")); err != nil {
+			return c, err
+		}
 		m := obj(v["message"])
 		if str(m, "refusal") != "" {
 			return c, unsupported("无法等价转换 refusal 内容")
@@ -303,7 +306,10 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 			c.Blocks = append(c.Blocks, Block{Kind: "tool", ID: str(t, "id"), Name: str(f, "name"), Arguments: args})
 		}
 	case "messages":
-		c.Stop = str(o, "stop_reason")
+		var err error
+		if c.Stop, err = canonicalMessagesStop(str(o, "stop_reason")); err != nil {
+			return c, err
+		}
 		for _, v := range arr(o["content"]) {
 			b := obj(v)
 			switch str(b, "type") {
@@ -313,6 +319,9 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 				}
 				c.Blocks = append(c.Blocks, Block{Kind: "text", Text: str(b, "text")})
 			case "tool_use":
+				if err := validateToolCaller(b["caller"]); err != nil {
+					return c, err
+				}
 				id, name, arguments := str(b, "id"), str(b, "name"), raw(b["input"])
 				if err := validateToolCall(id, name, arguments); err != nil {
 					return c, err
@@ -323,7 +332,14 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 			}
 		}
 	case "responses":
-		if str(o, "status") == "incomplete" {
+		status := str(o, "status")
+		if status != "" && status != "completed" && status != "incomplete" {
+			return c, errors.New("upstream returned non-terminal Responses status")
+		}
+		if status == "incomplete" {
+			if str(obj(o["incomplete_details"]), "reason") != "max_output_tokens" {
+				return c, errors.New("unsupported Responses incomplete reason")
+			}
 			c.Stop = "length"
 		}
 		for _, v := range arr(o["output"]) {
@@ -354,10 +370,37 @@ func decodeCompletion(o Object, protocol string) (Completion, error) {
 			}
 		}
 	}
+	if c.Stop == "length" && protocol != "responses" {
+		for _, block := range c.Blocks {
+			if block.Kind == "tool" {
+				return c, errors.New("upstream truncated tool call")
+			}
+		}
+	}
 	if len(c.Blocks) == 0 {
 		return c, errors.New("upstream returned no cross-protocol output")
 	}
 	return c, nil
+}
+
+func canonicalMessagesStop(stop string) (string, error) {
+	switch stop {
+	case "", "end_turn", "stop_sequence", "tool_use":
+		return stop, nil
+	case "max_tokens", "model_context_window_exceeded":
+		return "length", nil
+	default:
+		return "", unsupported("无法跨协议转换 Messages stop_reason " + stop)
+	}
+}
+
+func canonicalChatStop(stop string) (string, error) {
+	switch stop {
+	case "", "stop", "tool_calls", "length":
+		return stop, nil
+	default:
+		return "", unsupported("无法跨协议转换 Chat finish_reason " + stop)
+	}
 }
 
 func usageObject(u Usage, p string) Object {

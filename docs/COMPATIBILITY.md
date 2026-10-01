@@ -97,10 +97,9 @@ OpenRouter 上的 DeepSeek、Nemotron 等）。
 | `context_management.edits.clear_thinking_20251015` | 无推理历史时接受省略 keep、keep="all"、keep={type:"all"}、keep={type:"thinking_turns",value:正整数} 并通过 X-Prism-Ignored 披露；其他服务端上下文编辑不转换 |
 | `output_config.effort` | 仅努力程度偏好；`format` 单独转换并保留约束 |
 | `cache_control` | 提示缓存标记，只影响成本不影响内容 |
-| `service_tier` / `store` / `user` | 供应商侧调度、留存与调用方标识 |
+| `service_tier` / `store:false` / `user` | 供应商侧调度与调用方标识；store:true 必须使用原生协议 |
 
-`thinking` 不在此列——它会真正改变模型行为。开启模型的 `drop_reasoning` 后
-该字段会被忽略（因为推理内容反正也要丢弃），否则请求会被拒绝并点名该字段。
+`thinking` 不在此列——它会真正改变模型行为。开启模型的 `drop_reasoning` 后，仅已知的 `enabled` / `adaptive` 推理输出偏好可被忽略并披露。`disabled`、额外思考控制或未知类型不会被改成上游默认值；不能等价转换时仍拒绝。
 
 无候选可用时，错误信息会逐个列出候选被排除的原因，例如
 `没有兼容此请求的候选模型（m_x: 跨协议转换不支持字段 "thinking"…）`。
@@ -131,3 +130,15 @@ ZDR 为供应商专属约束：`x-cmd-zdr: 1` 只走 Command Code 候选并原�
 此版本覆盖已开放的对话 HTTP/SSE 端点。独立的文件上传、Batch、语音转写/TTS、视频生成作业、Realtime 和 WebSocket 端点尚未实现；消息内媒体保真不等于这些独立 API 已支持。真实上游验证与离线契约测试应分开记录。
 
 参考：[OpenRouter Messages](https://openrouter.ai/docs/api/api-reference/anthropic-messages/create-messages)、[OpenRouter 多模态](https://openrouter.ai/docs/guides/overview/multimodal/overview)、[DeepSeek Responses](https://api-docs.deepseek.com/guides/responses_api/)、[DeepSeek Messages](https://api-docs.deepseek.com/guides/anthropic_api/)、[Command Code Provider](https://commandcode.ai/docs/provider)。
+
+## v1.34.2：客户端默认值与多轮历史
+
+- 普通 Messages 工具可显式声明 `type:"custom"`、`defer_loading:false`、`allowed_callers:["direct"]`；工具历史的 `caller:{type:"direct"}` 可转换，工具关联和参数保留。延迟加载或服务端调用方仍需原生协议。
+- 历史文本的空 `annotations` / `citations` / `logprobs` 不再误拒；含实际引用或概率内容时仍不能静默丢失。
+- 空上下文编辑合法。DeepSeek Messages 无推理历史时的 `clear_thinking` 空操作会移除并通过 `X-Prism-Ignored` 披露；真正需要编辑历史时仍不冒充支持。
+- 原生 Responses 的 `queued` / `in_progress` 状态保真，不当作空回答失败；独立异步查询/取消端点仍不在本次对话接口范围内。
+
+- Chat 请求的前置校验失败不会被后续消息解码覆盖；损坏的格式约束、未知字段和跨协议 `store:true` 必须显式拒绝。Chat/Responses 的纯文本格式默认值可显式声明。
+- 跨协议流必须确认每个工具调用完成；缺少完成证据、截断或不可表示的停止原因返回错误。Messages 上下文窗口耗尽映射为 length/incomplete，绝不伪装正常完成。
+
+本轮规范依据（2026-10-01核对）：[Anthropic工具类型](https://platform.claude.com/docs/en/api/typescript/messages)、[工具默认值](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-reference)、[停止原因](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons)、[DeepSeek推理控制](https://api-docs.deepseek.com/guides/thinking_mode/)。

@@ -324,7 +324,9 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				return
 			}
 			extractUsage(obj(ro["usage"]), s.Model.Protocol, &u)
-			if !hasVisibleOutput(ro, s.Model.Protocol) {
+			pending := !s.Cross && s.Model.Protocol == "responses" && str(ro, "id") != "" &&
+				(str(ro, "status") == "queued" || str(ro, "status") == "in_progress")
+			if !pending && !hasVisibleOutput(ro, s.Model.Protocol) {
 				// 上游 200 了却没给出任何可用内容。静默把空回答转出去，调用方只会
 				// 以为模型答不上来；实际是这个候选本次不可用，该换下一个。
 				if truncatedStop(ro, s.Model.Protocol) {

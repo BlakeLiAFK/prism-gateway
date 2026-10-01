@@ -46,6 +46,48 @@ func hasNonEmptyValue(value any) bool {
 	}
 }
 
+func finalResponsesText(em *emitter, key int, content []any) error {
+	if len(content) != 1 {
+		return errors.New("multiple Responses content parts unsupported")
+	}
+	part := obj(content[0])
+	if str(part, "type") != "output_text" || hasNonEmptyValue(part["annotations"]) {
+		return errors.New("unmappable Responses message content")
+	}
+	return em.finalText(key, str(part, "text"))
+}
+
+func completeResponsesItem(em *emitter, key int, item Object, dropReasoning bool) error {
+	switch str(item, "type") {
+	case "reasoning":
+		if !dropReasoning {
+			return errors.New("unmappable Responses reasoning item")
+		}
+		return nil
+	case "function_call":
+		i, ok := em.byKey[key]
+		if !ok || em.blocks[i].Kind != "tool" || em.blocks[i].ID != str(item, "call_id") || em.blocks[i].Name != str(item, "name") {
+			return errors.New("Responses terminal tool item does not match stream")
+		}
+		if !em.blocks[i].Closed && str(item, "status") != "completed" {
+			return errors.New("Responses terminal tool item is not completed")
+		}
+		if err := em.finalArguments(key, str(item, "arguments")); err != nil {
+			return err
+		}
+	case "message":
+		if i, ok := em.byKey[key]; !ok || (!em.blocks[i].Closed && str(item, "status") != "completed") {
+			return errors.New("Responses terminal message item is not completed")
+		}
+		if err := finalResponsesText(em, key, arr(item["content"])); err != nil {
+			return err
+		}
+	default:
+		return errors.New("unmappable Responses terminal item")
+	}
+	return em.close(key)
+}
+
 func validateToolCall(id, name, arguments string) error {
 	if id == "" || name == "" {
 		return errors.New("upstream returned tool call without ID or name")
@@ -53,6 +95,30 @@ func validateToolCall(id, name, arguments string) error {
 	var input Object
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil || input == nil {
 		return errors.New("upstream returned invalid tool argument object")
+	}
+	return nil
+}
+
+func validateToolCaller(value any) error {
+	if value == nil {
+		return nil
+	}
+	caller := obj(value)
+	if len(caller) != 1 || str(caller, "type") != "direct" {
+		return unsupported("跨协议仅支持 caller.type=direct")
+	}
+	return nil
+}
+
+func startMessagesTool(em *emitter, key int, block Object) error {
+	if err := validateToolCaller(block["caller"]); err != nil {
+		return err
+	}
+	if err := em.start(key, Block{Kind: "tool", ID: str(block, "id"), Name: str(block, "name")}); err != nil {
+		return err
+	}
+	if input := obj(block["input"]); len(input) > 0 {
+		return em.delta(key, raw(input))
 	}
 	return nil
 }
@@ -174,7 +240,8 @@ func truncatedStop(o Object, protocol string) bool {
 			}
 		}
 	case "messages":
-		return str(o, "stop_reason") == "max_tokens"
+		stop := str(o, "stop_reason")
+		return stop == "max_tokens" || stop == "model_context_window_exceeded"
 	case "responses":
 		return str(o, "status") == "incomplete"
 	}

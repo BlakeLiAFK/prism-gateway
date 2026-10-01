@@ -193,7 +193,11 @@ func truncatedStreamFrame(o Object, p, typ string) bool {
 			}
 		}
 	case "messages":
-		return typ == "message_delta" && str(obj(o["delta"]), "stop_reason") == "max_tokens"
+		if typ != "message_delta" {
+			return false
+		}
+		stop := str(obj(o["delta"]), "stop_reason")
+		return stop == "max_tokens" || stop == "model_context_window_exceeded"
 	case "responses":
 		return typ == "response.incomplete"
 	}
@@ -241,6 +245,7 @@ func nativeStream(w http.ResponseWriter, r io.Reader, p string, u *Usage) error 
 
 func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id string, u *Usage, dropReasoning bool) error {
 	em := newEmitter(w, to, model, id)
+	em.requireClose = true
 	done := false
 	dropped := map[int]bool{}
 	err := readSSE(r, func(f frame) error {
@@ -312,7 +317,9 @@ func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id str
 					}
 				}
 				if s := str(v, "finish_reason"); s != "" {
-					em.stop = s
+					if err = em.closeForChatStop(s); err != nil {
+						return err
+					}
 				}
 			}
 		case "messages":
@@ -332,12 +339,7 @@ func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id str
 						return em.delta(key, t)
 					}
 				case "tool_use":
-					if err = em.start(key, Block{Kind: "tool", ID: str(b, "id"), Name: str(b, "name")}); err != nil {
-						return err
-					}
-					if v := obj(b["input"]); len(v) > 0 {
-						return em.delta(key, raw(v))
-					}
+					return startMessagesTool(em, key, b)
 				case "thinking", "redacted_thinking":
 					if !dropReasoning {
 						return errors.New("unmappable Anthropic reasoning block")
@@ -376,9 +378,12 @@ func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id str
 						return err
 					}
 				}
+				if i, ok := em.byKey[key]; ok && em.blocks[i].Kind == "tool" {
+					return em.sourceClose(key)
+				}
 				return em.close(key)
 			case "message_delta":
-				em.stop = str(obj(o["delta"]), "stop_reason")
+				return em.confirmMessagesStop(str(obj(o["delta"]), "stop_reason"))
 			}
 		case "responses":
 			key := int(num(o, "output_index"))
@@ -419,6 +424,10 @@ func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id str
 				if hasNonEmptyValue(o["annotations"]) {
 					return errors.New("unmappable Responses output annotations")
 				}
+				if num(o, "content_index") != 0 {
+					return errors.New("multiple Responses content parts unsupported")
+				}
+				return em.finalText(key, str(o, "text"))
 			case "response.output_text.delta", "response.function_call_arguments.delta":
 				if hasNonEmptyValue(o["annotations"]) {
 					return errors.New("unmappable Responses output annotations")
@@ -428,6 +437,9 @@ func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id str
 				return em.finalArguments(key, str(o, "arguments"))
 			case "response.output_item.done":
 				b := obj(o["item"])
+				if status := str(b, "status"); status != "" && status != "completed" {
+					return errors.New("Responses done item is not completed")
+				}
 				if dropped[key] || str(b, "type") == "reasoning" {
 					if !dropReasoning {
 						return errors.New("unmappable Responses reasoning item")
@@ -436,12 +448,28 @@ func convertedStream(w http.ResponseWriter, r io.Reader, from, to, model, id str
 					return nil
 				}
 				if str(b, "type") == "function_call" {
+					if i, ok := em.byKey[key]; !ok || em.blocks[i].ID != str(b, "call_id") || em.blocks[i].Name != str(b, "name") {
+						return errors.New("Responses final tool item does not match start")
+					}
 					if err = em.finalArguments(key, str(b, "arguments")); err != nil {
+						return err
+					}
+				} else if str(b, "type") == "message" && len(arr(b["content"])) > 0 {
+					if err = finalResponsesText(em, key, arr(b["content"])); err != nil {
 						return err
 					}
 				}
 				return em.close(key)
+			case "response.completed":
+				for i, item := range arr(obj(o["response"])["output"]) {
+					if err = completeResponsesItem(em, i, obj(item), dropReasoning); err != nil {
+						return err
+					}
+				}
 			case "response.incomplete":
+				if str(obj(obj(o["response"])["incomplete_details"]), "reason") != "max_output_tokens" {
+					return errors.New("unsupported Responses incomplete reason")
+				}
 				em.stop = "length"
 			case "response.output_text.annotation.added", "response.refusal.delta":
 				return errors.New("unmappable Responses annotation/refusal")
