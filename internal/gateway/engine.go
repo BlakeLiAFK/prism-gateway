@@ -146,6 +146,8 @@ type selection struct {
 	// Pinned 是会话原绑定的模型，仅当它在本次请求中仍是合格候选时非空
 	Pinned            string
 	ToolImagesAdapted bool
+	// DroppedReasoning 表示发往上游的副本去掉了请求历史里的推理内容，响应必须披露
+	DroppedReasoning bool
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
@@ -219,6 +221,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		cross := p != m.Protocol
 		ignored := []string{}
 		toolImagesAdapted := false
+		droppedReasoning := false
 		// System One 返回类型化决策，对话协议返回消息序列，两边没有共同语义。
 		// 允许转换只能靠编造文本或字符串化 JSON，都会静默改变调用方拿到的东西。
 		if why == "" && cross && (p == "systemone" || m.Protocol == "systemone") {
@@ -226,10 +229,15 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		}
 		if why == "" && cross {
 			src := o
+			// 历史里的推理内容没有跨协议的等价表达，显式开启后只从这个候选的副本里去掉
+			if m.DropReasoning {
+				src, droppedReasoning = dropHistoryReasoning(o, p)
+			}
 			// 仅显式允许的推理输出偏好可忽略；禁用思考或新增控制不能改成目标默认值。
 			if m.DropReasoning && canDropThinking(o["thinking"]) {
+				base := src
 				src = Object{}
-				for k, v := range o {
+				for k, v := range base {
 					src[k] = v
 				}
 				delete(src, "thinking")
@@ -291,7 +299,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			if l.Cooling || l.Full {
 				score -= unhealthyPenalty
 			}
-			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB), cross, ignored, "", toolImagesAdapted})
+			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB), cross, ignored, "", toolImagesAdapted, droppedReasoning})
 		}
 		reasons = append(reasons, Object{"model_id": m.ID, "eligible": why == "", "reason": why, "native": !cross})
 	}

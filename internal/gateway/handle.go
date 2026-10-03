@@ -182,6 +182,10 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			if s.ToolImagesAdapted {
 				w.Header().Set("X-Prism-Adapted", "tool-result-images")
 			}
+			if s.DroppedReasoning {
+				// 请求历史里的推理内容没有发给这个上游，与丢弃响应推理同样要披露
+				w.Header().Set("X-Prism-Dropped", "reasoning")
+			}
 			if len(s.Ignored) > 0 {
 				// 这些请求字段被接受但没有传给上游。忽略可以，不说不行。
 				w.Header().Set("X-Prism-Ignored", strings.Join(s.Ignored, ","))

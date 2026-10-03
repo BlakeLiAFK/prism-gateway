@@ -117,6 +117,73 @@ func canDropThinking(value any) bool {
 	return true
 }
 
+// dropHistoryReasoning 返回去掉历史推理内容的请求副本，供显式开启 drop_reasoning 的跨协议候选使用。
+// 原请求不能动：同一请求的原生候选仍要原样透传带签名的推理块，会话切回去时才不丢数据。
+// 剥离后没有任何内容的 assistant 消息一并跳过，它本来就没有可见内容。
+func dropHistoryReasoning(o Object, protocol string) (Object, bool) {
+	field := "messages"
+	if protocol == "responses" {
+		field = "input"
+	}
+	items, ok := o[field].([]any)
+	if !ok {
+		return o, false
+	}
+	kept := make([]any, 0, len(items))
+	dropped := false
+	for _, v := range items {
+		m, changed := withoutReasoning(obj(v), protocol)
+		if !changed {
+			kept = append(kept, v)
+			continue
+		}
+		dropped = true
+		if hasNonEmptyValue(m["content"]) || len(arr(m["tool_calls"])) > 0 {
+			kept = append(kept, m)
+		}
+	}
+	if !dropped {
+		return o, false
+	}
+	out := Object{}
+	for k, v := range o {
+		out[k] = v
+	}
+	out[field] = kept
+	return out, true
+}
+
+// withoutReasoning 返回去掉推理内容的单条历史记录副本；未改动时调用方沿用原对象。
+// Responses 的推理是独立的 input 项，整项去掉，所以返回空对象。
+func withoutReasoning(m Object, protocol string) (Object, bool) {
+	if protocol == "responses" {
+		return nil, str(m, "type") == "reasoning"
+	}
+	c := Object{}
+	changed := false
+	for k, x := range m {
+		if protocol == "chat" && (k == "reasoning" || k == "reasoning_content" || k == "reasoning_details") {
+			changed = true
+			continue
+		}
+		c[k] = x
+	}
+	blocks, ok := m["content"].([]any)
+	if !ok || protocol != "messages" {
+		return c, changed
+	}
+	rest := make([]any, 0, len(blocks))
+	for _, b := range blocks {
+		if t := str(obj(b), "type"); t == "thinking" || t == "redacted_thinking" {
+			changed = true
+			continue
+		}
+		rest = append(rest, b)
+	}
+	c["content"] = rest
+	return c, changed
+}
+
 func normalizeProviderContext(p Provider, protocol string, body Object) []string {
 	if p.Kind != "deepseek" || protocol != "messages" || body["context_management"] == nil {
 		return nil

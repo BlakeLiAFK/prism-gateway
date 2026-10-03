@@ -287,3 +287,11 @@ p50 9.5 ms，无错误。说明 SQLite 的全局串行化在这个量级不是�
 ## v1.34.1：Claude Code 上下文参数回归
 
 修复 clear_thinking_20251015.keep 的合法字符串 all / 对象 all / thinking_turns 形态被跨协议拒绝。新增独立 HTTP fixture 覆盖 Messages 到 Chat/Responses、原生保真、非法参数和不可丢失的推理历史。旧实现四个跨协议用例均复现同一 keep 400；修复后定向测试通过。
+
+## v1.34.4：请求历史中的推理内容
+
+会话先由原生推理候选服务、随后路由只剩跨协议候选时，历史里的推理内容会让该候选被淘汰，请求返回 400 `NO_COMPATIBLE_MODEL`。`drop_reasoning` 此前只覆盖顶层 `thinking` 参数和上游响应，未覆盖请求历史。
+
+新增 `history_reasoning_test.go`，均经真实 handler 与独立 HTTP fixture：Messages 到 Chat 的非流式与流式、Chat 到 Messages、Responses 到 Chat、Claude Code 同时携带 `thinking: adaptive` 与 `clear_thinking` 的形态、开关关闭仍拒绝、原生到跨协议再回原生的往返、同一请求内跨协议候选先评估时原请求不被改动。旧实现下五个用例复现与生产一致的 400 文案；修复后全部通过。
+
+往返用例断言原生候选两次收到的历史与客户端发出的一致，签名未变。上游是否接受部分轮次没有推理块的历史不在夹具覆盖范围内。

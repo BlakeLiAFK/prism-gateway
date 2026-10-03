@@ -85,6 +85,27 @@ OpenRouter 上的 DeepSeek、Nemotron 等）。
 
 这个开关只覆盖推理内容。refusal、annotations 等其它不可转换内容仍然拒绝。
 
+### 请求历史里的推理内容
+
+会话先由原生推理候选服务过，历史里就会带着推理内容：Messages 的 `thinking` /
+`redacted_thinking` 块、Chat 消息上的 `reasoning` / `reasoning_content` /
+`reasoning_details`、Responses `input` 里的 `reasoning` 项。跨协议候选无法表达它们，
+未开启开关时该候选被淘汰，错误信息为 `跨协议不支持内容类型 thinking` 等。
+
+开启 `drop_reasoning` 后，网关在**发给这个候选的副本**上去掉上述内容，并在响应头标注
+`X-Prism-Dropped: reasoning`。其余内容全部保留：用户输入、回复正文、工具调用与结果、
+图片、系统提示词。去掉推理后没有任何内容的 assistant 消息一并跳过。
+
+网关不保存也不修改会话历史。同一请求里的原生候选、以及之后切回的原生候选，收到的仍是
+客户端发出的原始历史，签名不变。因此路由里暂停原生候选、会话落到跨协议候选、再恢复
+原生候选，这个过程不丢已有的推理块；跨协议候选自己那几轮的推理按上文规则丢弃，
+不会进入历史。
+
+切回原生候选时，上游是否接受「部分轮次没有推理块」的历史取决于各上游实现，网关不做保证。
+
+这里只处理历史里的推理内容。请求顶层的硬性控制不受影响：`thinking: disabled`、
+Responses 的 `reasoning` / `include` 参数等仍按上文规则拒绝，不会因为开启了开关而被改写。
+
 
 ## 被接受但不转发的请求字段
 
