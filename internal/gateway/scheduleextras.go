@@ -50,11 +50,13 @@ func (a *App) taskSpendAnomaly(c scheduleConfig) (string, error) {
 }
 
 // taskFailureRate 按精确分钟窗口统计已结束的真实请求，达到阈值后进入可配置冷却。
+// usage_mode='incompatible' 的记录没有到达任何模型（直接按模型调用、候选全部暂停等刻意不告警的 400），
+// 不能算作上游失败，否则这些请求会绕过各自的告警规则、反过来推高失败率。
 func (a *App) taskFailureRate(c scheduleConfig) (string, error) {
 	end := now()
 	rows, err := a.Store.DB.Query(`SELECT COUNT(*) total,
 		COALESCE(SUM(status='error'),0) errors, COALESCE(SUM(status='unknown'),0) unknown
-		FROM requests WHERE started_at>=? AND started_at<? AND status IN ('success','error','unknown') AND is_demo=0`,
+		FROM requests WHERE started_at>=? AND started_at<? AND status IN ('success','error','unknown') AND is_demo=0 AND usage_mode!='incompatible'`,
 		end-int64(c.FailureMinutes)*60000, end)
 	if err != nil {
 		return "", err

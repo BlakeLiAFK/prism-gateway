@@ -114,6 +114,28 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         page.locator('dialog').screenshot(path=str(artifacts / 'incompatible-detail.png'))
     page.click('[data-action="close-dialog"]')
     page.wait_for_timeout(200)
+    # 没有到达任何模型的请求既没有花费也没有待确认的用量，请求列表的估算价值列必须显示「—」。
+    # 用总览行的 data-id 定位同一条记录，不依赖文本匹配；
+    # 断言渲染后的可见文本与可见性，而不是只看 HTML 源码。
+    rejected_id = rejected.first.get_attribute('data-id')
+    page.click('.nav-item[data-nav="requests"]')
+    # 总览的紧凑表格里同一条记录也带 data-id，必须排除它，否则会在列表页渲染完成前就命中总览行
+    row = page.locator(f'table:not(.compact-table) tr[data-id="{rejected_id}"]')
+    row.wait_for(state='visible', timeout=5000)
+    if 'Demo / Responses' not in row.inner_text():
+        fail(f'请求列表里被淘汰的请求应显示客户端请求名: {row.inner_text()!r}')
+    # 按表头定位列，避免以后增删列时下标悄悄错位
+    cost_col = row.locator('xpath=ancestor::table//thead//th').all_inner_texts().index('估算价值')
+    cost_cell = row.locator('td').nth(cost_col)
+    if not cost_cell.is_visible():
+        fail('请求列表里被淘汰请求的估算价值单元格不可见')
+    cost_text = cost_cell.inner_text().strip()
+    if cost_text != '—':
+        fail(f'没有花费的请求在请求列表里估算价值应显示「—」，实得 {cost_text!r}')
+    results.append('request list: incompatible row cost is dash')
+    # 回到总览：后面的检查继续基于总览最近请求卡片
+    page.click('.nav-item[data-nav="overview"]')
+    page.wait_for_selector('.compact-table .ua-cell')
     ua = page.locator('.compact-table .ua-cell').first.bounding_box()
     card = page.locator('.card:has(.compact-table)').bounding_box()
     if ua['x'] + 20 > card['x'] + card['width']:

@@ -121,7 +121,10 @@ func canDropThinking(value any) bool {
 
 // dropHistoryReasoning 返回去掉历史推理内容的请求副本，供显式开启 drop_reasoning 的跨协议候选使用。
 // 原请求不能动：同一请求的原生候选仍要原样透传带签名的推理块，会话切回去时才不丢数据。
-// 剥离后没有任何内容的 assistant 消息一并跳过，它本来就没有可见内容。
+// 只有剥离后仅剩 assistant 角色和空 content 的消息才跳过，它本来就没有可见内容；
+// 其余消息（带别的字段、别的角色）一律保留，交给 decodeCanonical 判定，
+// 不支持的字段要让候选被淘汰并如实报错，不能跟着消息一起悄悄消失。
+// 返回的 bool 只表示是否真的丢了推理内容：仅去掉空值推理键时返回副本但为 false，不披露。
 func dropHistoryReasoning(o Object, protocol string) (Object, bool) {
 	field := "messages"
 	if protocol == "responses" {
@@ -132,19 +135,22 @@ func dropHistoryReasoning(o Object, protocol string) (Object, bool) {
 		return o, false
 	}
 	kept := make([]any, 0, len(items))
-	dropped := false
+	modified, dropped := false, false
 	for _, v := range items {
-		m, changed := withoutReasoning(obj(v), protocol)
-		if !changed {
+		m, stripped, gone := withoutReasoning(obj(v), protocol)
+		if !stripped {
 			kept = append(kept, v)
 			continue
 		}
-		dropped = true
-		if hasNonEmptyValue(m["content"]) || len(arr(m["tool_calls"])) > 0 {
-			kept = append(kept, m)
+		modified = true
+		dropped = dropped || gone
+		// Responses 的推理项就是推理本身，整项去掉
+		if protocol == "responses" || (gone && emptyAssistantShell(m)) {
+			continue
 		}
+		kept = append(kept, m)
 	}
-	if !dropped {
+	if !modified {
 		return o, false
 	}
 	out := Object{}
@@ -152,38 +158,64 @@ func dropHistoryReasoning(o Object, protocol string) (Object, bool) {
 		out[k] = v
 	}
 	out[field] = kept
-	return out, true
+	return out, dropped
 }
 
-// withoutReasoning 返回去掉推理内容的单条历史记录副本；未改动时调用方沿用原对象。
-// Responses 的推理是独立的 input 项，整项去掉，所以返回空对象。
-func withoutReasoning(m Object, protocol string) (Object, bool) {
-	if protocol == "responses" {
-		return nil, str(m, "type") == "reasoning"
+// emptyAssistantShell 判断消息是否只剩 assistant 角色和空 content。
+// content 只认 nil、空串、空数组：空对象之类的非法值要留给转换器拒绝，不能在这里吞掉。
+func emptyAssistantShell(m Object) bool {
+	if str(m, "role") != "assistant" {
+		return false
 	}
-	c := Object{}
-	changed := false
+	for k := range m {
+		if k != "role" && k != "content" {
+			return false
+		}
+	}
+	switch c := m["content"].(type) {
+	case nil:
+		return true
+	case string:
+		return c == ""
+	case []any:
+		return len(c) == 0
+	}
+	return false
+}
+
+// withoutReasoning 返回去掉推理内容的单条历史记录副本。
+// stripped 表示副本与原件不同，调用方必须改用副本；dropped 表示确实丢了有内容的推理。
+// 空值推理键（null、空串、空数组）只是客户端回显的占位：转换器不接受空串，副本里仍要去掉，
+// 但没有任何内容被丢弃，不能因此披露。
+// Responses 的推理是独立的 input 项，整项去掉，所以返回空对象。
+func withoutReasoning(m Object, protocol string) (c Object, stripped, dropped bool) {
+	if protocol == "responses" {
+		isReasoning := str(m, "type") == "reasoning"
+		return nil, isReasoning, isReasoning
+	}
+	c = Object{}
 	for k, x := range m {
 		if protocol == "chat" && (k == "reasoning" || k == "reasoning_content" || k == "reasoning_details") {
-			changed = true
+			stripped = true
+			dropped = dropped || hasReasoningValue(x)
 			continue
 		}
 		c[k] = x
 	}
 	blocks, ok := m["content"].([]any)
 	if !ok || protocol != "messages" {
-		return c, changed
+		return c, stripped, dropped
 	}
 	rest := make([]any, 0, len(blocks))
 	for _, b := range blocks {
 		if t := str(obj(b), "type"); t == "thinking" || t == "redacted_thinking" {
-			changed = true
+			stripped, dropped = true, true
 			continue
 		}
 		rest = append(rest, b)
 	}
 	c["content"] = rest
-	return c, changed
+	return c, stripped, dropped
 }
 
 // documentPlaceholder 如实告诉模型这里原本有文档、且没有送达，避免它凭空编造文档内容。

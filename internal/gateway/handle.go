@@ -118,11 +118,17 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		}
 	}
 	selections, whys, err := e.selections(c, o, p, session)
-	if err == nil {
+	// 候选本来就是空的时候没有东西可筛：真实原因是候选被淘汰，交给下面的 NO_COMPATIBLE_MODEL，
+	// 否则带 x-cmd-zdr 的请求会收到一个误导性的 ZDR 错误，也不会留下记录
+	if err == nil && len(selections) > 0 {
 		selections, err = constrainSelections(selections, r.Header)
 	}
 	if err != nil {
 		status, code, msg := errorParts(err)
+		if code == "ZDR_UNSUPPORTED" {
+			// 候选是被这个请求头筛光的：客户端响应照旧，但同样没有候选能服务它，必须留下记录
+			e.recordIncompatible(c, key, id, requested, p, session, from, whys, code, msg)
+		}
 		protocolError(w, p, status, code, msg, id)
 		return
 	}
@@ -141,7 +147,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		if detail == "" {
 			detail = "候选池为空或全部被禁用"
 		}
-		e.recordIncompatible(c, key, id, requested, p, session, from, whys, detail)
+		e.recordIncompatible(c, key, id, requested, p, session, from, whys, "NO_COMPATIBLE_MODEL", detail)
 		protocolError(w, p, 400, "NO_COMPATIBLE_MODEL", "没有兼容此请求的候选模型（"+detail+"）", id)
 		return
 	}
@@ -402,9 +408,10 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		e.recordRejected(selections[0], key, id, requested, p, session, from, lastErr)
 	}
 	status, code, msg := errorParts(lastErr)
-	// 路由的全部候选都因容量或上游问题失败时告警；空回答这类请求本身的问题不算
-	if _, isRoute := c.route(requested); isRoute && e.OnAlert != nil && !strings.HasPrefix(code, "EMPTY_OUTPUT") {
-		go e.OnAlert("route", "route:"+requested, fmt.Sprintf("路由 %s 的全部候选都不可用（%s），客户端收到 HTTP %d。", requested, code, status))
+	// 路由的全部候选都因容量或上游问题失败时告警；空回答这类请求本身的问题不算。
+	// 客户端多半经别名访问，要按别名解析后的路由判断，限频键也用路由 ID
+	if route, alias, isRoute := c.resolveRoute(requested); isRoute && e.OnAlert != nil && !strings.HasPrefix(code, "EMPTY_OUTPUT") {
+		go e.OnAlert("route", "route:"+route.ID, fmt.Sprintf("路由 %s 的全部候选都不可用（%s），客户端%s收到 HTTP %d。", route.ID, code, viaAlias(alias), status))
 	}
 	protocolError(w, p, status, code, msg, id)
 }

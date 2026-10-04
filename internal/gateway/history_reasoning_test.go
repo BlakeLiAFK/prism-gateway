@@ -119,6 +119,8 @@ func TestDropReasoningCoversStreamingHistory(t *testing.T) {
 	body["stream"] = true
 	w := h.generate(t, "messages", body)
 	requireStatus(t, w, 200)
+	// 流式在建立响应时就为跨协议且开启丢弃的候选预先声明了 reasoning，与历史是否被剥离无关，
+	// 所以这条响应头断言本身不能证明剥离生效；真正有区分力的是下面对上游请求体的断言。
 	if w.Header().Get("X-Prism-Dropped") != "reasoning" {
 		t.Fatal("丢弃历史推理必须披露")
 	}
@@ -273,6 +275,187 @@ func TestDropReasoningCoversChatAndResponsesHistory(t *testing.T) {
 			}
 			if strings.Join(roles, ",") != tc.roles {
 				t.Fatalf("消息序列不对: %v", roles)
+			}
+		})
+	}
+}
+
+// upstreamRoles 取出上游收到的消息角色序列，用来判断哪些历史消息真正送达。
+func upstreamRoles(t *testing.T, body string) string {
+	t.Helper()
+	roles := []string{}
+	for _, m := range arr(parse(t, body)["messages"]) {
+		roles = append(roles, str(obj(m), "role"))
+	}
+	return strings.Join(roles, ",")
+}
+
+// 去掉推理之后消息看上去空了，并不等于它可以消失：role 之外还有别的字段时，
+// 必须留给 decodeCanonical 判定。不支持的字段要淘汰候选并如实报错，不能连字段一起悄悄丢掉。
+func TestDropReasoningDoesNotSwallowUnconvertibleFields(t *testing.T) {
+	cases := []struct {
+		name, from, to, field string
+		body                  Object
+	}{
+		{"chat 的 refusal", "chat", "messages", "refusal", Object{"model": "b", "max_tokens": 256, "messages": []any{
+			Object{"role": "user", "content": "question"},
+			Object{"role": "assistant", "content": nil, "refusal": "I cannot help with that", "reasoning": "plan"},
+			Object{"role": "user", "content": "continue"},
+		}}},
+		{"messages 的额外字段", "messages", "chat", "stop_reason", Object{"model": "b", "max_tokens": 256, "messages": []any{
+			Object{"role": "user", "content": "question"},
+			Object{"role": "assistant", "stop_reason": "end_turn", "content": []any{Object{"type": "thinking", "thinking": "plan", "signature": "sig-a"}}},
+			Object{"role": "user", "content": "continue"},
+		}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			up, sent := historyUpstream(t)
+			h.configure(t, up.URL, dropModel("b", tc.to, true))
+			w := h.generate(t, tc.from, tc.body)
+			requireStatus(t, w, 400)
+			if !strings.Contains(w.Body.String(), tc.field) {
+				t.Fatalf("错误信息应指出不支持的字段 %s: %s", tc.field, w.Body)
+			}
+			if sent(tc.to) != "" {
+				t.Fatalf("候选已被淘汰，不得调用上游: %s", sent(tc.to))
+			}
+			if got := w.Header().Get("X-Prism-Dropped"); got != "" {
+				t.Fatalf("请求被拒绝，没有任何内容送达，不应声明丢弃: %q", got)
+			}
+		})
+	}
+}
+
+// 只有 assistant 的空壳消息才可以整条跳过；其他角色即使 content 为空也要保留，
+// 否则 tool 结果、用户轮次会在没有披露的情况下消失。
+func TestDropReasoningKeepsNonAssistantMessages(t *testing.T) {
+	h := newHarness(t)
+	up, sent := historyUpstream(t)
+	h.configure(t, up.URL, dropModel("b", "messages", true))
+	w := h.generate(t, "chat", Object{"model": "b", "max_tokens": 256, "messages": []any{
+		Object{"role": "user", "content": "run it"},
+		Object{"role": "assistant", "content": nil, "tool_calls": []any{
+			Object{"id": "call_x", "type": "function", "function": Object{"name": "read", "arguments": "{}"}}}},
+		Object{"role": "tool", "tool_call_id": "call_x", "content": "", "reasoning": "private plan"},
+		Object{"role": "user", "content": "", "reasoning": "private plan"},
+		Object{"role": "user", "content": "continue"},
+	}})
+	requireStatus(t, w, 200)
+	if w.Header().Get("X-Prism-Dropped") != "reasoning" {
+		t.Fatal("丢弃了非空推理必须披露")
+	}
+	body := sent("messages")
+	requireNoReasoning(t, body)
+	// tool 消息转成 user 轮次里的 tool_result；空内容的 user 消息同样保留
+	if got := upstreamRoles(t, body); got != "user,assistant,user,user,user" {
+		t.Fatalf("非 assistant 消息不应被跳过: %s", body)
+	}
+	if !strings.Contains(body, `"tool_use_id":"call_x"`) || !strings.Contains(body, `"type":"tool_result"`) {
+		t.Fatalf("tool 结果丢失: %s", body)
+	}
+}
+
+// 推理键的值为空只是客户端回显的占位，没有任何推理内容被丢弃：不能披露，也不能连带跳过消息。
+// 但空字符串这类值本身不被转换器接受，副本里仍要去掉，否则会被误拒。
+func TestEmptyReasoningValuesAreNotDropped(t *testing.T) {
+	cases := []struct {
+		name  string
+		extra Object
+	}{
+		{"reasoning 为 null", Object{"reasoning": nil}},
+		{"reasoning 为空串", Object{"reasoning": ""}},
+		{"reasoning 为空白", Object{"reasoning": "  "}},
+		{"reasoning_content 为空串", Object{"reasoning_content": ""}},
+		{"reasoning_details 为空数组", Object{"reasoning_details": []any{}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			up, sent := historyUpstream(t)
+			h.configure(t, up.URL, dropModel("b", "messages", true))
+			withEmpty := func(m Object) Object {
+				for k, v := range tc.extra {
+					m[k] = v
+				}
+				return m
+			}
+			w := h.generate(t, "chat", Object{"model": "b", "max_tokens": 256, "messages": []any{
+				Object{"role": "user", "content": "question"},
+				withEmpty(Object{"role": "assistant", "content": "first answer"}),
+				Object{"role": "user", "content": "again"},
+				// 空内容加空推理键：没有丢弃任何东西，这条消息与没有该键时一样原样送达
+				withEmpty(Object{"role": "assistant", "content": ""}),
+				Object{"role": "user", "content": "continue"},
+			}})
+			requireStatus(t, w, 200)
+			if got := w.Header().Get("X-Prism-Dropped"); got != "" {
+				t.Fatalf("没有推理内容被丢弃，不应声明: %q", got)
+			}
+			body := sent("messages")
+			if strings.Contains(body, "reasoning") {
+				t.Fatalf("上游不应收到 reasoning 键: %s", body)
+			}
+			if got := upstreamRoles(t, body); got != "user,assistant,user,assistant,user" {
+				t.Fatalf("消息序列不对: %s", body)
+			}
+		})
+	}
+}
+
+// 去掉空值推理键同样只发生在副本上，原请求不能动，原生候选才能收到客户端发出的原件。
+func TestEmptyReasoningValueDoesNotMutateRequest(t *testing.T) {
+	h := newHarness(t)
+	h.configure(t, "http://127.0.0.1:1", dropModel("b", "messages", true))
+	o := Object{"model": "b", "max_tokens": 256, "messages": []any{
+		Object{"role": "user", "content": "question"},
+		Object{"role": "assistant", "content": "first answer", "reasoning": ""},
+		Object{"role": "user", "content": "continue"},
+	}}
+	want := raw(o["messages"])
+	selections, _, err := h.a.Engine.selections(h.s.Config(), o, "chat", "")
+	if err != nil || len(selections) != 1 {
+		t.Fatalf("候选应合格: %d %v", len(selections), err)
+	}
+	if got := raw(o["messages"]); got != want {
+		t.Fatalf("原请求被改动: %s", got)
+	}
+	if s := selections[0]; len(s.Dropped) != 0 || strings.Contains(raw(s.Body), "reasoning") {
+		t.Fatalf("空值推理键不算丢弃: dropped=%v %s", s.Dropped, raw(s.Body))
+	}
+}
+
+// 剥离后只剩 role 和空 content 的 assistant 消息本来就没有可见内容，照旧整条跳过并披露。
+func TestDropReasoningStillSkipsEmptyAssistantShells(t *testing.T) {
+	cases := []struct {
+		name, from, to string
+		assistant      Object
+	}{
+		{"chat content 为 null", "chat", "messages", Object{"role": "assistant", "content": nil, "reasoning": "private plan"}},
+		{"chat content 为空串", "chat", "messages", Object{"role": "assistant", "content": "", "reasoning_content": "private plan"}},
+		{"chat content 为空数组", "chat", "messages", Object{"role": "assistant", "content": []any{}, "reasoning_details": []any{Object{"text": "private plan"}}}},
+		{"chat 没有 content", "chat", "messages", Object{"role": "assistant", "reasoning": "private plan"}},
+		{"messages 只含 thinking 块", "messages", "chat", Object{"role": "assistant", "content": []any{Object{"type": "thinking", "thinking": "private plan", "signature": "sig-a"}}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			up, sent := historyUpstream(t)
+			h.configure(t, up.URL, dropModel("b", tc.to, true))
+			w := h.generate(t, tc.from, Object{"model": "b", "max_tokens": 256, "messages": []any{
+				Object{"role": "user", "content": "question"},
+				tc.assistant,
+				Object{"role": "user", "content": "continue"},
+			}})
+			requireStatus(t, w, 200)
+			if w.Header().Get("X-Prism-Dropped") != "reasoning" {
+				t.Fatal("丢弃了非空推理必须披露")
+			}
+			body := sent(tc.to)
+			requireNoReasoning(t, body)
+			if got := upstreamRoles(t, body); got != "user,user" {
+				t.Fatalf("空壳 assistant 消息应被跳过: %s", body)
 			}
 		})
 	}

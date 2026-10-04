@@ -166,9 +166,9 @@ func TestIncompatibleRequestIsRecordedAndAlerted(t *testing.T) {
 	if recent := arr(d["recent"]); len(recent) != 1 || str(obj(recent[0]), "requested_model") != "auto" {
 		t.Fatalf("最近请求应带客户端请求名，界面才有内容可显示: %v", d["recent"])
 	}
-	for _, v := range arr(d["top"]) {
+	for _, v := range arr(d["top_models"]) {
 		if str(obj(v), "model_id") == "" {
-			t.Fatalf("模型排行不应出现空白模型: %v", d["top"])
+			t.Fatalf("模型排行不应出现空白模型: %v", d["top_models"])
 		}
 	}
 	_, stats := h.rpc(t, "route.stats", Object{}, h.token)
@@ -182,6 +182,13 @@ func TestIncompatibleRequestIsRecordedAndAlerted(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("路由候选全部被淘汰时应告警")
+	}
+	// 上面的排行此刻只有一条空白模型的记录：补一条真正到达模型的请求，排行里必须恰好只有它。
+	// 这一步同时证明 top_models 这个键取对了，循环不会因为列表为空而空转
+	insertUsage(t, h, "b", "p_test", "success", "", now(), 0, true, false)
+	_, dash = h.rpc(t, "dashboard.get", Object{}, h.token)
+	if top := arr(obj(dash["data"])["top_models"]); len(top) != 1 || str(obj(top[0]), "model_id") != "b" {
+		t.Fatalf("模型排行应当只有真实到达过的模型 b: %v", top)
 	}
 }
 

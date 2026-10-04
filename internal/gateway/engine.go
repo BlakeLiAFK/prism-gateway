@@ -151,14 +151,7 @@ type selection struct {
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
-	requested := str(o, "model")
-	resolved := requested
-	for _, a := range c.Aliases {
-		if a.ID == resolved && a.Enabled {
-			resolved = a.Target
-			break
-		}
-	}
+	resolved, _ := c.resolveAlias(str(o, "model"))
 	route, routeOK := c.route(resolved)
 	var candidates []Candidate
 	if routeOK {
@@ -199,15 +192,8 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		if m.Protocols != nil && len(m.Protocols) == 0 {
 			why = "原生协议尚未确认，请同步上游声明或在模型设置中指定"
 		}
-		if !ok || !m.Enabled || !pr.Enabled {
-			why = "disabled"
-		}
 		if boolean(obj(o["provider"]), "zdr") && !isOpenRouter(pr) {
 			why = "provider.zdr 只能交给 OpenRouter 执行，不能切换到其他供应商"
-		}
-		// 暂停的候选直接淘汰，不进入 out：亲和加分与 Pinned 等待都以「仍是合格候选」为前提，随之失效
-		if cm.Disabled {
-			why = "candidate_paused"
 		}
 		if len(arr(o["tools"])) > 0 && !m.Tools && !m.ToolsUnknown {
 			why = "tools_unsupported"
@@ -216,6 +202,16 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 		// System One 只吃文本，不该被图像检测误伤。
 		if m.Protocol != "systemone" && requestHasImage(o, p) && !m.Vision && !m.VisionUnknown {
 			why = "vision_unsupported"
+		}
+		// 停用与暂停是管理员自己的操作，必须排在最后覆盖前面所有原因：
+		// recordIncompatible 靠这两个原因判断「不必告警」，被请求内容相关的原因盖掉就会误报；
+		// 两者并存时报暂停，因为它是路由里更具体的一层
+		if !ok || !m.Enabled || !pr.Enabled {
+			why = "disabled"
+		}
+		// 暂停的候选直接淘汰，不进入 out：亲和加分与 Pinned 等待都以「仍是合格候选」为前提，随之失效
+		if cm.Disabled {
+			why = "candidate_paused"
 		}
 		var body Object
 		cross := p != m.Protocol

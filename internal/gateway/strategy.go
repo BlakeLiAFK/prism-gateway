@@ -205,25 +205,55 @@ func (e *Engine) recordRejected(s selection, key Principal, reqID, requested, p,
 	e.rollup(id)
 }
 
-// recordIncompatible 在候选全部被淘汰时补一条请求记录并按需告警：客户端收到了 400，后台却没有任何痕迹，
+// resolveAlias 把客户端传来的名字展开一次：只认启用的别名，不递归。
+// alias 非空表示客户端用的是别名（值为别名本身），resolved 是它指向的目标。
+func (c Config) resolveAlias(requested string) (resolved, alias string) {
+	for _, a := range c.Aliases {
+		if a.ID == requested && a.Enabled {
+			return a.Target, a.ID
+		}
+	}
+	return requested, ""
+}
+
+// resolveRoute 判断客户端传来的名字是不是路由：先展开别名，再按路由 ID 查找。
+// 客户端通常经别名访问路由，直接拿请求里的名字去查会漏掉绝大多数真实流量。
+// 返回的 alias 要写进告警，管理员才知道是哪个客户端名字出了问题。
+func (c Config) resolveRoute(requested string) (route Route, alias string, ok bool) {
+	resolved, alias := c.resolveAlias(requested)
+	route, ok = c.route(resolved)
+	return route, alias, ok
+}
+
+// viaAlias 是告警正文里交代别名的片段；直接用路由 ID 调用时为空
+func viaAlias(alias string) string {
+	if alias == "" {
+		return ""
+	}
+	return "使用别名 " + alias + " 调用，"
+}
+
+// recordIncompatible 在请求没有任何候选可用时补一条请求记录并按需告警：客户端收到了 400，后台却没有任何痕迹，
 // 管理员只能等自己撞上。它没有到达任何模型，所以 model_id 为空、不计入用量汇总。
-// 原因里可能带着客户端发来的字段名或类型名，截断后再落库。
-func (e *Engine) recordIncompatible(c Config, key Principal, reqID, requested, p, session string, from client, whys []any, detail string) {
+// code 为 NO_COMPATIBLE_MODEL 表示候选本身都被淘汰了；其他值（如 ZDR_UNSUPPORTED）是请求自带的约束筛光了候选，
+// 只留记录不告警。原因里可能带着客户端发来的字段名或类型名，截断后再落库。
+func (e *Engine) recordIncompatible(c Config, key Principal, reqID, requested, p, session string, from client, whys []any, code, detail string) {
 	if r := []rune(detail); len(r) > 500 {
 		detail = string(r[:500]) + "…"
 	}
-	if er := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,http_status,started_at,cost_nano,cost_known,reason,error_code,usage_mode,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,'','',?,'',?,'error',400,?,0,0,?,'NO_COMPATIBLE_MODEL','incompatible',0,?,?,?)`,
-		randomID("att_"), reqID, key.ID, requested, p, session, now(), detail, from.IP, from.Agent, from.Role); er != nil {
+	if er := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,http_status,started_at,cost_nano,cost_known,reason,error_code,usage_mode,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,'','',?,'',?,'error',400,?,0,0,?,?,'incompatible',0,?,?,?)`,
+		randomID("att_"), reqID, key.ID, requested, p, session, now(), detail, code, from.IP, from.Agent, from.Role); er != nil {
 		slog.Error("incompatible request record failed", "request_id", reqID, "err", er)
 	}
 	// 直接按模型 ID 调用是请求自己的问题；全部原因都是暂停或停用是管理员自己的操作，都不必告警
-	_, isRoute := c.route(requested)
+	route, alias, isRoute := c.resolveRoute(requested)
 	actionable := slices.ContainsFunc(whys, func(v any) bool {
 		r := str(obj(v), "reason")
 		return r != "" && r != "candidate_paused" && r != "disabled"
 	})
-	if isRoute && actionable && e.OnAlert != nil {
-		go e.OnAlert("route", "route-incompatible:"+requested, fmt.Sprintf("路由 %s 没有候选能处理一次 %s 请求，客户端收到 HTTP 400。原因：%s", requested, p, detail))
+	if code == "NO_COMPATIBLE_MODEL" && isRoute && actionable && e.OnAlert != nil {
+		// 限频键用解析后的路由 ID：同一路由的多个别名共享一次限频，不会各自刷屏
+		go e.OnAlert("route", "route-incompatible:"+route.ID, fmt.Sprintf("路由 %s 没有候选能处理一次 %s 请求，客户端%s收到 HTTP 400。原因：%s", route.ID, p, viaAlias(alias), detail))
 	}
 }
 
