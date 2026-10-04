@@ -99,6 +99,15 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         fail(f'总览最近请求缺少 IP 或 UA: {text!r}')
     if recent.bounding_box()['height'] > 56:
         fail(f'最近请求行高应紧凑，实得 {recent.bounding_box()["height"]}')
+    # 这条被淘汰的请求总览会计入、用量页不计入，总览要用一行字说明差异，并给出准确条数
+    note = page.locator('#unreached-note')
+    if note.count() != 1 or not note.is_visible() or '有 1 条请求没有到达任何模型' not in note.inner_text():
+        fail(f'总览应说明有 1 条请求没有到达任何模型: {note.count()} {note.inner_text() if note.count() else None!r}')
+    nbox = note.bounding_box()
+    if nbox['x'] + nbox['width'] > page.viewport_size['width'] + 1:
+        fail(f'总览说明超出视口: {nbox}')
+    if artifacts:
+        note.screenshot(path=str(artifacts / 'unreached-note.png'))
     rejected = page.locator('.compact-table tbody tr', has_text='Demo / Responses')
     if rejected.count() == 0:
         fail('被全部候选淘汰的请求应以客户端请求名出现在最近请求里')

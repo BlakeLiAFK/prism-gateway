@@ -166,6 +166,10 @@ func TestIncompatibleRequestIsRecordedAndAlerted(t *testing.T) {
 	if recent := arr(d["recent"]); len(recent) != 1 || str(obj(recent[0]), "requested_model") != "auto" {
 		t.Fatalf("最近请求应带客户端请求名，界面才有内容可显示: %v", d["recent"])
 	}
+	// 总览的请求数把它算进去，用量页不算；汇总里要单独给出这个数，界面才能说明两处为什么不同
+	if sum := obj(d["summary"]); sum["unreached_requests"] == nil || num(sum, "unreached_requests") != 1 || num(sum, "requests") != 1 {
+		t.Fatalf("汇总应给出没有到达任何模型的请求数: %v", d["summary"])
+	}
 	for _, v := range arr(d["top_models"]) {
 		if str(obj(v), "model_id") == "" {
 			t.Fatalf("模型排行不应出现空白模型: %v", d["top_models"])
@@ -235,5 +239,18 @@ func TestIncompatibleReasonIsBounded(t *testing.T) {
 	}
 	if n := len([]rune(rows[0].String("reason"))); n > 600 {
 		t.Fatalf("客户端可控的字符串不能原样长篇落库: %d", n)
+	}
+}
+
+// 没有被淘汰的请求时汇总里是 0，总览不会出现多余的说明
+func TestDashboardUnreachedIsZeroWithoutRejections(t *testing.T) {
+	h := newHarness(t)
+	up, _ := historyUpstream(t)
+	h.configure(t, up.URL, modelFixture("m", "chat"))
+	requireStatus(t, h.generate(t, "chat", requestFixture("chat", "m")), 200)
+	_, dash := h.rpc(t, "dashboard.get", Object{}, h.token)
+	sum := obj(obj(dash["data"])["summary"])
+	if sum["unreached_requests"] == nil || num(sum, "unreached_requests") != 0 || num(sum, "requests") != 1 {
+		t.Fatalf("没有被淘汰的请求时应为 0: %v", sum)
 	}
 }
