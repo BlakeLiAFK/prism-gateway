@@ -2,8 +2,10 @@ package gateway
 
 import (
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
+	"strings"
 )
 
 func validProtocol(p string) bool {
@@ -182,6 +184,73 @@ func withoutReasoning(m Object, protocol string) (Object, bool) {
 	}
 	c["content"] = rest
 	return c, changed
+}
+
+// documentPlaceholder 如实告诉模型这里原本有文档、且没有送达，避免它凭空编造文档内容。
+const documentPlaceholder = "[document omitted by gateway: this upstream cannot receive documents across protocols]"
+
+// dropHistoryDocuments 返回把文档块换成占位说明的请求副本，供显式开启 drop_documents 的跨协议候选使用。
+// 用占位而不是删除：删掉会让 tool_result 变空或打乱角色交替。只处理 Messages 的 document 块；
+// 原请求不动，原生候选仍收到原件。
+func dropHistoryDocuments(o Object, protocol string) (Object, bool) {
+	items, ok := o["messages"].([]any)
+	if protocol != "messages" || !ok {
+		return o, false
+	}
+	kept := slices.Clone(items)
+	dropped := false
+	for i, v := range items {
+		if content, changed := withoutDocuments(obj(v)["content"]); changed {
+			m := maps.Clone(obj(v))
+			m["content"] = content
+			kept[i] = m
+			dropped = true
+		}
+	}
+	if !dropped {
+		return o, false
+	}
+	out := maps.Clone(o)
+	out["messages"] = kept
+	return out, true
+}
+
+// withoutDocuments 处理一个 content 数组；Claude Code 读 PDF 时文档在 tool_result 里，嵌套的 content 一并处理。
+func withoutDocuments(content any) (any, bool) {
+	blocks, ok := content.([]any)
+	if !ok {
+		return content, false
+	}
+	out := slices.Clone(blocks)
+	changed := false
+	for i, v := range blocks {
+		b := obj(v)
+		switch str(b, "type") {
+		case "document":
+			out[i] = Object{"type": "text", "text": documentPlaceholder}
+			changed = true
+		case "tool_result":
+			if inner, did := withoutDocuments(b["content"]); did {
+				c := maps.Clone(b)
+				c["content"] = inner
+				out[i] = c
+				changed = true
+			}
+		}
+	}
+	return out, changed
+}
+
+// announceDropped 把一类未送达的内容追加进 X-Prism-Dropped。请求侧与响应侧都会声明，
+// 直接 Set 会让后写的盖掉先写的，于是丢了却没披露。
+func announceDropped(h http.Header, kind string) {
+	kinds := []string{}
+	if v := h.Get("X-Prism-Dropped"); v != "" {
+		kinds = strings.Split(v, ",")
+	}
+	if !slices.Contains(kinds, kind) {
+		h.Set("X-Prism-Dropped", strings.Join(append(kinds, kind), ","))
+	}
 }
 
 func normalizeProviderContext(p Provider, protocol string, body Object) []string {

@@ -45,7 +45,7 @@ func TestProtocolAddressesAndSnapshot(t *testing.T) {
 func TestSyncedProtocolsRefreshPreservesSettings(t *testing.T) {
 	h := newHarness(t)
 	m := modelFixture("existing", "chat")
-	m.Tools, m.Vision, m.Name, m.DropReasoning = false, false, "人工名称", true
+	m.Tools, m.Vision, m.Name, m.DropReasoning, m.DropDocuments = false, false, "人工名称", true, true
 	m.Protocols = []string{"chat"}
 	locked := m
 	locked.ID, locked.Upstream, locked.ProtocolsLocked = "locked", "locked", true
@@ -61,7 +61,7 @@ func TestSyncedProtocolsRefreshPreservesSettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ := h.s.Config().model(m.ID)
-	if !slices.Equal(got.Protocols, []string{"chat", "responses"}) || got.Name != m.Name || got.Tools || got.Vision || got.ToolsUnknown || got.VisionUnknown || !got.DropReasoning {
+	if !slices.Equal(got.Protocols, []string{"chat", "responses"}) || got.Name != m.Name || got.Tools || got.Vision || got.ToolsUnknown || got.VisionUnknown || !got.DropReasoning || !got.DropDocuments {
 		t.Fatalf("同步覆盖了人工配置: %+v", got)
 	}
 	got, _ = h.s.Config().model("locked")

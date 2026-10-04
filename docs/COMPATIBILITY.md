@@ -106,6 +106,41 @@ OpenRouter 上的 DeepSeek、Nemotron 等）。
 这里只处理历史里的推理内容。请求顶层的硬性控制不受影响：`thinking: disabled`、
 Responses 的 `reasoning` / `include` 参数等仍按上文规则拒绝，不会因为开启了开关而被改写。
 
+### 请求历史里的文档
+
+Claude Code 用 Read 读 PDF 之后，历史里会带一个 `document` 块（在 `tool_result` 里），
+用户也可能直接附上文档。跨协议候选收不了它，默认该候选被淘汰，错误信息为
+`跨协议不支持内容类型 document`。
+
+在模型设置里开启 **跨协议时用占位说明替换文档**（`drop_documents`，默认关闭）后，网关在
+发给这个候选的副本上把每个 `document` 块换成一行文本：
+
+    [document omitted by gateway: this upstream cannot receive documents across protocols]
+
+并在响应头标注 `X-Prism-Dropped: documents`。用占位而不是删除，是为了不让 `tool_result`
+变空、不打乱角色交替，也让模型知道这里原本有文档且没有送达，而不是凭空作答。
+
+这是一个有损的取舍：该候选看不到文档原文，只看得到此前各轮围绕文档的对话。原请求不动，
+原生候选与之后切回的原生候选仍收到文档原件。
+
+- 与 `drop_reasoning` 相互独立，开启其中一个不会带上另一个。两者同时生效时响应头为
+  `X-Prism-Dropped: reasoning,documents`。
+- 只覆盖 Messages 的 `document` 块。Chat 的 `file`、Responses 的 `input_file` 不在范围内，
+  仍然拒绝。
+- 网关不提取文档文本。
+
+### 候选全部被淘汰时
+
+请求返回 400 `NO_COMPATIBLE_MODEL`，错误信息逐个列出淘汰原因。同时：
+
+- 请求记录里留一条 `error_code=NO_COMPATIBLE_MODEL`、`usage_mode=incompatible` 的记录，
+  原因写在「选择原因」里（最长 500 字符）。它没有到达任何模型，不计入用量汇总。
+- 请求的是路由、且淘汰原因不全是暂停或停用时，按 `route` 告警事件推送一次，沿用 30 分钟限频。
+  直接按模型 ID 调用不告警。
+
+路由页会对「本路由其他候选原生支持、而此候选需要跨协议」且未开启对应开关的候选显示
+「会话切入受限」提示。只提示，不拦截保存。
+
 
 ## 被接受但不转发的请求字段
 

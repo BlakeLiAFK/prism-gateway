@@ -28,4 +28,11 @@ This is a Go + SQLite + embedded WebUI gateway. Preserve these invariants:
     that defaults to off, and every dropping response must carry X-Prism-Dropped. The rule
     was never "don't drop" - it is "don't drop silently".
 
+16. The same rule covers request history. A cross-protocol candidate may receive a copy without
+    reasoning (drop_reasoning) or with documents replaced by a placeholder (drop_documents) only
+    when that model opted in; the two switches never imply each other, the original request is
+    never mutated so native candidates still get it verbatim, and X-Prism-Dropped lists every kind.
+17. A request that no candidate can serve must leave a request record. A 400 the admin cannot see
+    in the console is how a session breaks without anyone knowing why.
+
 No third-party Go modules are currently required. Target Go >=1.23. Native Windows is not supported; use WSL2. Tests must not require real provider API keys or the Internet.

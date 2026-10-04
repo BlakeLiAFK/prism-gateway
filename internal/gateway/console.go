@@ -21,7 +21,7 @@ func (a *App) routeStats(p Object) (any, error) {
 	rows, err := a.Store.DB.Query(`SELECT requested_model, model_id, COUNT(*) attempts,
 		SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) success,
 		SUM(CASE WHEN reason LIKE '%affinity=true%' THEN 1 ELSE 0 END) affinity
-		FROM requests WHERE started_at >= ? GROUP BY requested_model, model_id`, now()-int64(minutes)*60000)
+		FROM requests WHERE started_at >= ? AND model_id!='' GROUP BY requested_model, model_id`, now()-int64(minutes)*60000)
 	if err != nil {
 		return nil, err
 	}

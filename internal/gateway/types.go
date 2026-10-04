@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.34.4"
+const Version = "1.34.5"
 
 type Object = map[string]any
 
@@ -51,7 +51,10 @@ type Model struct {
 	NativeCount     bool     `json:"native_count"`
 	// 上游会返回推理内容而又需要跨协议调用时，由管理员显式打开。
 	// 打开后跨协议转换会丢弃推理内容，并在响应头 X-Prism-Dropped 中标注。
-	DropReasoning bool    `json:"drop_reasoning"`
+	DropReasoning bool `json:"drop_reasoning"`
+	// 跨协议目标收不了文档（PDF 等）时，由管理员显式打开：文档块换成一行占位说明，
+	// 并在响应头 X-Prism-Dropped 中标注。与 DropReasoning 各管各的，不互相扩权。
+	DropDocuments bool    `json:"drop_documents"`
 	Context       int     `json:"context_window"`
 	MaxOutput     int     `json:"max_output_tokens"`
 	Concurrency   int     `json:"concurrency"`

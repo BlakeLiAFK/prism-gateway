@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"time"
 )
 
@@ -202,6 +203,28 @@ func (e *Engine) recordRejected(s selection, key Principal, reqID, requested, p,
 		return
 	}
 	e.rollup(id)
+}
+
+// recordIncompatible 在候选全部被淘汰时补一条请求记录并按需告警：客户端收到了 400，后台却没有任何痕迹，
+// 管理员只能等自己撞上。它没有到达任何模型，所以 model_id 为空、不计入用量汇总。
+// 原因里可能带着客户端发来的字段名或类型名，截断后再落库。
+func (e *Engine) recordIncompatible(c Config, key Principal, reqID, requested, p, session string, from client, whys []any, detail string) {
+	if r := []rune(detail); len(r) > 500 {
+		detail = string(r[:500]) + "…"
+	}
+	if er := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,http_status,started_at,cost_nano,cost_known,reason,error_code,usage_mode,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,'','',?,'',?,'error',400,?,0,0,?,'NO_COMPATIBLE_MODEL','incompatible',0,?,?,?)`,
+		randomID("att_"), reqID, key.ID, requested, p, session, now(), detail, from.IP, from.Agent, from.Role); er != nil {
+		slog.Error("incompatible request record failed", "request_id", reqID, "err", er)
+	}
+	// 直接按模型 ID 调用是请求自己的问题；全部原因都是暂停或停用是管理员自己的操作，都不必告警
+	_, isRoute := c.route(requested)
+	actionable := slices.ContainsFunc(whys, func(v any) bool {
+		r := str(obj(v), "reason")
+		return r != "" && r != "candidate_paused" && r != "disabled"
+	})
+	if isRoute && actionable && e.OnAlert != nil {
+		go e.OnAlert("route", "route-incompatible:"+requested, fmt.Sprintf("路由 %s 没有候选能处理一次 %s 请求，客户端收到 HTTP 400。原因：%s", requested, p, detail))
+	}
 }
 
 // failAlertAfter：同一模型连续失败这么多次就告警一次（客户端主动取消不算）

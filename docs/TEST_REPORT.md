@@ -295,3 +295,14 @@ p50 9.5 ms，无错误。说明 SQLite 的全局串行化在这个量级不是�
 新增 `history_reasoning_test.go`，均经真实 handler 与独立 HTTP fixture：Messages 到 Chat 的非流式与流式、Chat 到 Messages、Responses 到 Chat、Claude Code 同时携带 `thinking: adaptive` 与 `clear_thinking` 的形态、开关关闭仍拒绝、原生到跨协议再回原生的往返、同一请求内跨协议候选先评估时原请求不被改动。旧实现下五个用例复现与生产一致的 400 文案；修复后全部通过。
 
 往返用例断言原生候选两次收到的历史与客户端发出的一致，签名未变。上游是否接受部分轮次没有推理块的历史不在夹具覆盖范围内。
+
+## v1.34.5：会话连续性
+
+三项改动，均针对「会话进行中突然不可用」：
+
+- 候选全部被淘汰的 400 以前不留请求记录、不告警。`continuity_guards_test.go` 经真实 handler 断言：留下一条 `NO_COMPATIBLE_MODEL` 记录、`request.list` 可见、不进用量汇总、原因有长度上限；路由请求告警一次，直接按模型调用和全部暂停时不告警。旧实现下四个用例因没有记录而失败。
+- 新增逐模型开关 `drop_documents`（默认关闭）。夹具取自真实 Claude Code 读 PDF 后的会话形态（`tool_result` 内 `text` 加 `document`）。断言：开启后文档换成占位、其余内容保留、披露 `documents`；未开启时仍拒绝，且 `drop_reasoning` 不会连带放行；同一请求内原生候选的请求体不被改动；同步不重置该开关。
+- `X-Prism-Dropped` 改为追加去重。两个开关同时生效时，流式与非流式都同时带 `reasoning` 与 `documents`；旧实现的直接覆盖会漏掉其中一项。
+- 路由页「会话切入受限」提示：浏览器冒烟断言提示在桌面与 390px 下实际可见、不超出视口，模型开启两个开关后消失。
+
+未覆盖：Chat `file` 与 Responses `input_file` 仍拒绝；网关不提取文档文本。

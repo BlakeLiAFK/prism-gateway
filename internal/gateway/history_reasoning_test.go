@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -219,12 +220,12 @@ func TestDropHistoryReasoningDoesNotMutateRequest(t *testing.T) {
 	for _, s := range selections {
 		switch s.Model.ID {
 		case "a":
-			if got := raw(s.Body["messages"]); got != want || s.DroppedReasoning {
-				t.Fatalf("原生候选的请求体被改动: dropped=%t %s", s.DroppedReasoning, got)
+			if got := raw(s.Body["messages"]); got != want || len(s.Dropped) != 0 {
+				t.Fatalf("原生候选的请求体被改动: dropped=%v %s", s.Dropped, got)
 			}
 		case "b":
 			requireNoReasoning(t, raw(s.Body))
-			if !s.DroppedReasoning {
+			if !slices.Contains(s.Dropped, "reasoning") {
 				t.Fatal("跨协议候选应记录发生了丢弃")
 			}
 		}

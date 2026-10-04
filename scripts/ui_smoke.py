@@ -56,6 +56,17 @@ def enable_demo(base, token):
     rpc('route.save', {'version': cfg['version'], 'id': 'demo-second', 'route': second})
     # 带 UA 的演示请求：总览最近请求要显示来源 IP 与 UA
     key = rpc('apikey.create', {'name': 'smoke', 'allowed': []})['key']
+    # 候选全部被淘汰的请求：没有到达任何模型，最近请求里要显示客户端请求名而不是空白。
+    # 先发它，保证下面那条带 UA 的演示请求仍是最新一条。
+    body = json.dumps({'model': 'demo-responses', 'max_tokens': 16, 'messages': [{'role': 'user', 'content': [
+        {'type': 'document', 'source': {'type': 'base64', 'media_type': 'application/pdf', 'data': 'JVBERi0='}}]}]}).encode()
+    req = urllib.request.Request(base + '/anthropic/v1/messages', data=body, headers={
+        'Content-Type': 'application/json', 'x-api-key': key, 'anthropic-version': '2023-06-01'})
+    try:
+        urllib.request.urlopen(req, timeout=20)
+        raise AssertionError('带文档的跨协议请求应返回 400')
+    except urllib.error.HTTPError as e:
+        assert e.code == 400, e.code
     body = json.dumps({'model': 'demo-auto', 'messages': [{'role': 'user', 'content': 'hi'}], 'max_tokens': 16}).encode()
     req = urllib.request.Request(base + '/openai/v1/chat/completions', data=body, headers={
         'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key, 'User-Agent': 'claude-cli/2.1.3 (external, cli)'})
@@ -88,6 +99,21 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         fail(f'总览最近请求缺少 IP 或 UA: {text!r}')
     if recent.bounding_box()['height'] > 56:
         fail(f'最近请求行高应紧凑，实得 {recent.bounding_box()["height"]}')
+    rejected = page.locator('.compact-table tbody tr', has_text='Demo / Responses')
+    if rejected.count() == 0:
+        fail('被全部候选淘汰的请求应以客户端请求名出现在最近请求里')
+    # 点开详情：管理员要在这里看到淘汰原因，没有上游的字段不能显示成半截或「待确认」
+    rejected.first.click()
+    page.wait_for_selector('.detail-grid')
+    detail = page.locator('.detail-grid').inner_text()
+    if '跨协议不支持内容类型 document' not in detail or 'NO_COMPATIBLE_MODEL' not in detail or '未到达任何模型' not in detail:
+        fail(f'请求详情缺少淘汰原因: {detail!r}')
+    if '→' in detail or '待确认' in detail:
+        fail(f'没有上游的请求不应显示协议转换或待确认的估算价值: {detail!r}')
+    if artifacts:
+        page.locator('dialog').screenshot(path=str(artifacts / 'incompatible-detail.png'))
+    page.click('[data-action="close-dialog"]')
+    page.wait_for_timeout(200)
     ua = page.locator('.compact-table .ua-cell').first.bounding_box()
     card = page.locator('.card:has(.compact-table)').bounding_box()
     if ua['x'] + 20 > card['x'] + card['width']:
@@ -211,6 +237,10 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         fail('模型编辑器缺少 drop_reasoning 开关')
     if page.locator('input[name="drop_reasoning"]').is_checked():
         fail('drop_reasoning 默认必须关闭')
+    if page.locator('input[name="drop_documents"]').count() == 0:
+        fail('模型编辑器缺少 drop_documents 开关')
+    if page.locator('input[name="drop_documents"]').is_checked():
+        fail('drop_documents 默认必须关闭')
     page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
     page.wait_for_timeout(200)
     results.append('model editor capability toggles')
@@ -320,6 +350,60 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     if reloaded != after:
         fail(f'拖拽结果没有落库: 拖后 {after}，重载后 {reloaded}')
     results.append('route drag reorder')
+
+    # 会话切入提示：演示路由的候选原生协议各不相同，未开开关的候选必须有可见提示；
+    # 在模型上开启两个开关后提示消失。断言渲染结果而不是 HTML 文本。
+    hint_state = """id => {
+        const cards = [...document.querySelectorAll('.candidate')];
+        const card = id ? cards.find(c => c.querySelector('small .mono')?.textContent === id) : cards.find(c => c.querySelector('.switch-hint'));
+        const hint = card?.querySelector('.switch-hint');
+        if (!hint) return {present: false};
+        const box = hint.getBoundingClientRect();
+        return {present: true, visible: hint.offsetParent !== null && box.width > 0 && box.height > 0,
+                right: box.right, text: hint.innerText, title: hint.title,
+                id: card.querySelector('small .mono').textContent};
+    }"""
+    set_switches = """async ([id, on]) => {
+        const {rpc} = await import('/assets/api.js');
+        const c = await rpc('config.get');
+        await rpc('model.save', {version: c.version, id, model: {drop_reasoning: on, drop_documents: on}});
+    }"""
+
+    def open_demo_route():
+        page.reload(wait_until='networkidle')
+        page.click('.nav-item[data-nav="routes"]')
+        page.wait_for_timeout(400)
+        page.locator('.route-select', has_text='demo-auto').first.click()
+        page.wait_for_timeout(400)
+
+    open_demo_route()
+    hint = page.evaluate(hint_state, None)
+    if not hint.get('visible') or '推理历史' not in hint.get('text', ''):
+        fail(f'跨协议候选缺少可见的会话切入提示: {hint}')
+    if '需跨协议' not in hint.get('title', ''):
+        fail(f'提示应说明原因: {hint}')
+    hinted = hint['id']
+    size = page.viewport_size
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(250)
+    narrow = page.evaluate(hint_state, hinted)
+    if not narrow.get('visible') or narrow.get('right', 999) > 390:
+        fail(f'390px 下会话切入提示不可见或超出视口: {narrow}')
+    if artifacts:
+        page.locator('.route-canvas').screenshot(path=str(artifacts / 'switch-hint-mobile.png'))
+    page.set_viewport_size(size)
+    page.wait_for_timeout(250)
+    if artifacts:
+        page.locator('.route-canvas').screenshot(path=str(artifacts / 'switch-hint.png'))
+    page.evaluate(set_switches, [hinted, True])
+    open_demo_route()
+    if page.evaluate(hint_state, hinted).get('present'):
+        fail('模型开启两个开关后，会话切入提示应消失')
+    page.evaluate(set_switches, [hinted, False])
+    page.reload(wait_until='networkidle')
+    page.click('.nav-item[data-nav="routes"]')
+    page.wait_for_timeout(500)
+    results.append('route session switch hint')
 
     # 候选暂停开关：落库、重载可见、编辑路由后不被重置
     paused = "document.querySelector('.candidate [data-action=\"toggle-candidate\"]').getAttribute('aria-checked')"

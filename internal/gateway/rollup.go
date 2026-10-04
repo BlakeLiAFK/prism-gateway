@@ -22,7 +22,7 @@ const rollupFrom = `INSERT INTO usage_hourly SELECT started_at/3600000, key_id, 
 	COUNT(*), SUM(status='success'), SUM(status IN ('error','unknown')), SUM(input_tokens), SUM(output_tokens), SUM(cache_tokens),
 	SUM(CASE WHEN is_demo=0 THEN cost_nano ELSE 0 END), SUM(status='success' AND cost_known=0 AND is_demo=0),
 	SUM(CASE WHEN status='success' THEN duration_ms ELSE 0 END), MAX(started_at)
-	FROM requests WHERE status!='running' AND %s GROUP BY 1,2,3,4,5
+	FROM requests WHERE status!='running' AND usage_mode!='incompatible' AND %s GROUP BY 1,2,3,4,5
 	ON CONFLICT (hour, key_id, requested_model, model_id, provider_id) DO UPDATE SET
 	requests=requests+excluded.requests, success=success+excluded.success, errors=errors+excluded.errors,
 	input_tokens=input_tokens+excluded.input_tokens, output_tokens=output_tokens+excluded.output_tokens, cache_tokens=cache_tokens+excluded.cache_tokens,

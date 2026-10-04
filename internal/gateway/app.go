@@ -324,8 +324,8 @@ func (a *App) requests(p Object) (any, error) {
 	q := str(p, "q")
 	status := str(p, "status")
 	provider := str(p, "provider_id")
-	where := ` WHERE (?='' OR model_id LIKE ? OR parent_id LIKE ? OR client_ip LIKE ?) AND (?='' OR status=?) AND (?='' OR provider_id=?)`
-	args := []any{q, "%" + q + "%", "%" + q + "%", "%" + q + "%", status, status, provider, provider}
+	where := ` WHERE (?='' OR model_id LIKE ? OR requested_model LIKE ? OR parent_id LIKE ? OR client_ip LIKE ?) AND (?='' OR status=?) AND (?='' OR provider_id=?)`
+	args := []any{q, "%" + q + "%", "%" + q + "%", "%" + q + "%", "%" + q + "%", status, status, provider, provider}
 	count, err := a.Store.DB.Query("SELECT COUNT(*) n FROM requests"+where, args...)
 	if err != nil {
 		return nil, err
@@ -358,11 +358,11 @@ func (a *App) dashboard(p Object) (any, error) {
 		}
 		series = append(series, Object{"time": lo, "requests": r[0].Int("requests"), "tokens": r[0].Int("tokens"), "errors": r[0].Int("errors")})
 	}
-	top, err := a.Store.DB.Query("SELECT model_id,provider_id,COUNT(*) requests,COALESCE(SUM(input_tokens+output_tokens),0) tokens,COALESCE(SUM(cost_nano),0) cost_nano,AVG(duration_ms) latency_ms FROM requests WHERE started_at>=? GROUP BY model_id,provider_id ORDER BY requests DESC LIMIT 20", cut)
+	top, err := a.Store.DB.Query("SELECT model_id,provider_id,COUNT(*) requests,COALESCE(SUM(input_tokens+output_tokens),0) tokens,COALESCE(SUM(cost_nano),0) cost_nano,AVG(duration_ms) latency_ms FROM requests WHERE started_at>=? AND model_id!='' GROUP BY model_id,provider_id ORDER BY requests DESC LIMIT 20", cut)
 	if err != nil {
 		return nil, err
 	}
-	recent, err := a.Store.DB.Query("SELECT id,parent_id,model_id,provider_id,protocol,status,http_status,started_at,duration_ms,output_tokens,cost_nano,is_demo,client_ip,user_agent,agent_role FROM requests ORDER BY started_at DESC LIMIT 6")
+	recent, err := a.Store.DB.Query("SELECT id,parent_id,requested_model,model_id,provider_id,protocol,status,http_status,started_at,duration_ms,output_tokens,cost_nano,is_demo,client_ip,user_agent,agent_role FROM requests ORDER BY started_at DESC LIMIT 6")
 	if err != nil {
 		return nil, err
 	}

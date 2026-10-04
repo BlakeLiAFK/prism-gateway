@@ -141,6 +141,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		if detail == "" {
 			detail = "候选池为空或全部被禁用"
 		}
+		e.recordIncompatible(c, key, id, requested, p, session, from, whys, detail)
 		protocolError(w, p, 400, "NO_COMPATIBLE_MODEL", "没有兼容此请求的候选模型（"+detail+"）", id)
 		return
 	}
@@ -182,9 +183,9 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			if s.ToolImagesAdapted {
 				w.Header().Set("X-Prism-Adapted", "tool-result-images")
 			}
-			if s.DroppedReasoning {
-				// 请求历史里的推理内容没有发给这个上游，与丢弃响应推理同样要披露
-				w.Header().Set("X-Prism-Dropped", "reasoning")
+			// 请求历史里有内容没有发给这个上游，与丢弃响应推理同样要披露
+			for _, kind := range s.Dropped {
+				announceDropped(w.Header(), kind)
 			}
 			if len(s.Ignored) > 0 {
 				// 这些请求字段被接受但没有传给上游。忽略可以，不说不行。
@@ -289,7 +290,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				if s.Cross && s.Model.DropReasoning {
 					// 流式没法等到发现推理内容再补响应头，所以开关开启时先声明：
 					// 本次跨协议响应会丢弃推理内容（如果上游返回了的话）
-					w.Header().Set("X-Prism-Dropped", "reasoning")
+					announceDropped(w.Header(), "reasoning")
 				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache, no-transform")
@@ -340,7 +341,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 					// 管理员为这个模型显式接受了丢弃推理内容。剥离后重试，
 					// 并在响应头标注——丢弃可以被接受，静默不行。
 					if co, er = decodeCompletion(ro, s.Model.Protocol); er == nil {
-						w.Header().Set("X-Prism-Dropped", "reasoning")
+						announceDropped(w.Header(), "reasoning")
 					}
 				}
 				if er != nil {

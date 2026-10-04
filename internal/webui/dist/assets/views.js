@@ -47,11 +47,11 @@ function tokenCell(main,sub,label){
 
 // 总览的最近请求：单行紧凑布局，直接露出来源 IP 与完整 UA（悬停看全文），请求 ID 留给详情
 function recentRows(items){
-  return !items?.length?requestRows(items):`<div class="table-scroll"><table class="compact-table"><thead><tr><th>时间</th><th>模型</th><th>状态</th><th>耗时</th><th>来源</th></tr></thead><tbody>${items.map(r=>{const name=agentName(r.user_agent),role=roleName(r.agent_role);return `<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono nowrap" title="${E(dateTimeSec(r.started_at))}">${E(new Date(r.started_at).toLocaleTimeString('zh-CN',{hour12:false}))}</td><td><div class="cell-title flex nowrap"><span class="ellipsis recent-model">${E(modelName(r.model_id))}</span>${sourceTag(r.provider_id)}${r.is_demo?badge('DEMO'):''}</div></td><td>${pillStatus(r.status)}</td><td class="mono nowrap">${ms(r.duration_ms)}${tps(r)?`<span class="muted"> · ${tps(r)}</span>`:''}</td><td class="ua-cell" title="${E(r.user_agent||'')}"><div class="mono">${E(r.client_ip||'—')}</div><div class="cell-sub">${r.user_agent?`<b>${E(name)}</b>${role?` <span class="role-tag">${E(role)}</span>`:''} <span class="mono">${E(r.user_agent)}</span>`:'—'}</div></td></tr>`;}).join('')}</tbody></table></div>`;
+  return !items?.length?requestRows(items):`<div class="table-scroll"><table class="compact-table"><thead><tr><th>时间</th><th>模型</th><th>状态</th><th>耗时</th><th>来源</th></tr></thead><tbody>${items.map(r=>{const name=agentName(r.user_agent),role=roleName(r.agent_role);return `<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono nowrap" title="${E(dateTimeSec(r.started_at))}">${E(new Date(r.started_at).toLocaleTimeString('zh-CN',{hour12:false}))}</td><td><div class="cell-title flex nowrap"><span class="ellipsis recent-model">${E(modelName(r.model_id||r.requested_model))}</span>${sourceTag(r.provider_id)}${r.is_demo?badge('DEMO'):''}</div></td><td>${pillStatus(r.status)}</td><td class="mono nowrap">${ms(r.duration_ms)}${tps(r)?`<span class="muted"> · ${tps(r)}</span>`:''}</td><td class="ua-cell" title="${E(r.user_agent||'')}"><div class="mono">${E(r.client_ip||'—')}</div><div class="cell-sub">${r.user_agent?`<b>${E(name)}</b>${role?` <span class="role-tag">${E(role)}</span>`:''} <span class="mono">${E(r.user_agent)}</span>`:'—'}</div></td></tr>`;}).join('')}</tbody></table></div>`;
 }
 export function requestRows(items){
   if(!items?.length)return empty('请求记录会出现在这里','每次真实转发或本地演示都会记录元数据；不保存你的提示词和回答。','go-playground','发起测试','request');
-  return `<div class="table-scroll"><table><thead><tr><th>时间</th><th>模型 / 请求</th><th>协议</th><th>状态</th><th>耗时</th><th>输入</th><th>输出</th><th>估算价值</th><th class="col-source">来源</th></tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono tiny nowrap">${E(dateTimeSec(r.started_at))}</td><td><div class="cell-title flex">${E(modelName(r.model_id))}${sourceTag(r.provider_id)}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td><td>${badge(r.protocol)}</td><td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}${tps(r)?`<div class="cell-sub">${tps(r)}</div>`:''}</td>${tokenCell(r.input_tokens,r.cache_tokens,'缓存')}${tokenCell(r.output_tokens,r.write_tokens,'写入')}<td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'?'—':'待确认'}</td><td class="col-source">${sourceCell(r)}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr><th>时间</th><th>模型 / 请求</th><th>协议</th><th>状态</th><th>耗时</th><th>输入</th><th>输出</th><th>估算价值</th><th class="col-source">来源</th></tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono tiny nowrap">${E(dateTimeSec(r.started_at))}</td><td><div class="cell-title flex">${E(modelName(r.model_id||r.requested_model))}${sourceTag(r.provider_id)}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td><td>${badge(r.protocol)}</td><td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}${tps(r)?`<div class="cell-sub">${tps(r)}</div>`:''}</td>${tokenCell(r.input_tokens,r.cache_tokens,'缓存')}${tokenCell(r.output_tokens,r.write_tokens,'写入')}<td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'?'—':'待确认'}</td><td class="col-source">${sourceCell(r)}</td></tr>`).join('')}</tbody></table></div>`;
 
 }
 
@@ -64,13 +64,13 @@ export function requestDetail(r){
     ['耗时',ms(r.duration_ms),true],
     ['输出速度',tps(r)?tps(r)+'（含首字延迟）':'—',true],
     ['客户端请求名',r.requested_model,true],
-    ['实际模型',modelName(r.model_id),false],
-    ['供应商',getProvider(r.provider_id)?.name||r.provider_id],
-    ['协议',r.protocol===r.upstream_protocol?`${r.protocol}（原生）`:`${r.protocol} → ${r.upstream_protocol}（转换）`,true],
+    ['实际模型',r.model_id?modelName(r.model_id):'未到达任何模型',false],
+    ['供应商',getProvider(r.provider_id)?.name||r.provider_id||'—'],
+    ['协议',!r.upstream_protocol?r.protocol:r.protocol===r.upstream_protocol?`${r.protocol}（原生）`:`${r.protocol} → ${r.upstream_protocol}（转换）`,true],
     ['输入 Tokens',formatTokens(r.input_tokens,'exact'),true],
     ['输出 Tokens',formatTokens(r.output_tokens,'exact'),true],
     ['缓存 / 写入',`${formatTokens(r.cache_tokens,'exact')} / ${formatTokens(r.write_tokens,'exact')}`,true],
-    ['估算价值',r.cost_known?money(r.cost_nano/1e9):'待确认',true],
+    ['估算价值',r.cost_known?money(r.cost_nano/1e9):r.model_id?'待确认':'—',true],
     ['计价来源',r.usage_mode,true],
     ['HTTP 状态',r.http_status||'—',true],
     ['错误码',r.error_code||'—',true],
