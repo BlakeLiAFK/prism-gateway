@@ -39,7 +39,9 @@ func NewApp(ctx context.Context, s *Store, ui http.Handler) *App {
 	a.Engine.OnRateLimited = a.checkWindows
 	a.Engine.OnAlert = a.alert
 	a.resetOnStart()
-	a.background.Add(2)
+	a.background.Add(4)
+	go func() { defer a.background.Done(); <-ctx.Done(); a.Engine.watch.closeAll() }()
+	go func() { defer a.background.Done(); a.pollAudit(ctx) }()
 	go func() { defer a.background.Done(); a.Engine.Prune(ctx) }()
 	go func() { defer a.background.Done(); a.runSchedule(ctx) }()
 	return a
@@ -169,6 +171,12 @@ func (a *App) adminSession(r *http.Request) (string, bool) {
 }
 func (a *App) loginAllowed(r *http.Request) bool {
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	return a.attemptAllowed(host)
+}
+
+// attemptAllowed 是按键计数的失败尝试限频：每个键每分钟最多 10 次。
+// 登录与监控令牌各用各的键，互不占用额度。
+func (a *App) attemptAllowed(host string) bool {
 	a.loginMu.Lock()
 	defer a.loginMu.Unlock()
 	cut := now() - 60000
@@ -238,6 +246,10 @@ func (a *App) management(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Params == nil {
 		req.Params = Object{}
+	}
+	if req.Action == "watch.stream" {
+		a.watchStream(w, r, req.Params, send)
+		return
 	}
 	csrf, auth := a.adminSession(r)
 	if req.Action == "auth.status" {

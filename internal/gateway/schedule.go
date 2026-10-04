@@ -386,6 +386,7 @@ func (a *App) runTask(task scheduledTask, c scheduleConfig) taskRun {
 }
 
 func (a *App) recordJob(action string, run taskRun) {
+	a.Engine.watch.publish("JOB", fmt.Sprintf("%s  %s  %s", action, run.Status, run.Result))
 	res, msg := any(nil), any(nil)
 	if run.Status == "failed" {
 		msg = run.Result

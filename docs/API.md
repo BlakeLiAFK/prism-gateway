@@ -76,6 +76,9 @@ curl http://127.0.0.1:8080/api.json \
 | `alert.get` | `{}` | 告警推送配置：`enabled`、`kind`（telegram / webhook）、`chat_id`、`has_secret`、`events`；不返回凭证 |
 | `alert.save` | `{enabled, kind, secret?, chat_id?, events:{quota,failures,route}}` | 保存告警配置；`kind` 为 `telegram`、`webhook`（POST JSON `{event,text,at}`）或 `webhook_text`（POST 纯文本正文）；`secret` 留空表示沿用已保存的 Token / 地址，加密存储 |
 | `alert.test` | `{}` | 立即发送一条测试消息 |
+| `watch.token_create` | `{name?, days?}` | 生成终端监控令牌：`id`、`token`（只返回这一次）、`name`、`expires_at`；`days` 为 1 到 30，默认 7；同时有效的令牌最多 20 个 |
+| `watch.token_list` | `{}` | 有效的监控令牌（不含令牌本身）：`id`、`name`、`created_at`、`expires_at`、`last_used_at` |
+| `watch.token_revoke` | `{id}` | 撤销监控令牌；正在使用它的终端在几秒内断开 |
 | `schedule.get` | `{}` | 定时任务配置、每项最近一次运行 `runs.{task}:{at,status,result}`、推送通道是否可用 `channel` |
 | `schedule.save` | 配置字段（只覆盖提交的字段） | `utc_offset`、`{backup,quota,report,expiry,maintain,upstream}_enabled`、`backup_hour`、`backup_keep`、`quota_percent`、`quota_minutes`、`report_hour`、`expiry_days`、`maintain_hour`、`upstream_hours`、`free_enabled`、`free_hours`、`free_route`、`free_min_context`、`free_require_tools`、`free_drop_reasoning`、`free_exclude`（逗号分隔的上游 ID） |
 | `schedule.run` | `{"task":"backup"}` | 立即运行一次，返回 `{at,status,result}`；`result` 为空表示无事可做 |
@@ -344,6 +347,58 @@ GET  /anthropic/v1/models/{id}
 
 `cost_nano` 是十亿分之一美元；`usage_mode=reported_cost` 表示采用 OpenRouter `usage.cost` 实际费用（包括明确的零），`cost_known=1`，金额已知与 token 是否完整独立。其余已知费用使用确认的本地价格估算；缺失、非法及负金额不会当作免费。转换或客户端输出失败仍保留已获得的可信实际费用。`usage_mode=reserved_unknown/reserved_after_restart` 表示不确定并保留预留，不应当作实际结算金额。
 
+
+## 终端实时监控
+
+后台「系统设置 / 终端监控」生成一条带令牌的 curl 命令，粘贴到终端就能实时看到网关的状态与事件。
+入口仍是 `POST /api.json`，action 为 `watch.stream`，不新增 URL。
+
+```sh
+curl -sN --fail-with-body https://HOST/api.json \
+  -H "Authorization: Bearer prism_watch_..." -H "Content-Type: application/json" \
+  -d '{"action":"watch.stream","params":{"mode":"dashboard","width":100,"height":40,"color":true}}'
+```
+
+| 参数 | 说明 |
+| --- | --- |
+| `mode` | `dashboard`（默认，原地刷新，约 2 秒一帧）或 `log`（逐行追加，可接 grep、tee） |
+| `width` / `height` | 终端宽高，范围 60 到 240、12 到 80，默认 100 与 40；后台生成的命令用 `tput` 自动填入。日志模式默认 240 列 |
+| `color` | 是否输出 ANSI 颜色，默认关闭。仪表盘模式始终使用光标控制序列，所以输出不要重定向到文件 |
+
+响应是持续推送的 `text/plain`（分块传输），**不是**带 `data:` 前缀的标准 SSE，curl 直接打印才干净。
+
+**认证。** 只认监控令牌（`prism_watch_` 前缀）。它只能打开这个流，调用任何其他 action 都按未登录处理；
+管理员令牌与网关 Key 不能用于监控流。令牌默认 7 天有效，可随时撤销，库里只存摘要。
+令牌无效时返回 401，用法错误返回 400，连接数超限返回 429，服务正在停止时返回 503。
+每个令牌最多 3 个并发连接，全局最多 16 个。
+
+**事件。**
+
+| 类型 | 含义 |
+| --- | --- |
+| `OK` / `FAIL` / `CXL` | 请求完成、失败、客户端取消，含路由与实际模型、耗时、输出 token、原生或转换 |
+| `REJ` | 没有候选能处理的请求（淘汰或准入被拒），含原因 |
+| `COOL` | 模型进入冷却及时长 |
+| `ALERT` | 告警，不论推送通道是否开启 |
+| `ADMIN` | 配置变更与其他管理操作，取自审计记录 |
+| `JOB` | 定时任务结果 |
+| `SYS` | 连接状态：令牌剩余时间、事件丢弃、令牌失效、服务即将重启 |
+
+事件只含元数据（模型、耗时、错误码），不含提示词、回答和密钥。来自客户端或上游的字符串在进入事件前
+会清洗控制字符与转义序列，不会在管理员的终端里画出任意内容。
+
+**行为。**
+
+- 新连接先回看最近的事件；日志模式连续 20 秒没有事件时输出一行状态，也起保活作用。
+- 订阅者读不过来时丢弃事件并在流里提示数量，绝不拖慢请求处理。
+- 令牌每 5 秒复核一次，撤销或过期后流自动结束。
+- 服务停止时先结束所有监控流，不会占用优雅停止的等待时间。生成的命令带断线重连，
+  部署重启后约 2 秒自动接上；令牌失效（HTTP 401）时停止重连。
+- 仪表盘的并发、RPM、首字节等数字来自路由实时面板，最多滞后 5 秒；事件与趋势是实时的。
+- 事件与趋势按尝试计数，不是按请求计数：一次请求先在候选 A 上被限流、再切到候选 B 成功，会产生两条事件。
+- 事件只保存在内存里，重启后清空；趋势图覆盖最近 30 分钟。
+
+反向代理需要对这个响应关闭缓冲。网关已设置 `Cache-Control: no-cache, no-transform` 与 `X-Accel-Buffering: no`。
 
 ## 自动价格、报告与告警
 

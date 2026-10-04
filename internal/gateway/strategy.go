@@ -196,6 +196,7 @@ func (h *health) reject(err error, t int64) {
 // recordRejected 在所有候选都没能通过准入时补一条请求记录：客户端收到了 429，请求日志里却什么都没有，排查无从下手
 func (e *Engine) recordRejected(s selection, key Principal, reqID, requested, p, session string, from client, err error) {
 	_, code, _ := errorParts(err)
+	e.noteRejected(requested, code, "all candidates rejected admission")
 	id := randomID("att_")
 	if er := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,http_status,started_at,cost_nano,cost_known,reason,error_code,usage_mode,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,?,?,?,?,?,'error',429,?,0,0,?,?,'rejected',?,?,?,?)`,
 		id, reqID, key.ID, requested, s.Model.ID, s.Provider.ID, p, s.Model.Protocol, session, now(), "全部候选准入被拒："+s.Reason, code, s.Provider.Kind == "mock", from.IP, from.Agent, from.Role); er != nil {
@@ -241,6 +242,7 @@ func (e *Engine) recordIncompatible(c Config, key Principal, reqID, requested, p
 	if r := []rune(detail); len(r) > 500 {
 		detail = string(r[:500]) + "…"
 	}
+	e.noteRejected(requested, code, detail)
 	if er := e.store.DB.Exec(`INSERT INTO requests(id,parent_id,key_id,requested_model,model_id,provider_id,protocol,upstream_protocol,session_id,status,http_status,started_at,cost_nano,cost_known,reason,error_code,usage_mode,is_demo,client_ip,user_agent,agent_role) VALUES (?,?,?,?,'','',?,'',?,'error',400,?,0,0,?,?,'incompatible',0,?,?,?)`,
 		randomID("att_"), reqID, key.ID, requested, p, session, now(), detail, code, from.IP, from.Agent, from.Role); er != nil {
 		slog.Error("incompatible request record failed", "request_id", reqID, "err", er)

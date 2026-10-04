@@ -112,6 +112,8 @@ func (a *App) saveAlert(p Object) (any, error) {
 
 // alert 推送一条事件；key 用于限频（同一 key 30 分钟一次），event 对应可勾选的事件类别
 func (a *App) alert(event, key, text string) {
+	// 推送通道有没有开都要让正在看监控的人看到
+	a.Engine.watch.publish("ALERT", event+"  "+text)
 	c, err := a.loadAlert()
 	if err != nil || !c.Enabled || c.Secret == "" || !c.Events[event] {
 		return

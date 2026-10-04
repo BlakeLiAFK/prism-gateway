@@ -10,13 +10,14 @@ import {modelEditor,models} from './models.js';
 import {bindModels,modelActions} from './models.js';
 import {usageActions} from './usage.js';
 import {alertActions,bindAlerts} from './alerts.js';
+import {watchActions,bindWatch} from './watch.js';
 import {scheduleActions,bindSchedule} from './schedule.js';
 import {backupActions,bindBackup} from './backup.js';
 import {auditParams,renderAudit,bindAudit,auditActions} from './audit.js';
 import {bindPages,pageActions} from './views.js';
 
 // 各页面模块自带的动作；app.js 的 switch 未命中时按名字分发到这里
-const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions,...alertActions,...scheduleActions,...backupActions,...auditActions};
+const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions,...alertActions,...watchActions,...scheduleActions,...backupActions,...auditActions};
 
 export function login(){
 
@@ -164,7 +165,7 @@ export function bindPage(){
   bindModels();
   bindRoutes();
   bindPages();
-  bindAlerts();bindSchedule();bindBackup();
+  bindAlerts();bindWatch();bindSchedule();bindBackup();
 
  $('#model-search')?.addEventListener('input',ev=>{const pos=ev.target.selectionStart;state.modelQ=ev.target.value;renderPage(false);const x=$('#model-search');x.focus();x.setSelectionRange(pos,pos);});
 

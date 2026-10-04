@@ -173,7 +173,10 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 		status := 200
 		var runErr error
 		func() {
-			defer func() { e.finish(s, att, session, key.ID, u, status, runErr, start) }()
+			defer func() {
+				r := e.finish(s, att, session, key.ID, u, status, runErr, start)
+				e.noteDone(s, requested, r, u, start)
+			}()
 			w.Header().Set("X-Prism-Model", s.Model.ID)
 			w.Header().Set("X-Prism-Provider", s.Provider.ID)
 			w.Header().Set("X-Prism-Upstream-Model", s.Model.Upstream)

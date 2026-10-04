@@ -133,6 +133,7 @@ func (s *Store) migrate() error {
 			`CREATE INDEX IF NOT EXISTS requests_time ON requests(started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_key_time ON requests(key_id,started_at)`,
 			rollupTable,
+			watchTokenTable,
 			cacheRollupTable,
 			`CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, action TEXT NOT NULL, status TEXT NOT NULL, result TEXT, error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)`,
 			`CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, action TEXT NOT NULL, target TEXT NOT NULL, version INTEGER NOT NULL, created_at INTEGER NOT NULL)`,

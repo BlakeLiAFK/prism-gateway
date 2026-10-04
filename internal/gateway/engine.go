@@ -66,10 +66,12 @@ type Engine struct {
 	OnRateLimited func(Provider)
 	// OnAlert 推送告警（事件类别、限频键、正文），未设置时忽略
 	OnAlert func(event, key, text string)
+	// watch 是终端监控的事件中心，引擎各处发生的事都经它广播
+	watch *watchHub
 }
 
 func NewEngine(s *Store) *Engine {
-	return &Engine{store: s, states: map[string]*health{}, clients: map[string]*http.Client{}, keys: map[string]*cachedKey{}, keyHits: map[string][]int64{}, spend: map[string]keySpendEntry{}}
+	return &Engine{store: s, states: map[string]*health{}, clients: map[string]*http.Client{}, keys: map[string]*cachedKey{}, keyHits: map[string][]int64{}, spend: map[string]keySpendEntry{}, watch: newWatchHub()}
 }
 func (e *Engine) client(p Provider) *http.Client {
 	e.clientMu.Lock()
@@ -330,6 +332,7 @@ func (e *Engine) cooldownFor(id string, d time.Duration) {
 	e.mu.Lock()
 	e.state(id).Cooldown = now() + int64(min(d, 24*time.Hour)/time.Millisecond)
 	e.mu.Unlock()
+	e.noteCooldown(id, d)
 }
 
 // retryable 是「上游暂时忙，换个候选重试是安全的」这一类状态码。
@@ -379,6 +382,8 @@ func (e *Engine) pruneOnce() {
 		{"admin_sessions", "DELETE FROM admin_sessions WHERE expires_at<?", now()},
 		{"jobs", "DELETE FROM jobs WHERE updated_at<? AND status NOT IN ('queued','running')", now() - 30*86400000},
 		{"sessions", "DELETE FROM sessions WHERE updated_at<?", now() - int64(s.SessionTTLHours)*3600000},
+		// 过期或撤销满一天的监控令牌没有保留价值
+		{"watch_tokens", "DELETE FROM watch_tokens WHERE (CASE WHEN revoked_at>0 THEN revoked_at ELSE expires_at END)<?", now() - 86400000},
 		// 汇总表很小，保留比请求明细长，历史用量不随明细一起清掉
 		{"usage_hourly", "DELETE FROM usage_hourly WHERE hour<?", (now() - 400*86400000) / 3600000},
 		{"cache_hourly", "DELETE FROM cache_hourly WHERE hour<?", (now() - 400*86400000) / 3600000},

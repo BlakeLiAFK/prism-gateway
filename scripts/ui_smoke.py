@@ -501,6 +501,70 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         fail('设置保存后未回显新值')
     results.append('settings save round trip')
 
+    # 终端监控：界面生成的命令里的令牌必须真的能拉流，撤销后立刻失效。
+    # 用 urllib 而不是执行命令本身，避免在测试里依赖 shell 与 curl 的版本。
+    page.click('[data-action="settings-tab"][data-value="watch"]')
+    page.wait_for_selector('#watch-card [data-action="watch-create"]')
+    if page.locator('#watch-days').input_value() != '7':
+        fail('监控令牌默认有效期应为 7 天')
+    page.select_option('#watch-mode', 'log')
+    page.fill('#watch-name', 'smoke')
+    if artifacts:
+        page.locator('#watch-card').screenshot(path=str(artifacts / 'watch-card.png'))
+    page.click('[data-action="watch-create"]')
+    page.wait_for_selector('dialog .secret-box')
+    if artifacts:
+        page.locator('dialog').screenshot(path=str(artifacts / 'watch-dialog.png'))
+    # 390px 下令牌是一长串不可断行的字符，命令框必须在对话框里换行，不能撑出视口或产生横向滚动
+    desktop = page.viewport_size
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(300)
+    box = page.locator('dialog .secret-box').bounding_box()
+    dlg = page.locator('dialog').bounding_box()
+    overflow = page.evaluate("() => document.querySelector('dialog .secret-box').scrollWidth - document.querySelector('dialog .secret-box').clientWidth")
+    if not box or box['x'] + box['width'] > 390 + 1 or overflow > 1 or dlg['x'] + dlg['width'] > 390 + 1:
+        fail(f'390px 下监控命令框超出视口或需要横向滚动: box={box} dialog={dlg} overflow={overflow}')
+    copy_box = page.locator('dialog [data-action="copy-secret"]').bounding_box()
+    if not copy_box or copy_box['x'] + copy_box['width'] > 390:
+        fail(f'390px 下复制按钮超出视口: {copy_box}')
+    if artifacts:
+        page.locator('dialog').screenshot(path=str(artifacts / 'watch-dialog-mobile.png'))
+    page.set_viewport_size(desktop)
+    page.wait_for_timeout(300)
+    command = page.locator('dialog .secret-box').inner_text()
+    for part in ('watch.stream', 'Authorization: Bearer prism_watch_', base + '/api.json', 'while :; do curl -sN --fail-with-body', '-eq 22'):
+        if part not in command:
+            fail(f'生成的命令缺少 {part!r}: {command!r}')
+    token = re.search(r'prism_watch_[A-Za-z0-9_-]+', command).group(0)
+
+    def open_stream():
+        request = urllib.request.Request(base + '/api.json', data=json.dumps({'action': 'watch.stream', 'params': {'mode': 'log'}}).encode(),
+                                         headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token})
+        return urllib.request.urlopen(request, timeout=10)
+
+    with open_stream() as stream:
+        first = stream.readline().decode()
+        if 'prism gateway' not in first:
+            fail(f'监控流第一行不对: {first!r}')
+        if not stream.headers.get('Content-Type', '').startswith('text/plain'):
+            fail(f'监控流应是纯文本: {stream.headers.get("Content-Type")}')
+    page.click('[data-action="close-dialog"]')
+    page.wait_for_selector('#watch-card [data-action="watch-revoke"]')
+    row = page.locator('#watch-card tbody tr', has_text='smoke')
+    if row.count() != 1 or not row.first.is_visible():
+        fail('令牌列表里应当看到刚生成的令牌')
+    row.first.locator('[data-action="watch-revoke"]').click()
+    page.click('.confirm-dialog [data-yes]')
+    # 页面的 CSP 禁止 eval，不能用字符串形式的 wait_for_function
+    page.locator('#watch-card tbody tr').first.wait_for(state='detached', timeout=5000)
+    try:
+        open_stream().close()
+        fail('撤销后的令牌不应再能拉流')
+    except urllib.error.HTTPError as e:
+        if e.code != 401:
+            fail(f'撤销后应返回 401，实得 {e.code}')
+    results.append('terminal watch token create stream revoke')
+
     # 新定时任务参数必须经过界面保存、刷新后仍保持。
     page.click('[data-action="settings-tab"][data-value="schedule"]')
     page.wait_for_selector('[name="weekly_hour"]')

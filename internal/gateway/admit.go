@@ -169,7 +169,7 @@ func settle(s selection, u Usage, status int, err error) settled {
 
 // finish 先在 e.mu 内更新内存状态，再把落库合并成一个事务：
 // 原来是 UPDATE、两次汇总、会话亲和各自提交，每次提交一次 fsync，而且全程占着 e.mu。
-func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status int, err error, start int64) {
+func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status int, err error, start int64) settled {
 	r := settle(s, u, status, err)
 	t := now()
 	writeSession := session != "" && r.state == "success"
@@ -213,4 +213,5 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 	for _, err := range soft {
 		slog.Error("request auxiliary write failed", "request_id", id, "err", err)
 	}
+	return r
 }
