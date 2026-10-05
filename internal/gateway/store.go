@@ -128,7 +128,7 @@ func (s *Store) migrate() error {
 			`CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, name TEXT NOT NULL, prefix TEXT NOT NULL, digest TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL, allowed TEXT NOT NULL, created_at INTEGER NOT NULL, last_used INTEGER, revoked_at INTEGER)`,
 			`CREATE TABLE IF NOT EXISTS admin_sessions (digest TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires_at INTEGER NOT NULL)`,
 			`CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, key_id TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, updated_at INTEGER NOT NULL, requests INTEGER NOT NULL DEFAULT 1)`,
-			`CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, key_id TEXT NOT NULL, requested_model TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_tokens INTEGER NOT NULL DEFAULT 0, write_tokens INTEGER NOT NULL DEFAULT 0, cache_known INTEGER NOT NULL DEFAULT 0, cost_nano INTEGER NOT NULL DEFAULT 0, cost_known INTEGER NOT NULL DEFAULT 0, usage_mode TEXT NOT NULL DEFAULT 'reserved', reason TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', is_demo INTEGER NOT NULL DEFAULT 0, client_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', agent_role TEXT NOT NULL DEFAULT '')`,
+			`CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, parent_id TEXT NOT NULL, key_id TEXT NOT NULL, requested_model TEXT NOT NULL, model_id TEXT NOT NULL, provider_id TEXT NOT NULL, protocol TEXT NOT NULL, upstream_protocol TEXT NOT NULL, session_id TEXT NOT NULL, status TEXT NOT NULL, http_status INTEGER NOT NULL DEFAULT 0, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0, cache_tokens INTEGER NOT NULL DEFAULT 0, write_tokens INTEGER NOT NULL DEFAULT 0, cache_known INTEGER NOT NULL DEFAULT 0, cost_nano INTEGER NOT NULL DEFAULT 0, cost_known INTEGER NOT NULL DEFAULT 0, usage_mode TEXT NOT NULL DEFAULT 'reserved', reason TEXT NOT NULL, error_code TEXT NOT NULL DEFAULT '', is_demo INTEGER NOT NULL DEFAULT 0, client_ip TEXT NOT NULL DEFAULT '', user_agent TEXT NOT NULL DEFAULT '', agent_role TEXT NOT NULL DEFAULT '', error_detail TEXT NOT NULL DEFAULT '')`,
 			`CREATE INDEX IF NOT EXISTS requests_model_time ON requests(model_id,started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_time ON requests(started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_key_time ON requests(key_id,started_at)`,
@@ -158,7 +158,7 @@ func (s *Store) migrate() error {
 		}
 		for c, definition := range map[string]string{
 			"client_ip": "TEXT NOT NULL DEFAULT ''", "user_agent": "TEXT NOT NULL DEFAULT ''", "agent_role": "TEXT NOT NULL DEFAULT ''",
-			"cache_known": "INTEGER NOT NULL DEFAULT 0",
+			"cache_known": "INTEGER NOT NULL DEFAULT 0", "error_detail": "TEXT NOT NULL DEFAULT ''",
 		} {
 			if !have[c] {
 				if e := t.Exec("ALTER TABLE requests ADD COLUMN " + c + " " + definition); e != nil {

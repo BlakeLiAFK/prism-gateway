@@ -75,6 +75,7 @@ export function requestDetail(r){
     ['计价来源',r.usage_mode,true],
     ['HTTP 状态',r.http_status||'—',true],
     ['错误码',r.error_code||'—',true],
+    ['上游错误',r.error_detail||'—'],
     ['选择原因',(r.reason||'').replace(/^;\s*/,'')||'—'],
     ['会话',r.session_id,true],
     ['客户端 Key',r.key_id,true],

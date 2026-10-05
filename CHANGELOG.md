@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.35.2 · 2026-10-05
+
+- 修复：Claude Code 请求里的 `thinking` 带 `display`（如 `{"type":"adaptive","display":"omitted"}`）时，即使模型已开启 `drop_reasoning` 也被判为不可转换，导致 auto 路由对 Claude Code 全部返回 400。现在 `display` 取值为 `omitted` / `summarized` 时与 `budget_tokens` 一样视为可忽略的推理输出偏好，并在 `X-Prism-Ignored` 披露；`disabled`、未知类型、未知额外控制、非法 `display` 仍然明确拒绝，未开启开关时同样拒绝。
+- 新增：请求记录增加 `error_detail`，保存上游非 2xx 响应里的错误原因摘要（取 `error.message` 等字段，折叠空白、抹掉令牌形态的内容、最多 300 字）。请求详情新增「上游错误」一行。上游错误正文仍不转发给客户端。老库启动时自动补列，回滚到旧版本不受影响。
+
 ## 1.33.2 · 2026-09-29
 
 - 修复：原生协议透传时请求体里的数字按原字面量转发。此前按 float64 解析，大于 2^53 的整数（如 `seed`）会被改写成相邻的值，`1.0` 会被写成 `1`；现在保持原样。跨协议转换不受影响。

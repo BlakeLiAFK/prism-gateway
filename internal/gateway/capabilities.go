@@ -106,13 +106,21 @@ func confirmCapabilities(m *Model, patch Object) {
 }
 
 // 输出丢弃开关不授权改变禁用思考或其他硬性控制。
+// display 只决定思考内容是否随响应返回（Claude Code 固定带 omitted），
+// 与 budget_tokens 同属推理输出偏好；取值必须是已知的两种。
 func canDropThinking(value any) bool {
 	o := obj(value)
 	if str(o, "type") != "enabled" && str(o, "type") != "adaptive" {
 		return false
 	}
-	for key := range o {
-		if key != "type" && key != "budget_tokens" {
+	for key, v := range o {
+		switch key {
+		case "type", "budget_tokens":
+		case "display":
+			if s, _ := v.(string); s != "omitted" && s != "summarized" {
+				return false
+			}
+		default:
 			return false
 		}
 	}

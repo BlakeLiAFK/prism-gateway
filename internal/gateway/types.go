@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.35.1"
+const Version = "1.35.2"
 
 type Object = map[string]any
 

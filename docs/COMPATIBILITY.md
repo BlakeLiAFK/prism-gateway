@@ -164,7 +164,7 @@ Claude Code 用 Read 读 PDF 之后，历史里会带一个 `document` 块（在
 | `cache_control` | 提示缓存标记，只影响成本不影响内容 |
 | `service_tier` / `store:false` / `user` | 供应商侧调度与调用方标识；store:true 必须使用原生协议 |
 
-`thinking` 不在此列——它会真正改变模型行为。开启模型的 `drop_reasoning` 后，仅已知的 `enabled` / `adaptive` 推理输出偏好可被忽略并披露。`disabled`、额外思考控制或未知类型不会被改成上游默认值；不能等价转换时仍拒绝。
+`thinking` 不在此列——它会真正改变模型行为。开启模型的 `drop_reasoning` 后，仅已知的 `enabled` / `adaptive` 推理输出偏好（可带 `budget_tokens` 与取值为 `omitted` / `summarized` 的 `display`，Claude Code 固定带 `display`）可被忽略并披露。`disabled`、额外思考控制或未知类型不会被改成上游默认值；不能等价转换时仍拒绝。
 
 无候选可用时，错误信息会逐个列出候选被排除的原因，例如
 `没有兼容此请求的候选模型（m_x: 跨协议转换不支持字段 "thinking"…）`。

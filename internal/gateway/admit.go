@@ -185,7 +185,7 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 
 	var soft []error
 	dberr := e.store.DB.Transaction(func(tx *sqlite.Tx) error {
-		if err := tx.Exec(`UPDATE requests SET status=?,http_status=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_tokens=?,write_tokens=?,cache_known=?,cost_nano=?,cost_known=?,usage_mode=?,error_code=? WHERE id=?`, r.state, status, t-start, u.Input, u.Output, u.Cache, u.Write, r.cacheKnown, r.value, r.known, r.mode, r.code, id); err != nil {
+		if err := tx.Exec(`UPDATE requests SET status=?,http_status=?,duration_ms=?,input_tokens=?,output_tokens=?,cache_tokens=?,write_tokens=?,cache_known=?,cost_nano=?,cost_known=?,usage_mode=?,error_code=?,error_detail=? WHERE id=?`, r.state, status, t-start, u.Input, u.Output, u.Cache, u.Write, r.cacheKnown, r.value, r.known, r.mode, r.code, upstreamDetail(err), id); err != nil {
 			return err
 		}
 		// 汇总与会话亲和单条失败只记日志、不回滚：它们只影响统计与路由，不能连累记账
