@@ -108,7 +108,7 @@ func applyFreeModels(nc *Config, p Provider, items []any, c scheduleConfig) (ch 
 		}
 	}
 	inRoute := map[string]bool{}
-	for _, cd := range nc.Routes[ri].Candidates {
+	for _, cd := range nc.Routes[ri].all() {
 		inRoute[cd.ModelID] = true
 	}
 	for i := range nc.Models {
@@ -157,7 +157,10 @@ func applyFreeModels(nc *Config, p Provider, items []any, c scheduleConfig) (ch 
 		}
 		enableFree(&nc.Models[idx], c)
 		id := nc.Models[idx].ID
-		nc.Routes[ri].Candidates = append(nc.Routes[ri].Candidates, Candidate{ModelID: id, Weight: freeCandidateWeight})
+		if len(nc.Routes[ri].Groups) == 0 {
+			nc.Routes[ri].Groups = []Group{{Name: "主", Strategy: "priority", Affinity: true}}
+		}
+		nc.Routes[ri].Groups[0].Candidates = append(nc.Routes[ri].Groups[0].Candidates, Candidate{ModelID: id, Weight: freeCandidateWeight})
 		inRoute[id] = true
 		ch.added = append(ch.added, id)
 	}

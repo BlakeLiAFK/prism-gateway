@@ -146,7 +146,7 @@ func TestZDRConstraintRemovingEveryCandidateIsRecorded(t *testing.T) {
 	unconfirmed.Protocols = []string{}
 	aliasRoute(t, h, "http://127.0.0.1:1", modelFixture("b", "chat"), unconfirmed)
 	h.change(t, func(c *Config) {
-		c.Routes[0].Candidates = []Candidate{{ModelID: "b", Weight: 10}, {ModelID: "u", Weight: 10}}
+		c.Routes[0].Groups[0].Candidates = []Candidate{{ModelID: "b", Weight: 10}, {ModelID: "u", Weight: 10}}
 	})
 	w := generateZDR(h, "chat", requestFixture("chat", "auto"), "1")
 	requireStatus(t, w, 400)

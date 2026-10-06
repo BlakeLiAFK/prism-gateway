@@ -250,7 +250,9 @@ func (s *Store) load() error {
 				c.Models = append(c.Models, v)
 			case "routes":
 				var v Route
-				e = json.Unmarshal([]byte(row.String("body")), &v)
+				if e = json.Unmarshal([]byte(row.String("body")), &v); e == nil {
+					e = v.normalize()
+				}
 				c.Routes = append(c.Routes, v)
 			case "aliases":
 				var v Alias
@@ -361,7 +363,8 @@ func cloneConfig(c Config) Config {
 	}
 	out.Routes = append([]Route{}, c.Routes...)
 	for i := range out.Routes {
-		out.Routes[i].Candidates = append([]Candidate{}, c.Routes[i].Candidates...)
+		out.Routes[i].Groups = cloneGroups(c.Routes[i].Groups)
+		out.Routes[i].Candidates = slices.Clone(c.Routes[i].Candidates)
 	}
 	out.Aliases = append([]Alias{}, c.Aliases...)
 	return out
@@ -412,6 +415,11 @@ func (s *Store) Change(version int64, action, target string, fn func(*Config) er
 	if e := fn(&c); e != nil {
 		return c, e
 	}
+	for i := range c.Routes {
+		if e := c.Routes[i].normalize(); e != nil {
+			return c, fail("INVALID_CONFIG", e.Error(), 400)
+		}
+	}
 	if e := c.Validate(); e != nil {
 		return c, fail("INVALID_CONFIG", e.Error(), 400)
 	}
@@ -439,7 +447,7 @@ func (s *Store) Change(version int64, action, target string, fn func(*Config) er
 			if e := t.Exec("INSERT INTO routes VALUES (?,?)", r.ID, raw(r)); e != nil {
 				return e
 			}
-			for i, v := range r.Candidates {
+			for i, v := range r.all() {
 				if e := t.Exec("INSERT INTO route_models VALUES (?,?,?,?)", r.ID, v.ModelID, i, v.Weight); e != nil {
 					return e
 				}

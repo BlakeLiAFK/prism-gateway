@@ -461,7 +461,7 @@ export function attentionItems(){
   // 可用候选不足 2 个的已启用路由：模型与供应商都启用、且未冷却才算可用候选
   for(const r of state.config.routes){
     if(!r.enabled)continue;
-    const viable=(r.candidates||[]).filter(c=>{
+    const viable=(r.groups||[]).flatMap(g=>g.candidates||[]).filter(c=>{
       const m=getModel(c.model_id);
       if(!m?.enabled)return false;
       const p=getProvider(m.provider_id);

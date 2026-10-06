@@ -150,183 +150,174 @@ type selection struct {
 	ToolImagesAdapted bool
 	// Dropped 列出发往上游的副本里没有送达的请求历史内容（reasoning、documents），响应必须披露
 	Dropped []string
-	// Fallback 表示这是路由的兜底候选，见 Candidate.Fallback
-	Fallback bool
+	// Group 是候选所在的组序（从 0 起），亲和键与兜底告警按它区分；RouteID 与 GroupName 仅路由请求才有
+	Group     int
+	GroupName string
+	RouteID   string
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
 	resolved, _ := c.resolveAlias(str(o, "model"))
-	route, routeOK := c.route(resolved)
-	var candidates []Candidate
-	if routeOK {
-		if !route.Enabled {
-			return nil, nil, fail("MODEL_DISABLED", "路由已禁用", 404)
-		}
-		candidates = route.Candidates
-	} else if _, ok := c.model(resolved); ok {
-		candidates = []Candidate{{ModelID: resolved, Weight: 1}}
-	} else {
-		return nil, nil, fail("MODEL_NOT_FOUND", "模型或路由不存在", 404)
-	}
-	if routeOK && (o["previous_response_id"] != nil || o["conversation"] != nil) {
-		return nil, nil, unsupported("有服务端会话状态的请求必须指定固定模型，不能使用自动路由")
-	}
-	pinned := ""
-	if session != "" && routeOK && route.Affinity {
-		r, er := e.store.DB.Query("SELECT model_id FROM sessions WHERE id=? AND updated_at>?", session, now()-int64(c.Settings.SessionTTLHours)*3600000)
-		if er == nil && len(r) > 0 {
-			pinned = r[0].String("model_id")
-		}
+	plans, route, routeOK, err := e.expandGroups(c, resolved, o, session)
+	if err != nil {
+		return nil, nil, err
 	}
 	out := []selection{}
 	reasons := []any{}
-	for i, cm := range candidates {
-		m, ok := c.model(cm.ModelID)
-		if !ok {
-			continue
-		}
-		if m.supportsProtocol(p) {
-			m.Protocol = p
-		}
-		pr, ok := c.provider(m.ProviderID)
-		if base := pr.ProtocolURLs[m.Protocol]; base != "" {
-			pr.BaseURL = base
-		}
-		why := ""
-		if m.Protocols != nil && len(m.Protocols) == 0 {
-			why = "原生协议尚未确认，请同步上游声明或在模型设置中指定"
-		}
-		if boolean(obj(o["provider"]), "zdr") && !isOpenRouter(pr) {
-			why = "provider.zdr 只能交给 OpenRouter 执行，不能切换到其他供应商"
-		}
-		if len(arr(o["tools"])) > 0 && !m.Tools && !m.ToolsUnknown {
-			why = "tools_unsupported"
-		}
-		// state 是调用方自定义的 JSON，可能恰好含 image_url 这类键；
-		// System One 只吃文本，不该被图像检测误伤。
-		if m.Protocol != "systemone" && requestHasImage(o, p) && !m.Vision && !m.VisionUnknown {
-			why = "vision_unsupported"
-		}
-		// 停用与暂停是管理员自己的操作，必须排在最后覆盖前面所有原因：
-		// recordIncompatible 靠这两个原因判断「不必告警」，被请求内容相关的原因盖掉就会误报；
-		// 两者并存时报暂停，因为它是路由里更具体的一层
-		if !ok || !m.Enabled || !pr.Enabled {
-			why = "disabled"
-		}
-		// 暂停的候选直接淘汰，不进入 out：亲和加分与 Pinned 等待都以「仍是合格候选」为前提，随之失效
-		if cm.Disabled {
-			why = "candidate_paused"
-		}
-		var body Object
-		cross := p != m.Protocol
-		ignored := []string{}
-		toolImagesAdapted := false
-		dropped := []string{}
-		// System One 返回类型化决策，对话协议返回消息序列，两边没有共同语义。
-		// 允许转换只能靠编造文本或字符串化 JSON，都会静默改变调用方拿到的东西。
-		if why == "" && cross && (p == "systemone" || m.Protocol == "systemone") {
-			why = "System One 与对话协议之间没有等价语义，不能转换；请直接调用该协议的模型"
-		}
-		if why == "" && cross {
-			src := o
-			// 历史里的推理内容没有跨协议的等价表达，显式开启后只从这个候选的副本里去掉
-			if m.DropReasoning {
-				var did bool
-				if src, did = dropHistoryReasoning(src, p); did {
-					dropped = append(dropped, "reasoning")
-				}
+	for gi, g := range plans {
+		for i, cm := range g.Candidates {
+			m, ok := c.model(cm.ModelID)
+			if !ok {
+				continue
 			}
-			if m.DropDocuments {
-				var did bool
-				if src, did = dropHistoryDocuments(src, p); did {
-					dropped = append(dropped, "documents")
-				}
+			if m.supportsProtocol(p) {
+				m.Protocol = p
 			}
-			// 仅显式允许的推理输出偏好可忽略；禁用思考或新增控制不能改成目标默认值。
-			if m.DropReasoning && canDropThinking(o["thinking"]) {
-				base := src
-				src = Object{}
-				for k, v := range base {
-					src[k] = v
-				}
-				delete(src, "thinking")
-				ignored = append(ignored, "thinking")
+			pr, ok := c.provider(m.ProviderID)
+			if base := pr.ProtocolURLs[m.Protocol]; base != "" {
+				pr.BaseURL = base
 			}
-			ir, err := decodeCanonical(src, p)
-			if err != nil {
-				why = err.Error()
-			} else {
-				ignored = append(ignored, ir.Ignored...)
-				toolImagesAdapted = m.Protocol == "chat" && hasToolResultImages(ir)
-				body, err = encodeCanonical(ir, m.Protocol, m.Upstream)
+			why := ""
+			if m.Protocols != nil && len(m.Protocols) == 0 {
+				why = "原生协议尚未确认，请同步上游声明或在模型设置中指定"
+			}
+			if boolean(obj(o["provider"]), "zdr") && !isOpenRouter(pr) {
+				why = "provider.zdr 只能交给 OpenRouter 执行，不能切换到其他供应商"
+			}
+			if len(arr(o["tools"])) > 0 && !m.Tools && !m.ToolsUnknown {
+				why = "tools_unsupported"
+			}
+			// state 是调用方自定义的 JSON，可能恰好含 image_url 这类键；
+			// System One 只吃文本，不该被图像检测误伤。
+			if m.Protocol != "systemone" && requestHasImage(o, p) && !m.Vision && !m.VisionUnknown {
+				why = "vision_unsupported"
+			}
+			// 停用与暂停是管理员自己的操作，必须排在最后覆盖前面所有原因：
+			// recordIncompatible 靠这两个原因判断「不必告警」，被请求内容相关的原因盖掉就会误报；
+			// 两者并存时报暂停，因为它是路由里更具体的一层
+			if !ok || !m.Enabled || !pr.Enabled {
+				why = "disabled"
+			}
+			// 暂停的候选直接淘汰，不进入 out：亲和加分与 Pinned 等待都以「仍是合格候选」为前提，随之失效
+			if cm.Disabled {
+				why = "candidate_paused"
+			}
+			var body Object
+			cross := p != m.Protocol
+			ignored := []string{}
+			toolImagesAdapted := false
+			dropped := []string{}
+			// System One 返回类型化决策，对话协议返回消息序列，两边没有共同语义。
+			// 允许转换只能靠编造文本或字符串化 JSON，都会静默改变调用方拿到的东西。
+			if why == "" && cross && (p == "systemone" || m.Protocol == "systemone") {
+				why = "System One 与对话协议之间没有等价语义，不能转换；请直接调用该协议的模型"
+			}
+			if why == "" && cross {
+				src := o
+				// 历史里的推理内容没有跨协议的等价表达，显式开启后只从这个候选的副本里去掉
+				if m.DropReasoning {
+					var did bool
+					if src, did = dropHistoryReasoning(src, p); did {
+						dropped = append(dropped, "reasoning")
+					}
+				}
+				if m.DropDocuments {
+					var did bool
+					if src, did = dropHistoryDocuments(src, p); did {
+						dropped = append(dropped, "documents")
+					}
+				}
+				// 仅显式允许的推理输出偏好可忽略；禁用思考或新增控制不能改成目标默认值。
+				if m.DropReasoning && canDropThinking(o["thinking"]) {
+					base := src
+					src = Object{}
+					for k, v := range base {
+						src[k] = v
+					}
+					delete(src, "thinking")
+					ignored = append(ignored, "thinking")
+				}
+				ir, err := decodeCanonical(src, p)
 				if err != nil {
 					why = err.Error()
+				} else {
+					ignored = append(ignored, ir.Ignored...)
+					toolImagesAdapted = m.Protocol == "chat" && hasToolResultImages(ir)
+					body, err = encodeCanonical(ir, m.Protocol, m.Upstream)
+					if err != nil {
+						why = err.Error()
+					}
+				}
+			} else if why == "" {
+				// 原生透传要改 model、输出上限和思考预算，所以每个候选各持一份副本；
+				// 被淘汰的候选和跨协议候选（body 由 encodeCanonical 生成）都不需要
+				body = cloneJSON(o).(Object)
+				body["model"] = m.Upstream
+			}
+			if why == "" {
+				ignored = append(ignored, normalizeProviderContext(pr, m.Protocol, body)...)
+				why = providerRequestError(pr, m.Protocol, body)
+			}
+			if why == "" && m.Protocol != "systemone" {
+				field := "max_tokens"
+				if m.Protocol == "responses" {
+					field = "max_output_tokens"
+				}
+				if m.Protocol == "chat" && body["max_completion_tokens"] != nil {
+					field = "max_completion_tokens"
+				}
+				// 客户端没写输出上限时交给上游默认（GLM 65536、DeepSeek 8K/64K 等，都比网关自定的大）；
+				// 只有 Messages 协议必填，补模型上限，与 LiteLLM、Vercel AI SDK、Claude Code 的做法一致
+				if body[field] == nil && m.Protocol == "messages" {
+					body[field] = m.MaxOutput
+				}
+				// 超过模型上限时降到上限，而不是淘汰候选：Claude Code 固定要 64000，配置偏小的模型不该因此整个不可用
+				if body[field] != nil && num(body, field) > float64(m.MaxOutput) {
+					body[field] = m.MaxOutput
+					why = fitThinking(body, m.MaxOutput)
 				}
 			}
-		} else if why == "" {
-			// 原生透传要改 model、输出上限和思考预算，所以每个候选各持一份副本；
-			// 被淘汰的候选和跨协议候选（body 由 encodeCanonical 生成）都不需要
-			body = cloneJSON(o).(Object)
-			body["model"] = m.Upstream
+			if why == "" {
+				pressure, err := e.pressure(m)
+				if err != nil {
+					return nil, nil, err
+				}
+				l := e.load(m)
+				score := baseScore(g.Strategy, i, cm, m, pressure, l)
+				if g.Pinned == m.ID {
+					score += affinityBonus
+				}
+				if !cross {
+					score += nativeBonus(g.Strategy)
+				}
+				if l.Cooling || l.Full {
+					score -= unhealthyPenalty
+				}
+				// 后一组整体排在前一组之后：前一组健康时轮不到它，前一组全部失败或淘汰时才接手
+				score -= float64(gi) * groupPenalty
+				sel := selection{Model: m, Provider: pr, Body: body, Score: score, Cross: cross, Ignored: ignored, ToolImagesAdapted: toolImagesAdapted, Dropped: dropped, Group: gi}
+				sel.Reason = fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", g.Strategy, !cross, g.Pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB)
+				if routeOK {
+					sel.RouteID, sel.GroupName = route.ID, g.Name
+					if len(plans) > 1 {
+						sel.Reason += "; group=" + g.Name
+					}
+				}
+				out = append(out, sel)
+			}
+			reasons = append(reasons, Object{"model_id": m.ID, "eligible": why == "", "reason": why, "native": !cross, "group": g.Name})
 		}
-		if why == "" {
-			ignored = append(ignored, normalizeProviderContext(pr, m.Protocol, body)...)
-			why = providerRequestError(pr, m.Protocol, body)
-		}
-		if why == "" && m.Protocol != "systemone" {
-			field := "max_tokens"
-			if m.Protocol == "responses" {
-				field = "max_output_tokens"
-			}
-			if m.Protocol == "chat" && body["max_completion_tokens"] != nil {
-				field = "max_completion_tokens"
-			}
-			// 客户端没写输出上限时交给上游默认（GLM 65536、DeepSeek 8K/64K 等，都比网关自定的大）；
-			// 只有 Messages 协议必填，补模型上限，与 LiteLLM、Vercel AI SDK、Claude Code 的做法一致
-			if body[field] == nil && m.Protocol == "messages" {
-				body[field] = m.MaxOutput
-			}
-			// 超过模型上限时降到上限，而不是淘汰候选：Claude Code 固定要 64000，配置偏小的模型不该因此整个不可用
-			if body[field] != nil && num(body, field) > float64(m.MaxOutput) {
-				body[field] = m.MaxOutput
-				why = fitThinking(body, m.MaxOutput)
-			}
-		}
-		if why == "" {
-			pressure, err := e.pressure(m)
-			if err != nil {
-				return nil, nil, err
-			}
-			l := e.load(m)
-			score := baseScore(route.Strategy, i, cm, m, pressure, l)
-			if pinned == m.ID {
-				score += affinityBonus
-			}
-			if !cross {
-				score += nativeBonus(route.Strategy)
-			}
-			if l.Cooling || l.Full {
-				score -= unhealthyPenalty
-			}
-			// 兜底候选排在所有主候选之后：主候选健康时轮不到它，主候选全部失败或淘汰时才接手
-			if cm.Fallback {
-				score -= fallbackPenalty
-			}
-			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f; fallback=%t", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB, cm.Fallback), cross, ignored, "", toolImagesAdapted, dropped, cm.Fallback})
-		}
-		reasons = append(reasons, Object{"model_id": m.ID, "eligible": why == "", "reason": why, "native": !cross})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-	if slices.ContainsFunc(out, func(s selection) bool { return s.Model.ID == pinned }) {
-		for i := range out {
-			out[i].Pinned = pinned
+	// 每组各自的会话绑定：只有绑定的模型仍是本组的合格候选时才生效
+	for i := range out {
+		pin := plans[out[i].Group].Pinned
+		if pin != "" && slices.ContainsFunc(out, func(s selection) bool { return s.Group == out[i].Group && s.Model.ID == pin }) {
+			out[i].Pinned = pin
 		}
 	}
 	return out, reasons, nil
 }
-
-// fallbackPenalty 比任何策略分、亲和分与不健康扣分的组合都大，保证兜底候选永远排在主候选后面
-const fallbackPenalty = 1e9
 
 // failureCooldown 是上游 5xx、网络错误或流首事件即错误时给候选的短冷却。网关不替客户端重放，
 // 但客户端（Claude Code、OpenAI SDK）会按自己的规则重试；冷却让那次重试落到别的候选上。

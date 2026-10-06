@@ -63,7 +63,7 @@ export function modelEditor(id=''){
 
 // 使用某模型的路由列表
 export function routesUsing(id){
-  return state.config.routes.filter(r=>r.candidates.some(c=>c.model_id===id));
+  return state.config.routes.filter(r=>r.groups.some(g=>g.candidates.some(c=>c.model_id===id)));
 }
 
 // 模型是否满足给定的筛选条件；modelMatches 是它固定用 state.modelFilters 的特例

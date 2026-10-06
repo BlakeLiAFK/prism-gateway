@@ -61,7 +61,7 @@ func TestFreeModelsAutoMaintain(t *testing.T) {
 	c := h.s.Config()
 	route, _ := c.route("lite")
 	order := []string{}
-	for _, cd := range route.Candidates {
+	for _, cd := range route.all() {
 		order = append(order, cd.ModelID)
 	}
 	// 新加入的排在末尾，按上线时间新的在前：new-b(400) > new-a(300) > lib(200)

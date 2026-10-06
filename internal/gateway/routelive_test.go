@@ -74,7 +74,7 @@ func TestRouteLive(t *testing.T) {
 		t.Error("5 秒内应返回缓存结果")
 	}
 	// 暂停 b 后路由容量只剩 a 的 3
-	h.change(t, func(c *Config) { c.Routes[0].Candidates[1].Disabled = true })
+	h.change(t, func(c *Config) { c.Routes[0].Groups[0].Candidates[1].Disabled = true })
 	liveMu.Lock()
 	delete(liveCache, h.a)
 	liveMu.Unlock()

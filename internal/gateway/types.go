@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.36.0"
+const Version = "1.37.0"
 
 type Object = map[string]any
 
@@ -74,18 +74,20 @@ type Candidate struct {
 	Weight  int    `json:"weight"`
 	// Disabled 只在当前路由里暂停这个候选：位置与权重保留，会话亲和也不再命中它
 	Disabled bool `json:"disabled,omitempty"`
-	// Fallback 候选不参与平时的分配：只在主候选全部被淘汰、冷却或上游失败后才轮到它，
-	// 也不写会话亲和，下一轮仍先回到主候选
+	// Fallback 是 1.36.0 的兜底标记，已被分组取代：只用于读取旧配置，规范化时把它拆到第 2 组并清除
 	Fallback bool `json:"fallback,omitempty"`
 }
 type Route struct {
-	ID          string      `json:"id"`
-	Name        string      `json:"name"`
-	Strategy    string      `json:"strategy"`
-	Enabled     bool        `json:"enabled"`
-	Affinity    bool        `json:"affinity"`
-	Candidates  []Candidate `json:"candidates"`
-	Description string      `json:"description"`
+	ID          string  `json:"id"`
+	Name        string  `json:"name"`
+	Enabled     bool    `json:"enabled"`
+	Groups      []Group `json:"groups"`
+	Description string  `json:"description"`
+	// Strategy / Affinity / Candidates 是 1.36.0 及以前的单组字段，只用于读取旧配置与旧客户端；
+	// 规范化（groups.go normalize）之后清空，不再输出
+	Strategy   string      `json:"strategy,omitempty"`
+	Affinity   bool        `json:"affinity,omitempty"`
+	Candidates []Candidate `json:"candidates,omitempty"`
 	// Sort 决定路由在管理界面里的先后。按 ID 排出来的是字母序，
 	// 与 lite / auto / pro / max 这种能力梯度无关，只能显式存。
 	Sort int `json:"sort"`
@@ -312,18 +314,8 @@ func (c Config) Validate() error {
 			return errors.New("路由 ID 无效或重复")
 		}
 		names[r.ID] = true
-		if !routeStrategies[r.Strategy] {
-			return errors.New("路由策略仅支持 priority / balanced / weighted / latency / cost / least_busy")
-		}
-		seen := map[string]bool{}
-		for _, x := range r.Candidates {
-			if _, ok := c.model(x.ModelID); !ok || seen[x.ModelID] {
-				return errors.New("路由模型不存在或重复")
-			}
-			seen[x.ModelID] = true
-			if x.Weight < 1 || x.Weight > 1000 {
-				return errors.New("路由权重必须介于 1 和 1000")
-			}
+		if e := r.validateGroups(c); e != nil {
+			return e
 		}
 	}
 	for _, a := range c.Aliases {

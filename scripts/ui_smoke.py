@@ -469,34 +469,57 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     page.locator('.candidate [data-action="toggle-candidate"]').first.click()
     page.wait_for_timeout(800)
 
-    # 兜底候选：编辑器里勾选、保存后画布出现标记、重开编辑器仍勾选，再取消恢复原状
-    tick_fallback = """on => {
+    # 路由分组：编辑器里添加一组、把候选放进第 2 组；保存后画布分两节，重载仍是两节；删掉一组后回到单节
+    visible_groups = "[...document.querySelectorAll('.route-group')].filter(g => g.offsetParent !== null).length"
+    page.locator('[data-action="edit-route"]').first.click()
+    page.wait_for_selector('dialog #group-table')
+    page.click('#group-add')
+    if page.locator('#group-table .group-row').count() != 2:
+        fail('添加一组后组表应有 2 行')
+    shown = page.evaluate("[...document.querySelectorAll('.candidate-row .group-select')].filter(s => s.offsetParent !== null).length")
+    if shown == 0:
+        fail('有多个组时，候选行的「所属组」下拉必须可见')
+    moved = page.evaluate("""() => {
         const row = [...document.querySelectorAll('.candidate-row')].find(r => r.querySelector('input[name=candidate]').checked);
-        const box = row?.querySelector('[data-fallback]');
-        if (!box) return null;
-        box.checked = on;
-        return box.dataset.fallback;
-    }"""
-    page.locator('[data-action="edit-route"]').first.click()
-    page.wait_for_selector('dialog button[type="submit"]')
-    fallback_id = page.evaluate(tick_fallback, True)
-    if not fallback_id:
-        fail('路由编辑器的候选行缺少「兜底」勾选框')
+        const sel = row.querySelector('.group-select');
+        sel.value = sel.options[1].value;
+        return row.querySelector('input[name=candidate]').value;
+    }""")
+    if artifacts:
+        page.locator('dialog').screenshot(path=str(artifacts / 'route-editor-groups.png'))
     page.locator('dialog button[type="submit"]').click()
-    page.wait_for_timeout(800)
-    marked = page.evaluate("id => [...document.querySelectorAll('.candidate')].some(c => c.querySelector('small .mono')?.textContent === id && c.innerText.includes('兜底'))", fallback_id)
-    if not marked:
-        fail(f'保存兜底候选后画布上没有「兜底」标记: {fallback_id}')
+    page.wait_for_timeout(900)
+    if page.evaluate(visible_groups) != 2:
+        fail('保存两组路由后，画布上应能看到两节')
+    in_second = page.evaluate("id => [...document.querySelectorAll('.route-group')][1]?.innerText.includes(id)", moved)
+    head_visible = page.evaluate("[...document.querySelectorAll('.route-group-head')].filter(h => h.offsetParent !== null).length")
+    if not in_second or head_visible != 2:
+        fail(f'候选应出现在第 2 节，且两节都有可见的组头: in_second={in_second} heads={head_visible}')
+    if artifacts:
+        page.locator('.route-canvas').screenshot(path=str(artifacts / 'route-groups.png'))
+    page.reload(wait_until='networkidle')
+    page.click('.nav-item[data-nav="routes"]')
+    page.wait_for_timeout(600)
+    if page.evaluate(visible_groups) != 2:
+        fail('重载后两组路由应仍是两节')
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(250)
+    overflow = page.evaluate("document.documentElement.scrollWidth > window.innerWidth + 1")
+    if overflow:
+        fail('390px 下分组画布不应出现横向滚动')
+    page.set_viewport_size({'width': 1280, 'height': 900})
+    page.wait_for_timeout(250)
     page.locator('[data-action="edit-route"]').first.click()
-    page.wait_for_selector('dialog button[type="submit"]')
-    if not page.evaluate("id => document.querySelector(`[data-fallback=\"${id}\"]`)?.checked", fallback_id):
-        fail('重开编辑器后兜底勾选丢失')
-    page.evaluate(tick_fallback, False)
+    page.wait_for_selector('dialog #group-table')
+    page.locator('#group-table .group-row').last.locator('[data-grp="del"]').click()
+    if page.locator('#group-table .group-row').count() != 1:
+        fail('删除后组表应剩 1 行')
     page.locator('dialog button[type="submit"]').click()
-    page.wait_for_timeout(800)
-    if page.evaluate("[...document.querySelectorAll('.candidate')].some(c => c.innerText.includes('兜底'))"):
-        fail('取消兜底后画布仍有「兜底」标记')
-    results.append('route fallback candidate toggle')
+    page.wait_for_timeout(900)
+    single = page.evaluate("[...document.querySelectorAll('.route-group-head')].filter(h => h.offsetParent !== null).length")
+    if page.evaluate(visible_groups) != 1 or single != 0:
+        fail('删到只剩一组后，画布应回到不带组头的单节')
+    results.append('route groups add move reload delete')
     if page.evaluate(paused) != 'true':
         fail('再次点击开关应恢复候选')
     results.append('route candidate pause toggle')

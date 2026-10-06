@@ -92,10 +92,11 @@ func TestFallbackCandidateOnlyAfterPrimaryFails(t *testing.T) {
 	if w.Header().Get("X-Prism-Model") != "safe" || fallbackHits.Load() != 1 {
 		t.Fatalf("主候选限流后应由兜底接手: %s", w.Header().Get("X-Prism-Model"))
 	}
-	rows, _ := h.s.DB.Query("SELECT model_id FROM sessions")
+	// 旧的 fallback 标记迁成第 2 组：第 1 组的会话键不能绑到兜底模型，第 2 组的键（:g1）可以
+	rows, _ := h.s.DB.Query("SELECT id, model_id FROM sessions")
 	for _, r := range rows {
-		if r.String("model_id") == "safe" {
-			t.Fatal("会话不该绑定到兜底候选")
+		if r.String("model_id") == "safe" && !strings.HasSuffix(r.String("id"), ":g1") {
+			t.Fatalf("第 1 组的会话键不该绑到兜底模型: %s", r.String("id"))
 		}
 	}
 }

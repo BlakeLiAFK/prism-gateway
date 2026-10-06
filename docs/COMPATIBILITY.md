@@ -135,7 +135,7 @@ Claude Code 用 Read 读 PDF 之后，历史里会带一个 `document` 块（在
 
 请求返回 400 `NO_COMPATIBLE_MODEL`，错误信息逐个列出淘汰原因，并保留英文字段名：Claude Code 在第三方端点上
 收到含 `safeguards` 一词的 400 后，本次对话不再发送该字段，改为向用户询问权限；这个契约有回归测试保护。
-路由里可以放一个带 `fallback` 标记的原生候选接住这类请求，见 API.md 的路由说明。同时：
+路由里可以把一个原生 Anthropic 模型放在后面的组接住这类请求，见 API.md 的路由说明。同时：
 
 - 请求记录里留一条 `error_code=NO_COMPATIBLE_MODEL`、`usage_mode=incompatible` 的记录，
   原因写在「选择原因」里（最长 500 字符）。它没有到达任何模型，不计入用量汇总。

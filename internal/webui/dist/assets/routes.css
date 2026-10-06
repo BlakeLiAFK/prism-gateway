@@ -31,6 +31,21 @@
 .sim-out{font-size:11px;color:var(--warn);background:var(--warn-bg);border-radius:7px;padding:8px 10px;margin:7px 0}
 .sim-out b{color:inherit}
 
+/* 路由分组：画布按组分节，编辑器里的组表与候选所属组下拉。只有一组时不画框，与分组之前的画布一致 */
+.route-group{display:grid;gap:10px;padding:12px;border:1px dashed var(--line);border-radius:12px;background:#ffffff40}
+.route-group:only-child{padding:0;border:0;background:none}
+.route-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
+.route-group-list{display:grid;gap:10px}
+.group-link{text-align:center;font-size:10px;color:var(--muted);padding:4px 0}
+.group-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid var(--line2)}
+.group-row:last-of-type{border-bottom:0}
+.group-row .group-name{flex:1 1 130px;min-width:110px}
+.group-row .group-strategy{flex:2 1 220px;min-width:160px;width:auto}
+.group-ops{display:flex;gap:2px;margin-left:auto}
+.group-select{width:auto;max-width:150px;flex:none}
+.group-select[hidden]{display:none}
+#group-add{margin-top:10px}
+
 @media(max-width:1180px){
   /* 指标太多，一行放不下就折到两行 */
   .live-grid{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:12px}

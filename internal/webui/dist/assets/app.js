@@ -200,14 +200,15 @@ async function reorderList(kind,from,to){
 
  let from=-1;
 
- let fromKind="";
-  $$('[data-drag-index]').forEach(el=>{el.addEventListener('dragstart',ev=>{from=Number(el.dataset.dragIndex);fromKind=el.dataset.dragKind;ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(from));el.classList.add('dragging');});el.addEventListener('dragend',()=>el.classList.remove('dragging'));el.addEventListener('dragover',ev=>{if(el.dataset.dragKind!==fromKind)return;ev.preventDefault();ev.dataTransfer.dropEffect='move';});el.addEventListener('drop',async ev=>{
+ let fromKind="";let fromGroup="";
+  $$('[data-drag-index]').forEach(el=>{el.addEventListener('dragstart',ev=>{from=Number(el.dataset.dragIndex);fromKind=el.dataset.dragKind;fromGroup=el.dataset.group||'';ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(from));el.classList.add('dragging');});el.addEventListener('dragend',()=>el.classList.remove('dragging'));el.addEventListener('dragover',ev=>{if(el.dataset.dragKind!==fromKind||(el.dataset.group||'')!==fromGroup)return;ev.preventDefault();ev.dataTransfer.dropEffect='move';});el.addEventListener('drop',async ev=>{
     // 路由和候选是两份列表，跨着拖没有意义，直接忽略
-    if(el.dataset.dragKind!==fromKind)return;
+    // 候选只能在本组内拖动：换组在编辑器里选，拖拽不跨组
+    if(el.dataset.dragKind!==fromKind||(el.dataset.group||'')!==fromGroup)return;
     ev.preventDefault();
     const to=Number(el.dataset.dragIndex);
     if(fromKind==='route'||fromKind==='provider')await reorderList(fromKind,from,to);
-    else moveCandidate(from,to);
+    else moveCandidate(Number(el.dataset.group),from,to);
   });});
 
 }
@@ -413,22 +414,22 @@ export async function handleAction(el){
     renderPage(false);
     break;
 
- case 'candidate-up':moveCandidate(Number(el.dataset.index),Number(el.dataset.index)-1);
+ case 'candidate-up':moveCandidate(Number(el.dataset.group),Number(el.dataset.index),Number(el.dataset.index)-1);
     break;
 
- case 'candidate-down':moveCandidate(Number(el.dataset.index),Number(el.dataset.index)+1);
+ case 'candidate-down':moveCandidate(Number(el.dataset.group),Number(el.dataset.index),Number(el.dataset.index)+1);
     break;
 
  case 'toggle-candidate':{
       // 在画布当前顺序上翻转；有未应用的排序时一并保存，不让拖好的顺序丢失
       const r=state.config.routes.find(x=>x.id===state.routeID);
-      const candidates=(state.routeDraft||r.candidates).map(x=>x.model_id===id?{...x,disabled:!x.disabled}:x);
-      await save('route.save',{id:state.routeID,route:{candidates}});
+      const groups=structuredClone(state.routeDraft||r.groups).map(g=>({...g,candidates:g.candidates.map(x=>x.model_id===id?{...x,disabled:!x.disabled}:x)}));
+      await save('route.save',{id:state.routeID,route:{groups}});
       break;
 
     }
 
- case 'save-route-order':await save('route.save',{id:state.routeID,route:{candidates:state.routeDraft}});
+ case 'save-route-order':await save('route.save',{id:state.routeID,route:{groups:state.routeDraft}});
     break;
 
  case 'play-protocol':preservePlayground();

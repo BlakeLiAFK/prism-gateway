@@ -99,7 +99,7 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 	// 只列被路由引用过的模型：孤立的模型没有候选关系，在面板上没有位置
 	used, seen := []string{}, map[string]bool{}
 	for _, rt := range c.Routes {
-		for _, cm := range rt.Candidates {
+		for _, cm := range rt.all() {
 			if _, ok := c.model(cm.ModelID); ok && !seen[cm.ModelID] {
 				seen[cm.ModelID] = true
 				used = append(used, cm.ModelID)
@@ -161,7 +161,7 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 		var active, capacity, sess int64
 		var weighted, weights, live float64
 		seen := map[string]bool{}
-		for _, cm := range rt.Candidates {
+		for _, cm := range rt.all() {
 			m, ok := c.model(cm.ModelID)
 			if !ok || cm.Disabled || seen[cm.ModelID] {
 				continue

@@ -3,6 +3,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -168,6 +169,12 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			defer func() {
 				r := e.finish(s, att, session, key.ID, u, status, runErr, start)
 				e.noteDone(s, requested, r, u, start)
+				// 落到后面的组意味着前面的组都挂了、可能正在用更贵的模型：按路由限频推一次告警。
+				// 只在前面的组确实被试过时才告警：前面的组被管理员暂停或停用、为空，或本来就接不了这类请求
+				// （如 auto 权限模式的分类器请求）时，候选根本没进入 selections，落到后面的组是预期行为，不是故障
+				if s.Group > selections[0].Group && s.RouteID != "" && r.state == "success" && e.OnAlert != nil {
+					go e.OnAlert("route", "route-group:"+s.RouteID, fmt.Sprintf("路由 %s 已落到第 %d 组「%s」（模型 %s）：前面的组全部不可用，或都接不了这次请求。", s.RouteID, s.Group+1, s.GroupName, cmp.Or(s.Model.Name, s.Model.ID)))
+				}
 			}()
 			w.Header().Set("X-Prism-Model", s.Model.ID)
 			w.Header().Set("X-Prism-Provider", s.Provider.ID)

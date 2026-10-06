@@ -166,17 +166,24 @@ curl http://127.0.0.1:8080/api.json \
     "route":{
       "id":"auto-coding",
       "name":"Coding pool",
-      "strategy":"priority",
       "enabled":true,
-      "affinity":true,
-      "candidates":[{"model_id":"my-coder","weight":10},{"model_id":"my-safe","weight":10,"fallback":true}],
-      "description":"My internal coding route"
+      "description":"My internal coding route",
+      "groups":[
+        {"name":"日常","strategy":"weighted","affinity":true,
+         "candidates":[{"model_id":"my-coder","weight":10},{"model_id":"my-coder-b","weight":10}]},
+        {"name":"兜底","strategy":"priority","affinity":true,
+         "candidates":[{"model_id":"my-claude","weight":10}]}
+      ]
     }
   }
 }
 ```
 
-`strategy` 决定候选的尝试顺序：
+路由由 1 到 5 个**组**按顺序组成。请求先在第 1 组按该组的 `strategy` 选候选；本组全部被淘汰、冷却、并发已满或上游失败，
+或都接不了这次请求时，才轮到第 2 组，依此类推。每组有自己的 `strategy` 与 `affinity`。同一个模型只能出现在一个组里；
+组内可以没有候选（新建路由、免费模型路由本来就允许）。`candidates[].disabled:true` 暂停候选。
+
+`strategy` 决定一个组内候选的尝试顺序：
 
 | 取值 | 规则 |
 | --- | --- |
@@ -187,17 +194,28 @@ curl http://127.0.0.1:8080/api.json \
 | `cost` | 按 `input_price + output_price` 升序，`pricing_set=false` 的排最后 |
 | `least_busy` | 按当前并发 / 并发上限升序 |
 
-所有策略共用三条规则：会话亲和的模型排最前；冷却中、并发已满或本地 RPM 已满的候选排最后（不剔除）；原生协议在同分时优先。
+所有策略共用三条规则：本组会话亲和的模型排最前；冷却中、并发已满或本地 RPM 已满的候选排本组最后（不剔除）；原生协议在同分时优先。
+后一组的所有候选一律排在前一组之后。
 
-候选可带 `fallback:true`（兜底）：不参与平时分配，排在所有主候选之后，只在主候选全部被淘汰、冷却或上游失败后接手；成功后不写会话亲和。`disabled:true` 暂停候选，两者可同时设置。
-
-同一请求内换候选的条件：上游 429 / 503 / 529（按 Retry-After 冷却）、402 / 403 / 404（冷却 15 分钟）、400（请求被明确拒绝，不冷却）、200 但正文为空，以及流的第一个事件为过载或限流错误。上游 5xx、连接失败、超时与其他首事件错误不换候选：状态码与错误原话（脱敏）原样返回，该候选冷却 30 秒，客户端重试时会落到别处。全部候选都被准入拒绝时返回 429，`Retry-After` 为最短剩余冷却；剩余超过 60 秒附 `x-should-retry: false`。
-
-会话亲和的键是「网关 Key + 客户端会话头」。Claude Code 的子代理与主线程共用 `X-Claude-Code-Session-Id`，
-网关会再拼上 `x-claude-code-agent-id`，让每个子代理单独亲和。故障切换成功后，如果原绑定模型仍是合格候选、
+**会话亲和按组记**：键是「网关 Key + 客户端会话头」加组序号，第 1 组的键与分组之前相同，升级前的会话绑定不受影响。
+落到第 2 组并成功时只写第 2 组的绑定，第 1 组的绑定不动：第 1 组恢复后下一次请求回到它原来的模型；同一会话连续落在第 2 组时，
+第 2 组的亲和让它一直用同一个模型（缓存与上下文一致）。Claude Code 的子代理与主线程共用 `X-Claude-Code-Session-Id`，
+网关会再拼上 `x-claude-code-agent-id`，让每个子代理单独亲和。故障切换成功后，如果本组原绑定模型仍是合格候选、
 且冷却剩余不超过 5 分钟，绑定保持不变，冷却结束后回到原模型；否则改绑到本次成功的模型。
 请求记录的 `agent_role` 列保存 Claude Code 声明的角色（如 `subagent:Explore`）；
 客户端设置 `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` 后才会发送类别与类型，否则子代理只记为 `subagent`。
+
+请求落到第 2 组及以后时，按路由推送一次 `route` 告警（30 分钟限频，键 `route-group:<路由 ID>`），因为那通常意味着前面的组都挂了、
+正在用更贵的模型。前面的组被暂停、停用、为空，或本来就接不了这类请求（如 Claude Code auto 权限模式的分类器请求）时不告警：那是预期行为，不是故障。`route.test` 的结果按组序列出候选并带上 `group`。
+
+同一请求内换候选的条件：上游 429 / 503 / 529（按 Retry-After 冷却）、402 / 403 / 404（冷却 15 分钟）、400（请求被明确拒绝，不冷却）、
+200 但正文为空，以及流的第一个事件为过载或限流错误。上游 5xx、连接失败、超时与其他首事件错误不换候选：状态码与错误原话（脱敏）原样返回，
+该候选冷却 30 秒，客户端重试时会落到别处。全部候选都被准入拒绝时返回 429，`Retry-After` 为最短剩余冷却；剩余超过 60 秒附 `x-should-retry: false`。
+
+**旧格式兼容**：1.36.0 及以前的路由是单组，字段 `strategy` / `affinity` / `candidates` 直接在路由上，候选可带 `fallback:true`。
+加载旧配置、`config.import` 和 `route.save` 都会自动规范化：单组路由变成一个「主」组，`fallback` 候选拆成第 2 组「兜底」（`priority`、亲和开）。
+旧客户端仍可用旧字段保存只有一组的路由（落到第 1 组）；路由已有多组时旧字段会被拒绝（400 `此路由已分组`），因为它没法表达改哪一组。
+`groups` 与旧字段不能出现在同一个请求里。输出只有 `groups`。**升级到 1.37.0 之后不要回滚到更早的版本**：旧版本不认识 `groups`，路由会变成没有候选；必须回滚时先从备份恢复配置。
 
 `route.save` 可带 `enable_models:true`：在同一事务里启用所有候选模型。
 

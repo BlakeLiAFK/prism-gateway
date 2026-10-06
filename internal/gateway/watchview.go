@@ -48,14 +48,14 @@ func (a *App) dashView(o watchOpts, zone *time.Location, expires int64) (dashVie
 }
 
 func dashRouteOf(c Config, rt Route, rv, models Object, t int64) dashRoute {
-	r := dashRoute{ID: rt.ID, Strategy: rt.Strategy, RPM: int64(num(rv, "rpm")), Active: int64(num(rv, "active")), Capacity: int64(num(rv, "capacity"))}
+	r := dashRoute{ID: rt.ID, Strategy: rt.primaryStrategy(), RPM: int64(num(rv, "rpm")), Active: int64(num(rv, "active")), Capacity: int64(num(rv, "capacity"))}
 	var total float64
-	for _, cm := range rt.Candidates {
+	for _, cm := range rt.all() {
 		if !cm.Disabled {
 			total += num(obj(models[cm.ModelID]), "requests_5m")
 		}
 	}
-	for _, cm := range rt.Candidates {
+	for _, cm := range rt.all() {
 		m, ok := c.model(cm.ModelID)
 		mv := obj(models[cm.ModelID])
 		d := dashCand{Name: cm.ModelID, Paused: cm.Disabled, Disabled: !ok || !m.Enabled, Requests5m: int64(num(mv, "requests_5m")),

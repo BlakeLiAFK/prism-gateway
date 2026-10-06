@@ -176,8 +176,7 @@ func settle(s selection, u Usage, status int, err error) settled {
 func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status int, err error, start int64) settled {
 	r := settle(s, u, status, err)
 	t := now()
-	// 兜底候选是临时顶班，不记亲和：下一轮仍先回到主候选
-	writeSession := session != "" && r.state == "success" && !s.Fallback
+	writeSession := session != "" && r.state == "success"
 	e.mu.Lock()
 	h := e.state(s.Model.ID)
 	h.Active = max(0, h.Active-1)
@@ -205,7 +204,7 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 				// 原模型只是临时故障：保留绑定、只续期，冷却结束后回到原模型
 				q = `INSERT INTO sessions VALUES (?,?,?,?,?,1) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at,requests=sessions.requests+1`
 			}
-			if err := tx.Exec(q, session, keyID, s.Model.ID, s.Provider.ID, t); err != nil {
+			if err := tx.Exec(q, sessionKey(session, s.Group), keyID, s.Model.ID, s.Provider.ID, t); err != nil {
 				soft = append(soft, fmt.Errorf("session affinity: %w", err))
 			}
 		}

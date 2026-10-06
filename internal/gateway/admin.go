@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"prism-gateway/internal/sqlite"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -121,18 +122,29 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			return nil
 		})
 	case "route.save":
-		v := Route{ID: id, Enabled: true, Strategy: "priority", Affinity: true, Candidates: []Candidate{}}
+		v := Route{ID: id, Enabled: true, Groups: []Group{{Name: "主", Strategy: "priority", Affinity: true, Candidates: []Candidate{}}}}
 		if old, ok := c.route(id); ok {
 			v = old
 		}
-		if er := decode(p["route"], &v); er != nil {
+		rp, legacy := splitLegacy(obj(p["route"]))
+		if _, ok := rp["groups"]; ok {
+			// 整体替换：不能在旧组的元素上叠加解码，缺省字段会残留旧值
+			v.Groups = nil
+		}
+		if er := decode(rp, &v); er != nil {
+			return nil, fail("INVALID_PARAMS", er.Error(), 400)
+		}
+		if er := v.applyLegacy(legacy); er != nil {
+			return nil, er
+		}
+		if er := v.normalize(); er != nil {
 			return nil, fail("INVALID_PARAMS", er.Error(), 400)
 		}
 		// 显式要求时顺带启用候选模型：加进路由就是要用它，与路由在同一事务里生效
 		enable := boolean(p, "enable_models")
 		return a.Store.Change(version, action, v.ID, func(c *Config) error {
 			if enable {
-				enableModels(c, v.Candidates)
+				enableModels(c, v.all())
 			}
 			for i, x := range c.Routes {
 				if x.ID == v.ID {
@@ -266,11 +278,14 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		}
 		ranked := []any{}
 		for _, s := range ss {
-			ranked = append(ranked, Object{"model_id": s.Model.ID, "score": s.Score, "reason": s.Reason, "protocol": s.Model.Protocol})
+			ranked = append(ranked, Object{"model_id": s.Model.ID, "score": s.Score, "reason": s.Reason, "protocol": s.Model.Protocol, "group": s.GroupName})
 		}
 		note := "静态协议/配置模拟，不发起模型请求。实际调用仍须通过实时额度、冷却与并发检查。"
-		if r, ok := c.route(id); ok && r.Strategy == "weighted" {
+		if r, ok := c.route(id); ok && slices.ContainsFunc(r.Groups, func(g Group) bool { return g.Strategy == "weighted" }) {
 			note += "按权重分流每次抽签，排序会变化。"
+		}
+		if r, ok := c.route(id); ok && len(r.Groups) > 1 {
+			note += "候选按组序排列：后一组只在前一组全部不可用或都接不了这次请求时才会被用到。"
 		}
 		return Object{"ranked": ranked, "checks": reasons, "note": note}, nil
 	case "provider.test":
