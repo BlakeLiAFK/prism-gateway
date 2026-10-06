@@ -366,6 +366,7 @@ func TestStreamFailureThroughHandler(t *testing.T) {
 	tests := []struct {
 		name, source string
 	}{
+		// 首个事件就是错误：还没向客户端提交 200，按普通上游失败回 JSON 错误并透传原话
 		{"upstream error", "data: {\"error\":{\"message\":\"failed\"}}\n\n"},
 		{"unexpected EOF", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n"},
 		{"empty output", "data: [DONE]\n\n"},
@@ -382,6 +383,13 @@ func TestStreamFailureThroughHandler(t *testing.T) {
 			body := requestFixture("chat", "m")
 			body["stream"] = true
 			w := h.generate(t, "chat", body)
+			if tc.name == "upstream error" {
+				requireStatus(t, w, 502)
+				if !strings.Contains(w.Body.String(), `"failed"`) || strings.Contains(w.Body.String(), "data:") {
+					t.Fatalf("首事件错误应以 JSON 错误透传原话: %s", w.Body.String())
+				}
+				return
+			}
 			if !strings.Contains(w.Body.String(), "upstream_stream_error") {
 				t.Fatalf("流失败未发送错误帧: %s", w.Body.String())
 			}

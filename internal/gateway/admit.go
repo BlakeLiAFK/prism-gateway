@@ -17,7 +17,11 @@ func (e *Engine) gate(h *health, s selection, t int64) (rerr error) {
 	// 准入被拒计入内存，路由实时面板据此回答「是不是被并发 / 冷却挡住了」
 	defer func() { h.reject(rerr, t) }()
 	if h.Cooldown > t {
-		return fail("UPSTREAM_COOLDOWN", "上游限流冷却中", 429)
+		why := h.CoolWhy
+		if why == "" {
+			why = "上游限流"
+		}
+		return fail("UPSTREAM_COOLDOWN", fmt.Sprintf("候选冷却中：%s，%d 秒后恢复", why, max(1, (h.Cooldown-t+999)/1000)), 429)
 	}
 	if e.global >= e.store.Config().Settings.GlobalConcurrency || h.Active >= s.Model.Concurrency {
 		return fail("CONCURRENCY_LIMIT", "并发已满，请稍后重试", 429)
@@ -172,7 +176,8 @@ func settle(s selection, u Usage, status int, err error) settled {
 func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status int, err error, start int64) settled {
 	r := settle(s, u, status, err)
 	t := now()
-	writeSession := session != "" && r.state == "success"
+	// 兜底候选是临时顶班，不记亲和：下一轮仍先回到主候选
+	writeSession := session != "" && r.state == "success" && !s.Fallback
 	e.mu.Lock()
 	h := e.state(s.Model.ID)
 	h.Active = max(0, h.Active-1)

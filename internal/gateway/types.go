@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.35.2"
+const Version = "1.36.0"
 
 type Object = map[string]any
 
@@ -74,6 +74,9 @@ type Candidate struct {
 	Weight  int    `json:"weight"`
 	// Disabled 只在当前路由里暂停这个候选：位置与权重保留，会话亲和也不再命中它
 	Disabled bool `json:"disabled,omitempty"`
+	// Fallback 候选不参与平时的分配：只在主候选全部被淘汰、冷却或上游失败后才轮到它，
+	// 也不写会话亲和，下一轮仍先回到主候选
+	Fallback bool `json:"fallback,omitempty"`
 }
 type Route struct {
 	ID          string      `json:"id"`

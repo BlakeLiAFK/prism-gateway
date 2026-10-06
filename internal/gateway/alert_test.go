@@ -20,7 +20,8 @@ func TestAlertDelivery(t *testing.T) {
 		mu.Unlock()
 	}))
 	defer hook.Close()
-	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) }))
+	// 5xx 会让候选冷却 30 秒，之后的请求在准入处被拒、不计连续失败；400 不冷却，能连着失败
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(400) }))
 	defer up.Close()
 	h := newHarness(t)
 	m := modelFixture("m", "chat")

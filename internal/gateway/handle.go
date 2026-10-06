@@ -34,23 +34,15 @@ func pathFor(p string) string {
 
 func protocolError(w http.ResponseWriter, p string, status int, code, message, id string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Request-ID", id)
-	if status == 429 {
+	setRequestID(w.Header(), id)
+	if status == 429 && w.Header().Get("Retry-After") == "" {
 		w.Header().Set("Retry-After", "30")
 	}
 	w.WriteHeader(status)
 	if p == "messages" {
-		typ := "invalid_request_error"
-		if status == 401 {
-			typ = "authentication_error"
-		} else if status == 429 {
-			typ = "rate_limit_error"
-		} else if status >= 500 {
-			typ = "api_error"
-		}
-		json.NewEncoder(w).Encode(Object{"type": "error", "error": Object{"type": typ, "message": message}, "request_id": id})
+		writeJSON(w, Object{"type": "error", "error": Object{"type": messagesErrorType(status), "message": message}, "request_id": id})
 	} else {
-		json.NewEncoder(w).Encode(Object{"error": Object{"type": code, "code": code, "message": message, "param": nil}, "request_id": id})
+		writeJSON(w, Object{"error": Object{"type": code, "code": code, "message": message, "param": nil}, "request_id": id})
 	}
 }
 
@@ -70,7 +62,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 	}
 	from := clientOf(r)
 	id := randomID("req_")
-	w.Header().Set("X-Request-ID", id)
+	setRequestID(w.Header(), id)
 	c := e.store.Config()
 	r.Body = http.MaxBytesReader(w, r.Body, int64(c.Settings.MaxBodyMB)<<20)
 	b, err := io.ReadAll(r.Body)
@@ -263,6 +255,9 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				status = 502
 				if r.Context().Err() != nil {
 					status = 499
+				} else {
+					// 连不上或超时：一个字节都没收到，短冷却让客户端的重试落到别的候选
+					e.cooldownFor(s.Model.ID, failureCooldown)
 				}
 				return
 			}
@@ -270,17 +265,10 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			status = res.StatusCode
 			if status < 200 || status >= 300 {
 				body, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
-				runErr = &upstreamStatusError{Status: status, Detail: upstreamErrorSummary(body)}
+				runErr = newUpstreamStatusError(status, body)
 				// 被拒的响应往往才带着 Retry-After 和剩余额度，这里同样要留存
 				e.recordLimits(s.Model.ID, res.Header)
-				if retryable(status) {
-					e.cooldown(s.Model.ID, res.Header.Get("Retry-After"))
-					if status == 429 && e.OnRateLimited != nil {
-						go e.OnRateLimited(s.Provider)
-					}
-				} else if exhausted(status) {
-					e.cooldownFor(s.Model.ID, exhaustedCooldown)
-				}
+				e.coolAfterFailure(s.Model.ID, s.Provider, status, res.Header.Get("Retry-After"))
 				return
 			}
 			e.recordTTFB(s.Model.ID, now()-start)
@@ -296,6 +284,19 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 					runErr = errors.New("expected SSE content type")
 					return
 				}
+				// 先读到第一个事件再向客户端提交 200：上游「200 之后立刻报错」在这里还能当成普通失败处理
+				var upstream io.Reader
+				if upstream, runErr = peekSSE(res.Body, s.Model.Protocol); runErr != nil {
+					var ue *upstreamStatusError
+					if errors.As(runErr, &ue) {
+						status = ue.Status
+						e.coolAfterFailure(s.Model.ID, s.Provider, status, "")
+					} else {
+						status = 502
+						e.cooldownFor(s.Model.ID, failureCooldown)
+					}
+					return
+				}
 				if s.Cross && s.Model.DropReasoning {
 					// 流式没法等到发现推理内容再补响应头，所以开关开启时先声明：
 					// 本次跨协议响应会丢弃推理内容（如果上游返回了的话）
@@ -306,9 +307,9 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				w.Header().Set("X-Accel-Buffering", "no")
 				w.WriteHeader(200)
 				if s.Cross {
-					runErr = convertedStream(w, res.Body, s.Model.Protocol, p, s.Model.ID, id, &u, s.Model.DropReasoning)
+					runErr = convertedStream(w, upstream, s.Model.Protocol, p, s.Model.ID, id, &u, s.Model.DropReasoning)
 				} else {
-					runErr = nativeStream(w, res.Body, p, &u)
+					runErr = nativeStream(w, upstream, p, &u)
 				}
 				if runErr != nil {
 					status = 502
@@ -390,25 +391,40 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			lastErr = fail("EMPTY_OUTPUT", "候选模型没有返回任何可用内容，已尝试可用候选", 502)
 			continue
 		}
+		var ue *upstreamStatusError
+		if errors.As(runErr, &ue) && ue.Status == 400 && safeFallback {
+			// 上游明确拒绝了请求、没有生成任何内容，是确定性失败：换下一个候选是安全的。
+			// 全部候选都拒绝时，把最后一个上游的原话交给客户端——Claude Code 会从中识别不支持的字段并自行调整
+			lastErr = ue
+			continue
+		}
 		if status == 499 {
 			return
 		}
-		outStatus := status
-		if outStatus < 400 || outStatus >= 500 {
-			outStatus = 502
-		}
-		// 网关自己构造的错误带着准确的原因，不要被笼统的「上游请求失败」盖掉。
-		// 上游返回的错误正文仍然不转发。
+		// 网关自己构造的错误带着准确的原因，不要被笼统的「上游请求失败」盖掉
 		var detailed *APIError
 		if errors.As(runErr, &detailed) {
 			protocolError(w, p, detailed.Status, detailed.Code, detailed.Message, id)
 			return
 		}
-		protocolError(w, p, outStatus, "UPSTREAM_ERROR", fmt.Sprintf("上游请求失败（HTTP %d）；请求未被自动重放。", status), id)
+		if ue != nil {
+			upstreamErrorResponse(w, p, ue, id)
+			return
+		}
+		protocolError(w, p, 502, "UPSTREAM_ERROR", fmt.Sprintf("上游请求失败（HTTP %d）；请求未被自动重放。", status), id)
 		return
 	}
 	if !admitted && len(selections) > 0 {
 		e.recordRejected(selections[0], key, id, requested, p, session, from, lastErr)
+	}
+	// 所有候选都在同一请求里被上游拒绝（400 换候选用尽）：交出最后一个上游的原话
+	var ue *upstreamStatusError
+	if errors.As(lastErr, &ue) {
+		upstreamErrorResponse(w, p, ue, id)
+		return
+	}
+	if !admitted {
+		e.retryHints(w.Header(), selections, lastErr)
 	}
 	status, code, msg := errorParts(lastErr)
 	// 路由的全部候选都因容量或上游问题失败时告警；空回答这类请求本身的问题不算。

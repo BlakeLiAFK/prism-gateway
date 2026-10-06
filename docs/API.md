@@ -169,7 +169,7 @@ curl http://127.0.0.1:8080/api.json \
       "strategy":"priority",
       "enabled":true,
       "affinity":true,
-      "candidates":[{"model_id":"my-coder","weight":10}],
+      "candidates":[{"model_id":"my-coder","weight":10},{"model_id":"my-safe","weight":10,"fallback":true}],
       "description":"My internal coding route"
     }
   }
@@ -188,6 +188,10 @@ curl http://127.0.0.1:8080/api.json \
 | `least_busy` | 按当前并发 / 并发上限升序 |
 
 所有策略共用三条规则：会话亲和的模型排最前；冷却中、并发已满或本地 RPM 已满的候选排最后（不剔除）；原生协议在同分时优先。
+
+候选可带 `fallback:true`（兜底）：不参与平时分配，排在所有主候选之后，只在主候选全部被淘汰、冷却或上游失败后接手；成功后不写会话亲和。`disabled:true` 暂停候选，两者可同时设置。
+
+同一请求内换候选的条件：上游 429 / 503 / 529（按 Retry-After 冷却）、402 / 403 / 404（冷却 15 分钟）、400（请求被明确拒绝，不冷却）、200 但正文为空，以及流的第一个事件为过载或限流错误。上游 5xx、连接失败、超时与其他首事件错误不换候选：状态码与错误原话（脱敏）原样返回，该候选冷却 30 秒，客户端重试时会落到别处。全部候选都被准入拒绝时返回 429，`Retry-After` 为最短剩余冷却；剩余超过 60 秒附 `x-should-retry: false`。
 
 会话亲和的键是「网关 Key + 客户端会话头」。Claude Code 的子代理与主线程共用 `X-Claude-Code-Session-Id`，
 网关会再拼上 `x-claude-code-agent-id`，让每个子代理单独亲和。故障切换成功后，如果原绑定模型仍是合格候选、

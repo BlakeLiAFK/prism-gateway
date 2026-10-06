@@ -3064,7 +3064,8 @@ func TestNotFoundFallsOverToNextCandidate(t *testing.T) {
 	}
 }
 
-// 502 / 504 无法证明模型未处理请求，不应自动重放。
+// 502 / 504 无法证明模型未处理请求，网关不替客户端重放：状态码与原话原样交给客户端，
+// 由它按自己的规则决定重试；失败的候选冷却 30 秒，客户端的重试会落到下一个候选。
 func TestUpstreamGatewayErrorDoesNotReplay(t *testing.T) {
 	for _, status := range []int{502, 504} {
 		h := failoverHarness(t, func(w http.ResponseWriter, r *http.Request) {
@@ -3072,9 +3073,17 @@ func TestUpstreamGatewayErrorDoesNotReplay(t *testing.T) {
 			io.WriteString(w, `{"error":{"message":"bad gateway"}}`)
 		})
 		w := h.generate(t, "chat", requestFixture("chat", "pair"))
-		requireStatus(t, w, 502)
+		requireStatus(t, w, status)
 		if got := w.Header().Get("X-Prism-Model"); got != "cand-bad" {
 			t.Fatalf("上游 %d 不应换候选，实得 %s", status, got)
+		}
+		if !strings.Contains(w.Body.String(), "bad gateway") {
+			t.Fatalf("上游错误原话应交给客户端: %s", w.Body)
+		}
+		w = h.generate(t, "chat", requestFixture("chat", "pair"))
+		requireStatus(t, w, 200)
+		if got := w.Header().Get("X-Prism-Model"); got != "cand-ok" {
+			t.Fatalf("客户端重试应落到下一个候选，实得 %s", got)
 		}
 	}
 }

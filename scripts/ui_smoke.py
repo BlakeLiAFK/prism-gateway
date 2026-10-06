@@ -468,6 +468,35 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         fail('编辑并保存路由后，候选的暂停状态被重置')
     page.locator('.candidate [data-action="toggle-candidate"]').first.click()
     page.wait_for_timeout(800)
+
+    # 兜底候选：编辑器里勾选、保存后画布出现标记、重开编辑器仍勾选，再取消恢复原状
+    tick_fallback = """on => {
+        const row = [...document.querySelectorAll('.candidate-row')].find(r => r.querySelector('input[name=candidate]').checked);
+        const box = row?.querySelector('[data-fallback]');
+        if (!box) return null;
+        box.checked = on;
+        return box.dataset.fallback;
+    }"""
+    page.locator('[data-action="edit-route"]').first.click()
+    page.wait_for_selector('dialog button[type="submit"]')
+    fallback_id = page.evaluate(tick_fallback, True)
+    if not fallback_id:
+        fail('路由编辑器的候选行缺少「兜底」勾选框')
+    page.locator('dialog button[type="submit"]').click()
+    page.wait_for_timeout(800)
+    marked = page.evaluate("id => [...document.querySelectorAll('.candidate')].some(c => c.querySelector('small .mono')?.textContent === id && c.innerText.includes('兜底'))", fallback_id)
+    if not marked:
+        fail(f'保存兜底候选后画布上没有「兜底」标记: {fallback_id}')
+    page.locator('[data-action="edit-route"]').first.click()
+    page.wait_for_selector('dialog button[type="submit"]')
+    if not page.evaluate("id => document.querySelector(`[data-fallback=\"${id}\"]`)?.checked", fallback_id):
+        fail('重开编辑器后兜底勾选丢失')
+    page.evaluate(tick_fallback, False)
+    page.locator('dialog button[type="submit"]').click()
+    page.wait_for_timeout(800)
+    if page.evaluate("[...document.querySelectorAll('.candidate')].some(c => c.innerText.includes('兜底'))"):
+        fail('取消兜底后画布仍有「兜底」标记')
+    results.append('route fallback candidate toggle')
     if page.evaluate(paused) != 'true':
         fail('再次点击开关应恢复候选')
     results.append('route candidate pause toggle')

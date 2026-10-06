@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// 上游 400 的原因要能在请求记录里看到，否则管理员面对「上游请求失败（HTTP 400）」无从判断
-// 是协议声明错了还是请求有问题；但上游正文不转发给客户端，密钥形态的内容也不落库。
+// 上游 400 的原因要能在请求记录里看到；最后一个候选的原话也要原样交给客户端（Claude Code 据此自行调整），
+// 两处都不能带密钥形态的内容。
 func TestUpstreamErrorDetailRecorded(t *testing.T) {
 	h := newHarness(t)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -22,8 +22,11 @@ func TestUpstreamErrorDetailRecorded(t *testing.T) {
 	h.configure(t, up.URL, modelFixture("b", "messages"))
 	w := h.generate(t, "messages", claudeCodeRequest("b", Object{"type": "disabled"}))
 	requireStatus(t, w, 400)
-	if strings.Contains(w.Body.String(), "does not support") {
-		t.Fatalf("上游错误正文不得转发给客户端: %s", w.Body)
+	if b := w.Body.String(); !strings.Contains(b, "model does not support /messages") || strings.Contains(b, "abcdefghijklmnop1234") || !strings.Contains(b, `"invalid_request_error"`) {
+		t.Fatalf("上游原话应脱敏后透传给客户端: %s", b)
+	}
+	if w.Header().Get("Request-Id") == "" || w.Header().Get("X-Request-ID") == "" {
+		t.Fatalf("两种 SDK 读的请求 ID 头都要有: %v", w.Header())
 	}
 	rows, err := h.s.DB.Query("SELECT error_detail FROM requests WHERE status='error'")
 	if err != nil || len(rows) != 1 {

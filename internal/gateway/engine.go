@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"slices"
 	"sort"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -35,6 +34,7 @@ type health struct {
 	Active     int
 	Recent     []int64
 	Cooldown   int64
+	CoolWhy    string // 这次冷却的原因，准入被拒时写进给客户端的错误信息
 	LastStatus int
 	LatencyMS  int64
 	TTFB       float64 // 上游 2xx 响应头耗时的滑动平均，latency 策略的依据
@@ -150,6 +150,8 @@ type selection struct {
 	ToolImagesAdapted bool
 	// Dropped 列出发往上游的副本里没有送达的请求历史内容（reasoning、documents），响应必须披露
 	Dropped []string
+	// Fallback 表示这是路由的兜底候选，见 Candidate.Fallback
+	Fallback bool
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
@@ -306,7 +308,11 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 			if l.Cooling || l.Full {
 				score -= unhealthyPenalty
 			}
-			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB), cross, ignored, "", toolImagesAdapted, dropped})
+			// 兜底候选排在所有主候选之后：主候选健康时轮不到它，主候选全部失败或淘汰时才接手
+			if cm.Fallback {
+				score -= fallbackPenalty
+			}
+			out = append(out, selection{m, pr, body, score, fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f; fallback=%t", route.Strategy, !cross, pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB, cm.Fallback), cross, ignored, "", toolImagesAdapted, dropped, cm.Fallback})
 		}
 		reasons = append(reasons, Object{"model_id": m.ID, "eligible": why == "", "reason": why, "native": !cross})
 	}
@@ -318,19 +324,23 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 	}
 	return out, reasons, nil
 }
-func (e *Engine) cooldown(id, retry string) {
-	d := 30 * time.Second
-	if n, er := strconv.Atoi(retry); er == nil && n > 0 {
-		d = time.Duration(n) * time.Second
-	} else if t, er := http.ParseTime(retry); er == nil && t.After(time.Now()) {
-		d = time.Until(t)
-	}
-	e.cooldownFor(id, d)
-}
+
+// fallbackPenalty 比任何策略分、亲和分与不健康扣分的组合都大，保证兜底候选永远排在主候选后面
+const fallbackPenalty = 1e9
+
+// failureCooldown 是上游 5xx、网络错误或流首事件即错误时给候选的短冷却。网关不替客户端重放，
+// 但客户端（Claude Code、OpenAI SDK）会按自己的规则重试；冷却让那次重试落到别的候选上。
+const failureCooldown = 30 * time.Second
 
 func (e *Engine) cooldownFor(id string, d time.Duration) {
+	e.cooldownBecause(id, d, "")
+}
+
+func (e *Engine) cooldownBecause(id string, d time.Duration, why string) {
 	e.mu.Lock()
-	e.state(id).Cooldown = now() + int64(min(d, 24*time.Hour)/time.Millisecond)
+	h := e.state(id)
+	h.Cooldown = now() + int64(min(d, 24*time.Hour)/time.Millisecond)
+	h.CoolWhy = why
 	e.mu.Unlock()
 	e.noteCooldown(id, d)
 }
