@@ -262,8 +262,11 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     # 模型编辑器：确认新增的能力开关渲染出来且可读取
     page.click('.nav-item[data-nav="models"]')
     page.wait_for_timeout(250)
-    page.evaluate("document.querySelector('[data-action=\"add-model\"], [data-action=\"edit-model\"]')?.click()")
+    page.click('[data-action="add-model"]')
     page.wait_for_timeout(400)
+    for capability in ('tools', 'vision'):
+        if page.locator(f'select[name="{capability}"]').input_value() != 'unknown':
+            fail(f'新增模型 {capability} 应默认交给上游判断')
     if page.locator('input[name="drop_reasoning"]').count() == 0:
         fail('模型编辑器缺少 drop_reasoning 开关')
     if page.locator('input[name="drop_reasoning"]').is_checked():

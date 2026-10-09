@@ -100,7 +100,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			return nil
 		})
 	case "model.save":
-		v := Model{ID: id, Enabled: true, Protocol: "chat", Tools: true, Context: 128000, MaxOutput: 4096, Concurrency: 2}
+		v := Model{ID: id, Enabled: true, Protocol: "chat", ToolsUnknown: true, VisionUnknown: true, Context: 128000, MaxOutput: 4096, Concurrency: 2}
 		if old, ok := c.model(id); ok {
 			v = old
 		}

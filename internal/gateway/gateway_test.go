@@ -1488,7 +1488,7 @@ func TestProviderTestAndModelSync(t *testing.T) {
 	}
 	for _, m := range cfg.Models {
 		// 同步即可用：只给了 id 的上游也要能被 Claude Code 这类带工具、64K 输出的客户端路由到
-		if !m.Enabled || !m.Tools || m.Context != 128000 || m.MaxOutput != 64000 || m.Concurrency != 4 {
+		if !m.Enabled || !m.ToolsUnknown || !m.VisionUnknown || m.Context != 128000 || m.MaxOutput != 64000 || m.Concurrency != 4 {
 			t.Fatalf("同步的模型 %s 应默认可用: %+v", m.ID, m)
 		}
 		if m.PricingSet {

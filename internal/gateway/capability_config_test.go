@@ -160,8 +160,8 @@ func TestMalformedCapabilityDeclarationsStayUnknown(t *testing.T) {
 		t.Fatal("真实空数组应保留为空声明")
 	}
 	m := newSyncedModel("m", "p", "m", "m", "chat", src)
-	if m.ToolsUnknown || m.VisionUnknown || m.Tools || m.Vision {
-		t.Fatal("真实空能力数组代表已声明不支持")
+	if !m.ToolsUnknown || !m.VisionUnknown || m.Tools || m.Vision {
+		t.Fatal("空能力清单应交给上游判断")
 	}
 }
 

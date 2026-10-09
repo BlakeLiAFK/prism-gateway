@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.37.0"
+const Version = "1.37.1"
 
 type Object = map[string]any
 
@@ -409,25 +409,23 @@ func newSyncedModel(id, providerID, upstream, name, protocol string, src Object)
 	m.MaxOutput = clamp(m.MaxOutput, 1, 1000000)
 	m.Context = clamp(m.Context, 1, 10000000)
 
-	// 声明了参数表就照声明；没声明时默认支持工具，不支持的上游会明确报错而不是静默出错
-	params, declared := src["supported_parameters"].([]any)
-	m.ToolsUnknown = !declared
-	m.Tools = !declared
-	for _, v := range arr(params) {
+	// 能力清单可能不完整；未列出的能力交给上游判断，不能自动变成人工禁用。
+	for _, v := range arr(src["supported_parameters"]) {
 		if s, _ := v.(string); s == "tools" {
 			m.Tools = true
 		}
 	}
+	m.ToolsUnknown = !m.Tools
 	modalities, declared := obj(src["architecture"])["input_modalities"].([]any)
 	if !declared {
-		modalities, declared = src["input_modalities"].([]any)
+		modalities = arr(src["input_modalities"])
 	}
-	m.VisionUnknown = !declared
-	for _, v := range arr(modalities) {
+	for _, v := range modalities {
 		if s, _ := v.(string); s == "image" {
 			m.Vision = true
 		}
 	}
+	m.VisionUnknown = !m.Vision
 	// 单价按「每百万 token 美元」存储，上游给的是每 token
 	pricing := obj(src["pricing"])
 	m.InputPrice = clampPrice(price(pricing, "prompt"))
