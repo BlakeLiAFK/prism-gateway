@@ -170,6 +170,28 @@ def run_checks(page, artifacts):
     assert (calls[-1]['from'], calls[-1]['to']) == anchor
     results.append('real server filtering paginates with a stable time anchor')
 
+    # 表头排序作用于已应用条件，保留未提交草稿和分页时间窗口。
+    page.locator('[data-action="request-next"]').click()
+    page.wait_for_timeout(350)
+    form.locator('[name="q"]').fill('unsubmitted draft')
+    for sort in ['input_desc', 'input_asc', 'output_desc', 'output_asc',
+                 'cost_desc', 'cost_asc', 'newest', 'oldest']:
+        button = page.locator(f'[data-request-sort="{sort}"]')
+        with page.expect_request(lambda request: request_list_params(request) is not None) as sent:
+            button.press('Enter')
+        page.wait_for_timeout(250)
+        params = request_list_params(sent.value)
+        assert params['sort'] == sort and params['page'] == 1, params
+        assert params['q'] == 'demo-auto', params
+        assert (params['from'], params['to']) == anchor
+        assert form.locator('[name="q"]').input_value() == 'unsubmitted draft'
+        assert form.locator('[name="sort"]').input_value() == sort
+        direction = 'ascending' if sort.endswith('_asc') or sort == 'oldest' else 'descending'
+        assert page.locator(f'th[aria-sort="{direction}"]').count() == 1
+        assert page.locator(f'th[aria-sort="{direction}"] button').evaluate('el => el === document.activeElement')
+    form.locator('[name="q"]').fill('demo-auto')
+    results.append('header keyboard sorting toggles directions, syncs select, preserves draft/window and resets page')
+
     # Custom datetime-local values must be converted in the browser's timezone.
     start = datetime.now().replace(second=0, microsecond=0) - timedelta(days=2)
     end = start + timedelta(days=1, hours=2)

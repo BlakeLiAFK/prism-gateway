@@ -143,16 +143,23 @@ func (q *requestQuery) sort(p Object) error {
 	switch sort {
 	case "", "newest":
 		return nil
-	case "input_desc":
+	case "oldest":
+		q.order = "started_at ASC, id ASC"
+		return nil
+	case "input_desc", "input_asc":
 		column, known = "input_tokens", knownRequestTokens("input_tokens")
-	case "output_desc":
+	case "output_desc", "output_asc":
 		column, known = "output_tokens", knownRequestTokens("output_tokens")
-	case "cost_desc":
+	case "cost_desc", "cost_asc":
 		column, known = "cost_nano", knownRequestCost
 	default:
-		return fmt.Errorf("排序必须是 newest / input_desc / output_desc / cost_desc")
+		return fmt.Errorf("排序必须是 newest / oldest / input_desc / input_asc / output_desc / output_asc / cost_desc / cost_asc")
 	}
-	q.order = "CASE WHEN " + known + " THEN 0 ELSE 1 END, CASE WHEN " + known + " THEN " + column + " END DESC, " + q.order
+	direction := "DESC"
+	if strings.HasSuffix(sort, "_asc") {
+		direction = "ASC"
+	}
+	q.order = "CASE WHEN " + known + " THEN 0 ELSE 1 END, CASE WHEN " + known + " THEN " + column + " END " + direction + ", " + q.order
 	return nil
 }
 

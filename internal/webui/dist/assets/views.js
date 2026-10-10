@@ -8,7 +8,7 @@ import {watchCard} from './watch.js';
 import {scheduleCard} from './schedule.js';
 import {backupCard} from './backup.js';
 import {keyUsageCell,keyUsageHead,providerStatsBlock,rangeSwitch} from './usage.js';
-import {requestFilterMarkup} from './request-filters.js';
+import {requestFilterMarkup,requestSortHeader} from './request-filters.js';
 import {avatar,badge,btn,chart,check,checked,closeDialog,confirm,copy,empty,field,getModel,getProvider,head,headerValue,modelName,nval,pillStatus,quotaBars,rangeTools,save,selectField,selectRow,showDialog,sourceTag,spark,tag,toast,val} from './ui.js';
 
 // 客户端名称：认得出的给正式名，认不出的退回 UA 第一段，至少看得出是什么在调。
@@ -53,7 +53,7 @@ function recentRows(items){
 }
 export function requestRows(items){
   if(!items?.length)return empty('请求记录会出现在这里','每次真实转发或本地演示都会记录元数据；不保存你的提示词和回答。','go-playground','发起测试','request');
-  return `<div class="table-scroll"><table><thead><tr><th>时间</th><th>模型 / 请求</th><th>协议</th><th>状态</th><th>耗时</th><th>输入</th><th>输出</th><th>估算价值</th><th class="col-source">来源</th></tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono tiny nowrap">${E(dateTimeSec(r.started_at))}</td><td><div class="cell-title flex">${E(modelName(r.model_id||r.requested_model))}${sourceTag(r.provider_id)}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td><td>${badge(r.protocol)}</td><td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}${tps(r)?`<div class="cell-sub">${tps(r)}</div>`:''}</td>${tokenCell(r.input_tokens,r.cache_tokens,'缓存')}${tokenCell(r.output_tokens,r.write_tokens,'写入')}<td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'||r.usage_mode==='incompatible'?'—':'待确认'}</td><td class="col-source">${sourceCell(r)}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="table-scroll"><table><thead><tr>${requestSortHeader("时间","newest","oldest")}<th>模型 / 请求</th><th>协议</th><th>状态</th><th>耗时</th>${requestSortHeader("输入","input_desc","input_asc")}${requestSortHeader("输出","output_desc","output_asc")}${requestSortHeader("估算价值","cost_desc","cost_asc")}<th class="col-source">来源</th></tr></thead><tbody>${items.map(r=>`<tr data-action="request-detail" data-id="${E(r.id)}"><td class="mono tiny nowrap">${E(dateTimeSec(r.started_at))}</td><td><div class="cell-title flex">${E(modelName(r.model_id||r.requested_model))}${sourceTag(r.provider_id)}${r.is_demo?badge('DEMO'):''}</div><div class="cell-sub mono">${E(r.parent_id.slice(0,23))}…</div></td><td>${badge(r.protocol)}</td><td>${pillStatus(r.status)}</td><td class="mono">${ms(r.duration_ms)}${tps(r)?`<div class="cell-sub">${tps(r)}</div>`:''}</td>${tokenCell(r.input_tokens,r.cache_tokens,'缓存')}${tokenCell(r.output_tokens,r.write_tokens,'写入')}<td class="mono">${r.cost_known?money(r.cost_nano/1e9):r.usage_mode==='rejected'||r.usage_mode==='incompatible'?'—':'待确认'}</td><td class="col-source">${sourceCell(r)}</td></tr>`).join('')}</tbody></table></div>`;
 
 }
 

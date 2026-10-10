@@ -12,7 +12,7 @@ const RANGES={
   '30d':['过去 30 天',30*DAY],
   custom:['自定义时间',0]
 };
-const SORTS=[['newest','最新优先'],['input_desc','输入最多'],['output_desc','输出最多'],['cost_desc','估算价值最高']];
+const SORTS=[['newest','最新优先'],['oldest','最早优先'],['input_desc','输入最多'],['input_asc','输入最少'],['output_desc','输出最多'],['output_asc','输出最少'],['cost_desc','估算价值最高'],['cost_asc','估算价值最低']];
 const NUMERIC_PAIRS=[
   ['min_input_tokens','max_input_tokens','输入 Token','整数'],
   ['min_output_tokens','max_output_tokens','输出 Token','整数'],
@@ -62,6 +62,13 @@ export function requestFilterMarkup(total,data){
     <div id="request-filter-error" class="form-error" role="alert" hidden></div>
     <div class="request-filter-actions"><span class="small muted">${number(total)} 条尝试记录 · 查询窗口 ${E(windowText)}</span><div class="flex"><button id="request-filter-clear" class="btn ghost small" type="button">清空条件</button><button class="btn primary small" type="submit">应用筛选</button></div></div>
   </form>`;
+}
+
+export function requestSortHeader(label,descending,ascending){
+  const sort=state.requestFilterApplied?.sort||'newest';
+  const active=sort===descending||sort===ascending,asc=sort===ascending;
+  const next=sort===descending?ascending:descending;
+  return `<th aria-sort="${active?(asc?'ascending':'descending'):'none'}"><button type="button" class="request-sort" data-request-sort="${next}" aria-label="${E(label)}，点击按${next===ascending?'升序':'降序'}排序">${E(label)} <span aria-hidden="true">${active?(asc?'↑':'↓'):'↕'}</span></button></th>`;
 }
 
 function normalizeInteger(v){return v.replace(/^0+(?=\d)/,'');}
@@ -125,10 +132,33 @@ function showError(form,message){
   box.hidden=!message;
 }
 
+function bindRequestSort(form,loadPage,report){
+  $$('[data-request-sort]').forEach(button=>button.addEventListener('click',async()=>{
+    if(form.getAttribute('aria-busy')==='true')return;
+    const applied=state.requestFilterApplied,draft=state.requestFilterDraft;
+    const previous=[applied.sort,draft.sort,state.requestPage];
+    applied.sort=draft.sort=button.dataset.requestSort;
+    state.requestPage=1;
+    setBusy(form,true);
+    $$('[data-request-sort]').forEach(el=>el.disabled=true);
+    try{
+      await loadPage(false);
+      $('th[aria-sort="ascending"] .request-sort,th[aria-sort="descending"] .request-sort')?.focus();
+    }catch(e){
+      [applied.sort,draft.sort,state.requestPage]=previous;
+      report(e);
+    }finally{
+      if(form.isConnected)setBusy(form,false);
+      $$('[data-request-sort]').forEach(el=>el.disabled=false);
+    }
+  }));
+}
+
 export function bindRequestFilters(loadPage,report){
   ensureRequestFilters();
   const form=$('#request-filter');
   if(!form)return;
+  bindRequestSort(form,loadPage,report);
   form.addEventListener('input',()=>{state.requestFilterDraft=readDraft(form);});
   form.addEventListener('change',()=>{state.requestFilterDraft=readDraft(form);});
   $('[name=range]',form)?.addEventListener('change',ev=>{

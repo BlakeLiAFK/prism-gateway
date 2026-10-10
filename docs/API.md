@@ -467,6 +467,6 @@ curl -sN --fail-with-body https://HOST/api.json \
 
 Token 范围 `min_input_tokens` / `max_input_tokens` / `min_output_tokens` / `max_output_tokens` 接受非负安全整数或纯数字字符串，最大9007199254740991。金额范围 `min_cost` / `max_cost` **只接受 USD 十进制字符串**（例如 `"0.10"`），最多9位小数，精确换算为 `cost_nano`，不经过浮点数。所有范围含上下限，留空或省略不限制；最小值大于最大值、负数、非法类型或溢出返回400。各范围与关键词、状态、供应商条件按AND组合。
 
-`sort` 为 `newest`（默认）、`input_desc`、`output_desc`、`cost_desc`。排序覆盖全部命中记录，然后分页；相同值按开始时间和记录ID倒序排列。仍以一次上游尝试为一行，不合并同请求的多次候选尝试。
+`sort` 为 `newest`（默认）、`oldest`、`input_desc`、`input_asc`、`output_desc`、`output_asc`、`cost_desc`、`cost_asc`。排序覆盖全部命中记录，然后分页；数值相同按开始时间和记录ID倒序排列，最早优先则按开始时间和记录ID升序排列。仍以一次上游尝试为一行，不合并同请求的多次候选尝试。
 
 金额范围仅匹配 `cost_known=1` 且 `usage_mode` 为 `reported_tokens`、`reported_tokens_repriced`、`reported_cost`、`rejected` 的记录。进行中预留、结果不明保留和未知金额不当成零，也不混入消费筛选。Token 范围仅匹配 `reported_tokens`、`reported_tokens_repriced`，以及 `reported_cost` 中对应Token值大于0的记录：旧数据没有独立Token已知标记，仅报告金额时的零无法证明是已知用量，因此不猜测。未知值排序靠后。估算价值仍非供应商最终账单，不改变现有计费或预算语义。

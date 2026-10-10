@@ -165,7 +165,7 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     if 'Demo / Responses' not in row.inner_text():
         fail(f'请求列表里被淘汰的请求应显示客户端请求名: {row.inner_text()!r}')
     # 按表头定位列，避免以后增删列时下标悄悄错位
-    cost_col = row.locator('xpath=ancestor::table//thead//th').all_inner_texts().index('估算价值')
+    cost_col = row.locator('xpath=ancestor::table//thead//button[starts-with(@aria-label, "估算价值")]').evaluate('el => el.closest("th").cellIndex')
     cost_cell = row.locator('td').nth(cost_col)
     if not cost_cell.is_visible():
         fail('请求列表里被淘汰请求的估算价值单元格不可见')

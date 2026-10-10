@@ -225,6 +225,10 @@ func TestRequestListSortsBeforeStablePagination(t *testing.T) {
 	base := Object{"from": from, "to": from + 100}
 	for sort, want := range map[string][]string{
 		"newest":      {"unknown", "b", "d", "c", "a"},
+		"oldest":      {"a", "c", "d", "b", "unknown"},
+		"input_asc":   {"b", "d", "c", "a", "unknown"},
+		"output_asc":  {"a", "d", "c", "b", "unknown"},
+		"cost_asc":    {"b", "a", "d", "c", "unknown"},
 		"input_desc":  {"a", "d", "c", "b", "unknown"},
 		"output_desc": {"b", "d", "c", "a", "unknown"},
 		"cost_desc":   {"d", "c", "a", "b", "unknown"},
