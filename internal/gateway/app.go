@@ -327,25 +327,6 @@ func (a *App) EnableDemo(version int64) (Config, error) {
 		return nil
 	})
 }
-func (a *App) requests(p Object) (any, error) {
-	page := clamp(int(num(p, "page")), 1, 10000)
-	limit := clamp(int(num(p, "page_size")), 1, 100)
-	if p["page_size"] == nil {
-		limit = 30
-	}
-	q := str(p, "q")
-	status := str(p, "status")
-	provider := str(p, "provider_id")
-	where := ` WHERE (?='' OR model_id LIKE ? OR requested_model LIKE ? OR parent_id LIKE ? OR client_ip LIKE ?) AND (?='' OR status=?) AND (?='' OR provider_id=?)`
-	args := []any{q, "%" + q + "%", "%" + q + "%", "%" + q + "%", "%" + q + "%", status, status, provider, provider}
-	count, err := a.Store.DB.Query("SELECT COUNT(*) n FROM requests"+where, args...)
-	if err != nil {
-		return nil, err
-	}
-	args = append(args, limit, (page-1)*limit)
-	rows, err := a.Store.DB.Query("SELECT * FROM requests"+where+" ORDER BY started_at DESC LIMIT ? OFFSET ?", args...)
-	return Object{"items": rows, "page": page, "page_size": limit, "total": count[0].Int("n")}, err
-}
 func (a *App) dashboard(p Object) (any, error) {
 	hours := 24
 	switch str(p, "range") {

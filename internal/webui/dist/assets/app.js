@@ -15,6 +15,7 @@ import {scheduleActions,bindSchedule} from './schedule.js';
 import {backupActions,bindBackup} from './backup.js';
 import {auditParams,renderAudit,bindAudit,auditActions} from './audit.js';
 import {bindPages,pageActions} from './views.js';
+import {bindRequestFilters,captureRequestWindow,refreshRequestWindow,requestListParams} from './request-filters.js';
 
 // 各页面模块自带的动作；app.js 的 switch 未命中时按名字分发到这里
 const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions,...alertActions,...watchActions,...scheduleActions,...backupActions,...auditActions};
@@ -67,9 +68,7 @@ export async function loadPage(animated=true){
       };
       break;
       case 'requests':action='request.list';
-      params={
-        page:state.requestPage,page_size:30,q:state.requestQ,status:state.requestStatus,provider_id:state.requestProvider
-      };
+      params=requestListParams();
       break;
       case 'sessions':action='session.list';
       break;
@@ -95,6 +94,7 @@ export async function loadPage(animated=true){
 
   const data=action?await rpc(action,params):null;
     if(gen!==state.renderGeneration)return;
+    if(state.page==='requests')captureRequestWindow(data);
     state.data=data;
     state.lastSync=Date.now();
     renderPage(animated);
@@ -160,6 +160,7 @@ export async function navigate(page){
 
 export function bindPage(){
   bindAudit();
+  bindRequestFilters(loadPage,report);
 
   // 各页面模块自己的输入框、下拉框等事件
   bindModels();
@@ -174,12 +175,6 @@ export function bindPage(){
  $$('[name=q-type]').forEach(el=>el.addEventListener('change',()=>{preservePlayground();renderPage(false);}));
 
  $('#model-provider')?.addEventListener('change',ev=>{state.providerFilter=ev.target.value;renderPage(false);});
-
- $('#request-filter')?.addEventListener('submit',ev=>{ev.preventDefault();state.requestQ=val(ev.currentTarget,'q');state.requestStatus=val(ev.currentTarget,'status');state.requestProvider=val(ev.currentTarget,'provider');state.requestPage=1;loadPage(false).catch(report);});
-
- $('#request-search')?.addEventListener('change',ev=>{state.requestQ=ev.target.value;state.requestPage=1;loadPage(false).catch(report);});
-
- $('#request-status')?.addEventListener('change',ev=>{state.requestStatus=ev.target.value;state.requestPage=1;loadPage(false).catch(report);});
 
  $('#settings-form')?.addEventListener('submit',async ev=>{ev.preventDefault();const f=ev.currentTarget,b=$('button[type=submit]',f);b.disabled=true;try{const now=Math.floor(Date.now()/1000),until=Number(state.config.settings.request_diagnostics_until)||0;await save('settings.update',{settings:{app_name:val(f,'app_name'),default_route:val(f,'default_route'),retention_days:nval(f,'retention_days'),max_body_mb:nval(f,'max_body_mb'),global_concurrency:nval(f,'global_concurrency'),session_ttl_hours:nval(f,'session_ttl_hours'),stream_idle_sec:nval(f,'stream_idle_sec'),shutdown_grace_sec:nval(f,'shutdown_grace_sec'),allow_estimated_count:checked(f,'allow_estimated_count'),listen:val(f,'listen'),metrics_enabled:checked(f,'metrics_enabled'),log_level:val(f,'log_level'),log_format:val(f,'log_format'),request_diagnostics_until:checked(f,'request_diagnostics')?(until>now?until:now+900):0}},f);}catch(e){report(e);b.disabled=false;}});
 
@@ -286,7 +281,8 @@ export async function handleAction(el){
     login();
     break;
 
- case 'refresh':await loadPage(false);
+ case 'refresh':if(state.page==='requests')refreshRequestWindow();
+    await loadPage(false);
     toast('已刷新');
     break;
 

@@ -8,6 +8,7 @@ import {watchCard} from './watch.js';
 import {scheduleCard} from './schedule.js';
 import {backupCard} from './backup.js';
 import {keyUsageCell,keyUsageHead,providerStatsBlock,rangeSwitch} from './usage.js';
+import {requestFilterMarkup} from './request-filters.js';
 import {avatar,badge,btn,chart,check,checked,closeDialog,confirm,copy,empty,field,getModel,getProvider,head,headerValue,modelName,nval,pillStatus,quotaBars,rangeTools,save,selectField,selectRow,showDialog,sourceTag,spark,tag,toast,val} from './ui.js';
 
 // 客户端名称：认得出的给正式名，认不出的退回 UA 第一段，至少看得出是什么在调。
@@ -169,7 +170,8 @@ export function usage(){
 
 export function requests(){
   const d=state.data;
-  return head('REQUEST EXPLORER','每一次调用，都有迹可循。','查看真实选模、协议转换、用量与调用来源。日志记录来源 IP 与客户端标识，不保存 Prompt、模型回答和 API Key。',btn('刷新','refresh','refresh'))+`<form id="request-filter" class="toolbar"><div class="search-field">${icon('search')}<input name="q" placeholder="搜索模型、请求 ID 或来源 IP" value="${E(state.requestQ)}" aria-label="搜索请求"></div><select name="status" aria-label="筛选请求状态"><option value="">全部状态</option>${[['success','成功'],['error','失败'],['unknown','待确认'],['running','进行中']].map(([v,l])=>`<option value="${v}" ${state.requestStatus===v?'selected':''}>${l}</option>`).join('')}</select><select name="provider" aria-label="筛选供应商"><option value="">全部供应商</option>${state.config.providers.map(p=>`<option value="${E(p.id)}" ${state.requestProvider===p.id?'selected':''}>${E(p.name||p.id)}</option>`).join('')}</select><button class="btn" type="submit">筛选</button><span class="small muted" style="margin-left:auto">${number(d.total)} 条尝试记录</span></form><section class="card">${requestRows(d.items)}<div class="list-foot"><span>第 ${d.page} 页 · 每页 ${d.page_size} 条</span><div class="flex">${btn('上一页','request-prev','',d.page<=1?'disabled':'','small')}${btn('下一页','request-next','',d.page*d.page_size>=d.total?'disabled':'','small')}</div></div></section>`;
+  const rows=d.items?.length?requestRows(d.items):`<div class="empty"><div class="empty-icon">${icon('request')}</div><h3>当前条件没有匹配记录</h3><p>调整时间或数值范围，也可以重新查询当前窗口。</p><div class="flex"><button class="btn small" type="button" data-request-retry>重新查询</button></div></div>`;
+  return head('REQUEST EXPLORER','每一次调用，都有迹可循。','查看真实选模、协议转换、用量与调用来源。日志记录来源 IP 与客户端标识，不保存 Prompt、模型回答和 API Key。',btn('刷新','refresh','refresh'))+requestFilterMarkup(d.total,d)+`<section class="card">${rows}<div class="list-foot"><span>第 ${d.page} 页 · 每页 ${d.page_size} 条</span><div class="flex">${btn('上一页','request-prev','',d.page<=1?'disabled':'','small')}${btn('下一页','request-next','',d.page*d.page_size>=d.total?'disabled':'','small')}</div></div></section>`;
 
 }
 

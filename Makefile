@@ -17,6 +17,7 @@ lint:
 	else echo "staticcheck 未安装，跳过（go install honnef.co/go/tools/cmd/staticcheck@latest）"; fi
 ui: build
 	python3 scripts/ui_smoke.py --binary ./$(BINARY)
+	python3 scripts/ui_request_filters.py --binary ./$(BINARY)
 format:
 	@files="$$(gofmt -l cmd internal)" || exit $$?; \
 	if [ -n "$$files" ]; then printf "以下文件需要 gofmt：\n%s\n" "$$files"; exit 1; fi

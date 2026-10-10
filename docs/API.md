@@ -110,7 +110,7 @@ curl http://127.0.0.1:8080/api.json \
 | `apikey.revoke` | `{id}` | 撤销结果 |
 | `session.list` | `{}` | 有效期内最近 200 个本地亲和映射，附 `expires_at` |
 | `session.delete` | `{id}` 或 `{model_id}` | 解除本地绑定（给 model_id 时解除该模型的全部绑定，返回 unbound 数量），不重置上游状态 |
-| `request.list` | `{page?,page_size?,q?,status?,provider_id?}` | items / page / page_size / total |
+| `request.list` | `{page?,page_size?,q?,status?,provider_id?,from?,to?,min_input_tokens?,max_input_tokens?,min_output_tokens?,max_output_tokens?,min_cost?,max_cost?,sort?}` | items / page / page_size / total / from / to；默认过去24小时，单次最多30天 |
 | `request.get` | `{id}` | 单次上游尝试元数据 |
 | `job.list` | `{}` | 最近 100 个模型同步任务 |
 | `job.get` | `{id}` | 任务状态、结果或错误 |
@@ -460,3 +460,13 @@ curl -sN --fail-with-body https://HOST/api.json \
 `settings.update` 的 `settings.request_diagnostics_until` 为 Unix 秒截止时间，0 为关闭，最大为当前时间加 900 秒。只采集启用窗口内开始、且在截止前收到原生 Messages HTTP 400 的请求；窗口内最多 20 条，重启不重置。延长期限时重叠窗口内样本仍计数。
 
 `request.get` 返回 `diagnostic` JSON 字符串，含 `before` / `after` 与 `captured_structure_changed`。结构仅含消息数量、角色枚举、内容块类型及截断标记；比较范围仅为采集到的脱敏结构，不代表全文相同。未知枚举仅标记 `unknown_string`，不保存原值。诊断沿用请求记录保留期，不进入模型响应。
+
+### 请求记录范围与排序
+
+`request.list` 按请求开始时间筛选。`from` / `to` 必须成对提供，为非负安全整数 Unix 毫秒，区间为 `[from, to)`；省略时使用服务器当前时间之前24小时。起始必须早于结束，跨度最多30天；不提供查询全部的入口，`all_time:true` 返回400。响应回传实际 `from` / `to`，翻页须复用该窗口。可查询任意历史区间，但单次仍受30天限制。
+
+Token 范围 `min_input_tokens` / `max_input_tokens` / `min_output_tokens` / `max_output_tokens` 接受非负安全整数或纯数字字符串，最大9007199254740991。金额范围 `min_cost` / `max_cost` **只接受 USD 十进制字符串**（例如 `"0.10"`），最多9位小数，精确换算为 `cost_nano`，不经过浮点数。所有范围含上下限，留空或省略不限制；最小值大于最大值、负数、非法类型或溢出返回400。各范围与关键词、状态、供应商条件按AND组合。
+
+`sort` 为 `newest`（默认）、`input_desc`、`output_desc`、`cost_desc`。排序覆盖全部命中记录，然后分页；相同值按开始时间和记录ID倒序排列。仍以一次上游尝试为一行，不合并同请求的多次候选尝试。
+
+金额范围仅匹配 `cost_known=1` 且 `usage_mode` 为 `reported_tokens`、`reported_tokens_repriced`、`reported_cost`、`rejected` 的记录。进行中预留、结果不明保留和未知金额不当成零，也不混入消费筛选。Token 范围仅匹配 `reported_tokens`、`reported_tokens_repriced`，以及 `reported_cost` 中对应Token值大于0的记录：旧数据没有独立Token已知标记，仅报告金额时的零无法证明是已知用量，因此不猜测。未知值排序靠后。估算价值仍非供应商最终账单，不改变现有计费或预算语义。
