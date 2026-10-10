@@ -454,3 +454,9 @@ curl -sN --fail-with-body https://HOST/api.json \
 `tools_unknown` / `vision_unknown` 为 true 时，能力未确认，由上游判断；不是已验证支持。管理员显式提交 `tools` / `vision` 而不提交对应 unknown 字段，会清除未知状态。
 
 `provider.save` 支持 `protocol_urls`，例如 `{"messages":"https://api.deepseek.com/anthropic/v1"}`。值是协议 Base URL，网关追加 `/messages` 等路径；空 map 清除覆盖，缺省沿用 `base_url`。支持运行时修改，遵循相同 URL 安全校验与配置版本约束。
+
+### 临时请求结构诊断
+
+`settings.update` 的 `settings.request_diagnostics_until` 为 Unix 秒截止时间，0 为关闭，最大为当前时间加 900 秒。只采集启用窗口内开始、且在截止前收到原生 Messages HTTP 400 的请求；窗口内最多 20 条，重启不重置。延长期限时重叠窗口内样本仍计数。
+
+`request.get` 返回 `diagnostic` JSON 字符串，含 `before` / `after` 与 `captured_structure_changed`。结构仅含消息数量、角色枚举、内容块类型及截断标记；比较范围仅为采集到的脱敏结构，不代表全文相同。未知枚举仅标记 `unknown_string`，不保存原值。诊断沿用请求记录保留期，不进入模型响应。

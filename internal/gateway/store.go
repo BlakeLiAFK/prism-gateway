@@ -159,6 +159,7 @@ func (s *Store) migrate() error {
 		for c, definition := range map[string]string{
 			"client_ip": "TEXT NOT NULL DEFAULT ''", "user_agent": "TEXT NOT NULL DEFAULT ''", "agent_role": "TEXT NOT NULL DEFAULT ''",
 			"cache_known": "INTEGER NOT NULL DEFAULT 0", "error_detail": "TEXT NOT NULL DEFAULT ''",
+			"diagnostic": "TEXT NOT NULL DEFAULT ''",
 		} {
 			if !have[c] {
 				if e := t.Exec("ALTER TABLE requests ADD COLUMN " + c + " " + definition); e != nil {
@@ -265,20 +266,8 @@ func (s *Store) load() error {
 		}
 	}
 	sortConfig(&c)
-	r, e = s.DB.Query("SELECT key,value FROM settings")
+	c.Settings, e = s.loadSettings()
 	if e != nil {
-		return e
-	}
-	m := Object{}
-	json.Unmarshal([]byte(raw(c.Settings)), &m)
-	for _, row := range r {
-		var v any
-		if e = json.Unmarshal([]byte(row.String("value")), &v); e != nil {
-			return e
-		}
-		m[row.String("key")] = v
-	}
-	if e = decode(m, &c.Settings); e != nil {
 		return e
 	}
 	s.snapshot.Store(&c)
@@ -458,12 +447,8 @@ func (s *Store) Change(version int64, action, target string, fn func(*Config) er
 				return e
 			}
 		}
-		var sm Object
-		json.Unmarshal([]byte(raw(c.Settings)), &sm)
-		for k, v := range sm {
-			if e := t.Exec("INSERT INTO settings VALUES (?,?)", k, raw(v)); e != nil {
-				return e
-			}
+		if e := saveSettings(t, c.Settings); e != nil {
+			return e
 		}
 		if e := t.Exec("UPDATE meta SET value=? WHERE key='config_version'", fmt.Sprint(c.Version)); e != nil {
 			return e

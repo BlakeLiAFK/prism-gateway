@@ -123,6 +123,37 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         page.locator('dialog').screenshot(path=str(artifacts / 'incompatible-detail.png'))
     page.click('[data-action="close-dialog"]')
     page.wait_for_timeout(200)
+    diagnostic = page.evaluate("""async () => {
+        const {requestDetail} = await import('/assets/views.js');
+        const {showDialog} = await import('/assets/ui.js');
+        const shape = {
+            before:{messages:[{role:'user',content_types:['text'],content_count:1,truncated:false}],message_count:1,truncated:false},
+            after:{messages:[{role:'assistant',content_types:['text'],content_count:1,truncated:false}],message_count:1,truncated:false},
+            captured_structure_changed:true
+        };
+        showDialog('请求诊断','smoke',requestDetail({diagnostic:JSON.stringify(shape)}),null,'',true);
+        const block = document.querySelector('.request-diagnostic');
+        return {text:block?.innerText || '', images:block?.querySelectorAll('img').length || 0};
+    }""")
+    if '"captured_structure_changed": true' not in diagnostic['text'] or '"content_types"' not in diagnostic['text']:
+        fail(f'请求详情没有可读展示脱敏诊断: {diagnostic}')
+    if diagnostic['images'] != 0:
+        fail(f'请求诊断内容没有正确转义: {diagnostic}')
+    if artifacts:
+        page.locator('.request-diagnostic').screenshot(path=str(artifacts / 'diagnostic-detail-desktop.png'))
+    desktop = page.viewport_size
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(250)
+    dialog_box = page.locator('dialog').bounding_box()
+    if (not dialog_box or dialog_box['x'] + dialog_box['width'] > 391 or
+            page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')):
+        fail(f'390px 下请求诊断详情横向溢出: {dialog_box}')
+    if artifacts:
+        page.locator('.request-diagnostic').screenshot(path=str(artifacts / 'diagnostic-detail-mobile.png'))
+    page.set_viewport_size(desktop)
+    page.click('[data-action="close-dialog"]')
+    page.wait_for_timeout(200)
+    results.append('request detail shows escaped diagnostic JSON')
     # 没有到达任何模型的请求既没有花费也没有待确认的用量，请求列表的估算价值列必须显示「—」。
     # 用总览行的 data-id 定位同一条记录，不依赖文本匹配；
     # 断言渲染后的可见文本与可见性，而不是只看 HTML 源码。
@@ -557,6 +588,72 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     # 设置页往返：确认表单取值与提交链路完整
     page.click('.nav-item[data-nav="settings"]')
     page.wait_for_timeout(300)
+    diagnostics = page.locator('input[name="request_diagnostics"]')
+    if diagnostics.count() != 1 or diagnostics.is_checked():
+        fail('临时请求结构诊断应存在且默认关闭')
+    copy = page.locator('.setting-row', has=diagnostics).inner_text()
+    for text in ('Messages 上游 400', '15 分钟', '最多 20 条', '不保存正文、工具参数或工具结果'):
+        if text not in copy:
+            fail(f'临时请求结构诊断说明缺少 {text!r}: {copy!r}')
+    if artifacts:
+        page.locator('.setting-row', has=diagnostics).screenshot(path=str(artifacts / 'request-diagnostics-settings-desktop.png'))
+    desktop = page.viewport_size
+    page.set_viewport_size({'width': 390, 'height': 844})
+    page.wait_for_timeout(250)
+    setting_box = page.locator('.setting-row', has=diagnostics).bounding_box()
+    if (not setting_box or setting_box['x'] + setting_box['width'] > 391 or
+            page.evaluate('document.documentElement.scrollWidth > innerWidth + 1')):
+        fail(f'390px 下请求诊断设置横向溢出: {setting_box}')
+    if artifacts:
+        page.locator('.setting-row', has=diagnostics).screenshot(path=str(artifacts / 'request-diagnostics-settings-mobile.png'))
+    page.set_viewport_size(desktop)
+    page.wait_for_timeout(250)
+    diagnostics.check()
+    page.click('#settings-form button[type="submit"]')
+    page.wait_for_timeout(600)
+    first_until = page.evaluate("""async () => {
+        const {rpc} = await import('/assets/api.js');
+        return (await rpc('config.get')).settings.request_diagnostics_until;
+    }""")
+    now = int(time.time())
+    if not now + 890 <= first_until <= now + 910:
+        fail(f'开启诊断应设置约 15 分钟有效期，实得 {first_until - now} 秒')
+    if not page.locator('input[name="request_diagnostics"]').is_checked():
+        fail('开启诊断后设置页没有回显开启状态')
+    page.click('#settings-form button[type="submit"]')
+    page.wait_for_timeout(600)
+    kept_until = page.evaluate("""async () => {
+        const {rpc} = await import('/assets/api.js');
+        return (await rpc('config.get')).settings.request_diagnostics_until;
+    }""")
+    if kept_until != first_until:
+        fail(f'普通保存不应延长未过期诊断: {first_until} -> {kept_until}')
+    page.locator('input[name="request_diagnostics"]').uncheck()
+    page.click('#settings-form button[type="submit"]')
+    page.wait_for_timeout(600)
+    disabled_until = page.evaluate("""async () => {
+        const {rpc} = await import('/assets/api.js');
+        return (await rpc('config.get')).settings.request_diagnostics_until;
+    }""")
+    if disabled_until != 0:
+        fail(f'关闭诊断应清零有效期，实得 {disabled_until}')
+    page.evaluate("""async () => {
+        const {state} = await import('/assets/core.js');
+        const {renderPage} = await import('/assets/app.js');
+        state.config.settings.request_diagnostics_until = 1;
+        renderPage(false);
+    }""")
+    if page.locator('input[name="request_diagnostics"]').is_checked():
+        fail('已过期的请求结构诊断应显示为关闭')
+    page.locator('input[name="request_diagnostics"]').check()
+    page.click('#settings-form button[type="submit"]')
+    page.wait_for_timeout(600)
+    if not page.locator('input[name="request_diagnostics"]').is_checked():
+        fail('已过期的请求结构诊断应能重新开启')
+    page.locator('input[name="request_diagnostics"]').uncheck()
+    page.click('#settings-form button[type="submit"]')
+    page.wait_for_timeout(600)
+    results.append('request diagnostics enable preserve expire reopen disable')
     page.select_option('select[name="log_level"]', 'warn')
     page.click('#settings-form button[type="submit"]')
     page.wait_for_timeout(600)

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.37.1"
+const Version = "1.37.2"
 
 type Object = map[string]any
 
@@ -98,17 +98,18 @@ type Alias struct {
 	Enabled bool   `json:"enabled"`
 }
 type Settings struct {
-	AppName             string `json:"app_name"`
-	DefaultRoute        string `json:"default_route"`
-	RetentionDays       int    `json:"retention_days"`
-	MaxBodyMB           int    `json:"max_body_mb"`
-	GlobalConcurrency   int    `json:"global_concurrency"`
-	SessionTTLHours     int    `json:"session_ttl_hours"`
-	AllowEstimatedCount bool   `json:"allow_estimated_count"`
-	Listen              string `json:"listen"`
-	MetricsEnabled      bool   `json:"metrics_enabled"`
-	LogLevel            string `json:"log_level"`
-	LogFormat           string `json:"log_format"`
+	RequestDiagnosticsUntil int64  `json:"request_diagnostics_until"`
+	AppName                 string `json:"app_name"`
+	DefaultRoute            string `json:"default_route"`
+	RetentionDays           int    `json:"retention_days"`
+	MaxBodyMB               int    `json:"max_body_mb"`
+	GlobalConcurrency       int    `json:"global_concurrency"`
+	SessionTTLHours         int    `json:"session_ttl_hours"`
+	AllowEstimatedCount     bool   `json:"allow_estimated_count"`
+	Listen                  string `json:"listen"`
+	MetricsEnabled          bool   `json:"metrics_enabled"`
+	LogLevel                string `json:"log_level"`
+	LogFormat               string `json:"log_format"`
 	// ShutdownGraceSec 停止时等待在途请求结束的最长秒数；StreamIdleSec 上游连续多少秒没有数据就断开。0 表示默认
 	ShutdownGraceSec int `json:"shutdown_grace_sec"`
 	StreamIdleSec    int `json:"stream_idle_sec"`
@@ -330,6 +331,9 @@ func (c Config) Validate() error {
 		}
 	}
 	s := c.Settings
+	if s.RequestDiagnosticsUntil < 0 || s.RequestDiagnosticsUntil > time.Now().Unix()+900 {
+		return errors.New("请求结构诊断期限必须在未来 15 分钟以内，0 表示关闭")
+	}
 	if s.MaxBodyMB < 1 || s.MaxBodyMB > 32 || s.GlobalConcurrency < 1 || s.GlobalConcurrency > 512 || s.RetentionDays < 31 || s.RetentionDays > 3650 || s.SessionTTLHours < 1 || s.SessionTTLHours > 720 {
 		return errors.New("设置范围：body 1–32MB，并发 1–512，保留 31–3650 天，会话 1–720 小时")
 	}

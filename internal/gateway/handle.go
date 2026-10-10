@@ -273,6 +273,9 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 			if status < 200 || status >= 300 {
 				body, _ := io.ReadAll(io.LimitReader(res.Body, 64<<10))
 				runErr = newUpstreamStatusError(status, body)
+				if status == http.StatusBadRequest && p == "messages" && s.Model.Protocol == "messages" && c.Settings.RequestDiagnosticsUntil > start/1000 {
+					e.recordRequestDiagnostic(att, start, o, s.Body)
+				}
 				// 被拒的响应往往才带着 Retry-After 和剩余额度，这里同样要留存
 				e.recordLimits(s.Model.ID, res.Header)
 				e.coolAfterFailure(s.Model.ID, s.Provider, status, res.Header.Get("Retry-After"))
