@@ -187,10 +187,11 @@ curl -s http://127.0.0.1:8080/api.json \
 
 ```bash
 make build                    # 产物 bin/prism-gateway
-make check                    # 格式、vet、staticcheck、覆盖率、浏览器与发布回滚测试
+make check                    # 格式、vet、staticcheck、覆盖率、前端逻辑、浏览器与发布回滚测试
 make test                     # 自动化测试
 make race                     # Go 竞态检测
 make vet                      # Go 静态检查
+make ui-unit                  # 模型库筛选逻辑（需 Node.js >=20，不启动浏览器）
 make ui                       # WebUI 浏览器冒烟（需 playwright，缺失自动跳过）
 make cover                    # 覆盖率门禁
 make lint                     # staticcheck（未安装则跳过）

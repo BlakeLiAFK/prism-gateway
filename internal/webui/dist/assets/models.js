@@ -57,8 +57,8 @@ export function modelEditor(id=''){
 
 }
 
-// ===== 模型库筛选（骨架，业务由 models 模块实现） =====
-// state.modelFilters 约定：{status:''|'enabled'|'disabled', inRoute:bool, unpriced:bool, tools:bool, vision:bool, used:bool, sortUsage:bool}
+// ===== 模型库筛选 =====
+// state.modelFilters 约定：{status:''|'enabled'|'disabled', inRoute:bool, unpriced:bool, tools:bool, vision:bool, used:bool, stealth:bool, free:bool, minContext:number, sortUsage:bool}
 // 与已有的 state.modelQ / state.modelProtocol / state.providerFilter 叠加生效，切页后保留。
 
 // 使用某模型的路由列表
@@ -72,6 +72,9 @@ function matchesFilters(m,f){
   if(f.status==='disabled'&&m.enabled)return false;
   if(f.inRoute&&!routesUsing(m.id).length)return false;
   if(f.unpriced&&m.pricing_set)return false;
+  if(f.stealth&&![m.id,m.name,m.upstream].some(v=>String(v||'').toLowerCase().includes('stealth')))return false;
+  if(f.free&&(!m.pricing_set||m.input_price||m.output_price||m.cache_price||m.write_price))return false;
+  if(f.minContext&&!(m.context_window>=f.minContext))return false;
   if(f.tools&&(!m.tools||m.tools_unknown))return false;
   if(f.vision&&(!m.vision||m.vision_unknown))return false;
   if(f.used&&!modelUsageOf(m.id)?.requests)return false;
@@ -90,10 +93,11 @@ export function modelFilterBar(){
   const f=state.modelFilters;
   const base=scopedModels();
   const count=over=>base.filter(m=>matchesFilters(m,{...f,...over})).length;
-  const statusChip=(value,label)=>`<button class="filter-chip ${(f.status||'')===value?'active':''}" data-action="model-filter-status" data-value="${value}">${E(label)}<span class="filter-count">${count({status:value})}</span></button>`;
-  const toggleChip=(key,label,warn=false)=>`<button class="filter-chip ${warn?'warn':''} ${f[key]?'active':''}" data-action="model-filter-toggle" data-key="${key}">${E(label)}<span class="filter-count">${count({[key]:true})}</span></button>`;
-  const active=!!(f.status||f.inRoute||f.unpriced||f.tools||f.vision||f.used);
-  return `<div class="filter-bar"><div class="filter-group">${statusChip('','全部')}${statusChip('enabled','已启用')}${statusChip('disabled','未启用')}</div><div class="filter-group">${toggleChip('inRoute','在路由中')}${toggleChip('unpriced','计价未确认',true)}${toggleChip('tools','支持工具')}${toggleChip('vision','支持图像')}${toggleChip('used','有用量')}</div>${active?btn('清除筛选','model-filter-clear','close','','ghost small'):''}<div class="filter-range">${rangeSwitch()}</div></div>`;
+  const statusChip=(value,label)=>`<button class="filter-chip ${(f.status||'')===value?'active':''}" aria-pressed="${(f.status||'')===value}" data-action="model-filter-status" data-value="${value}">${E(label)}<span class="filter-count">${count({status:value})}</span></button>`;
+  const toggleChip=(key,label,warn=false)=>`<button class="filter-chip ${warn?'warn':''} ${f[key]?'active':''}" aria-pressed="${!!f[key]}" data-action="model-filter-toggle" data-key="${key}">${E(label)}<span class="filter-count">${count({[key]:true})}</span></button>`;
+  const contextChip=(value,label)=>`<button class="filter-chip ${f.minContext===value?'active':''}" aria-pressed="${f.minContext===value}" data-action="model-filter-context" data-value="${value}" title="上下文至少 ${value.toLocaleString('en-US')} tokens">≥${label}<span class="filter-count">${count({minContext:value})}</span></button>`;
+  const active=!!(f.status||f.inRoute||f.unpriced||f.tools||f.vision||f.used||f.stealth||f.free||f.minContext);
+  return `<div class="filter-bar"><div class="filter-group">${statusChip('','全部')}${statusChip('enabled','已启用')}${statusChip('disabled','未启用')}</div><div class="filter-group">${toggleChip('inRoute','在路由中')}${toggleChip('unpriced','计价未确认',true)}${toggleChip('stealth','Stealth')}${toggleChip('free','免费')}${toggleChip('tools','支持工具')}${toggleChip('vision','支持图像')}${toggleChip('used','有用量')}</div><div class="filter-group" role="group" aria-label="上下文最低容量"><span class="small muted">上下文</span>${[[128000,'128K'],[200000,'200K'],[256000,'256K'],[512000,'512K'],[1000000,'1M'],[2000000,'2M']].map(([value,label])=>contextChip(value,label)).join('')}</div>${active?btn('清除筛选','model-filter-clear','close','','ghost small'):''}<div class="filter-range">${rangeSwitch()}</div></div>`;
 
 }
 
@@ -107,6 +111,12 @@ export const modelActions={
   'model-filter-toggle':(el)=>{
     const key=el.dataset.key;
     state.modelFilters={...state.modelFilters,[key]:!state.modelFilters[key],showAll:false};
+    renderPage(false);
+
+  },
+  'model-filter-context':(el)=>{
+    const value=Number(el.dataset.value);
+    state.modelFilters={...state.modelFilters,minContext:state.modelFilters.minContext===value?0:value,showAll:false};
     renderPage(false);
 
   },
