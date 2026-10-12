@@ -366,32 +366,32 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     results.append('editing unrelated fields preserves empty protocols')
 
 
-    # 路由编辑器的候选搜索：模型多起来之后这是唯一能用的定位方式
+    # 路由编辑器分离已选与待添加，搜索只影响对应列表。
     page.click('.nav-item[data-nav="routes"]')
     page.wait_for_timeout(250)
-    page.evaluate("document.querySelector('[data-action=\"add-route\"]')?.click()")
-    page.wait_for_timeout(400)
-    if page.locator('#candidate-search').count() == 0:
-        fail('路由编辑器缺少候选搜索框')
-    total = page.locator('.candidate-row').count()
-    if total == 0:
-        fail('候选列表为空，无法验证搜索')
-    # 先勾上第一个，确认它在搜索无匹配时依然可见
-    page.locator('.candidate-row input[name="candidate"]').first.check()
-    page.fill('#candidate-search', 'zzz-no-such-model-zzz')
-    page.wait_for_timeout(250)
-    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>r.offsetParent!==null).length")
-    if visible != 1:
-        dbg = page.evaluate("[...document.querySelectorAll('.candidate-row')].map(r=>[r.dataset.search,r.hidden,r.offsetParent!==null,r.querySelector('input[name=candidate]').checked])")
-        fail(f'搜索无匹配时应只剩已勾选的 1 行，实得 {visible} :: {dbg}')
-    page.fill('#candidate-search', '')
-    page.wait_for_timeout(250)
-    visible = page.evaluate("[...document.querySelectorAll('.candidate-row')].filter(r=>r.offsetParent!==null).length")
-    if visible != total:
-        fail(f'清空搜索应恢复全部 {total} 行，实得 {visible}')
-    page.evaluate("document.querySelector('[data-action=\"close-dialog\"]')?.click()")
+    page.locator('[data-action="add-route"]').click()
+    page.wait_for_selector('[data-available-search]')
+    available = page.locator('[data-available-panel] .candidate-picker-row')
+    total = available.count()
+    if total == 0 or total > 50:
+        fail(f'待添加列表应有模型且每页最多50项，实得 {total}')
+    page.locator('[data-cp="add"]').first.click()
+    page.fill('[data-available-search]', 'zzz-no-such-model-zzz')
+    if available.count() != 0 or page.locator('[data-selected-panel] .candidate-picker-row').count() != 1:
+        fail('待添加搜索无匹配时，已选模型应独立保留')
+    page.fill('[data-available-search]', '')
+    if available.count() != total - 1:
+        fail('清空搜索应恢复待添加列表，并排除已选模型')
+    page.locator('dialog [data-action="close-dialog"]').first.click()
+    if not page.locator('.route-close-confirm').is_visible():
+        fail('关闭有修改的抽屉应明确提示未保存')
+    page.click('[data-route-continue]')
+    if page.locator('[data-selected-panel] .candidate-picker-row').count() != 1:
+        fail('继续编辑不能丢失已选模型')
+    page.locator('dialog [data-action="close-dialog"]').first.click()
+    page.click('[data-route-discard]')
     page.wait_for_timeout(200)
-    results.append('route candidate search')
+    results.append('route candidate search and draft close guard')
 
     # 顺序由拖拽产生，不该再让人手填数字
     if page.locator('#f-sort').count() != 0:
@@ -503,22 +503,21 @@ def run_ui_checks(page, base, token, results, artifacts=None):
     page.locator('.candidate [data-action="toggle-candidate"]').first.click()
     page.wait_for_timeout(800)
 
-    # 路由分组：编辑器里添加一组、把候选放进第 2 组；保存后画布分两节，重载仍是两节；删掉一组后回到单节
+    # 分组导航只编辑当前组，跨组移动保留候选对象。
     visible_groups = "[...document.querySelectorAll('.route-group')].filter(g => g.offsetParent !== null).length"
     page.locator('[data-action="edit-route"]').first.click()
-    page.wait_for_selector('dialog #group-table')
+    page.wait_for_selector('dialog #route-group-editor')
     page.click('#group-add')
-    if page.locator('#group-table .group-row').count() != 2:
-        fail('添加一组后组表应有 2 行')
-    shown = page.evaluate("[...document.querySelectorAll('.candidate-row .group-select')].filter(s => s.offsetParent !== null).length")
-    if shown == 0:
-        fail('有多个组时，候选行的「所属组」下拉必须可见')
-    moved = page.evaluate("""() => {
-        const row = [...document.querySelectorAll('.candidate-row')].find(r => r.querySelector('input[name=candidate]').checked);
-        const sel = row.querySelector('.group-select');
-        sel.value = sel.options[1].value;
-        return row.querySelector('input[name=candidate]').value;
-    }""")
+    if page.locator('[data-group-select]').count() != 2:
+        fail('添加一组后导航应有2组')
+    page.click('[data-group-select="0"]')
+    row = page.locator('[data-selected-panel] .candidate-picker-row').first
+    moved = row.get_attribute('data-model')
+    row.locator('[data-move-target]').select_option('1')
+    row.locator('[data-cp="move"]').click()
+    page.click('[data-group-select="1"]')
+    if page.locator('[data-selected-panel] .candidate-picker-row').first.get_attribute('data-model') != moved:
+        fail('切组后应保留刚移动的候选')
     if artifacts:
         page.locator('dialog').screenshot(path=str(artifacts / 'route-editor-groups.png'))
     page.locator('dialog button[type="submit"]').click()
@@ -543,16 +542,27 @@ def run_ui_checks(page, base, token, results, artifacts=None):
         fail('390px 下分组画布不应出现横向滚动')
     page.set_viewport_size({'width': 1280, 'height': 900})
     page.wait_for_timeout(250)
-    page.locator('[data-action="edit-route"]').first.click()
-    page.wait_for_selector('dialog #group-table')
-    page.locator('#group-table .group-row').last.locator('[data-grp="del"]').click()
-    if page.locator('#group-table .group-row').count() != 1:
-        fail('删除后组表应剩 1 行')
+    # 画布从第二组拖到第一组末尾，空组保留且可以继续接受拖放。
+    source = page.locator('.route-group[data-group="1"] .candidate').first
+    source.drag_to(page.locator('.route-group[data-group="0"] .route-drop-zone'))
+    if page.locator('.route-group[data-group="1"] .candidate').count() != 0:
+        fail('跨组拖动后源组应为空')
+    if page.locator('.route-draft-note').count() != 1:
+        fail('拖动后应明确显示尚未保存')
+    page.click('[data-action="save-route-order"]')
+    page.wait_for_timeout(700)
+    page.click('[data-action="edit-route-group"][data-group="1"]')
+    page.wait_for_selector('dialog #route-group-editor')
+    if page.locator('[data-selected-panel] .candidate-picker-row').count() != 0:
+        fail('编辑本组应直接打开空的第二组')
+    page.click('[data-group-op="delete"]')
+    if page.locator('[data-group-select]').count() != 1:
+        fail('删除空组后应只剩1组')
     page.locator('dialog button[type="submit"]').click()
     page.wait_for_timeout(900)
-    single = page.evaluate("[...document.querySelectorAll('.route-group-head')].filter(h => h.offsetParent !== null).length")
-    if page.evaluate(visible_groups) != 1 or single != 0:
-        fail('删到只剩一组后，画布应回到不带组头的单节')
+    single = page.locator('.route-group-head').count()
+    if page.evaluate(visible_groups) != 1 or single != 1:
+        fail('单组也应保留直接编辑入口')
     results.append('route groups add move reload delete')
     if page.evaluate(paused) != 'true':
         fail('再次点击开关应恢复候选')

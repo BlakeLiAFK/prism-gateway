@@ -149,7 +149,7 @@ export async function save(action,params,form){
   const result=await rpc(action,{version,...params});
   state.config=result;
   closeDialog();
-  state.routeDraft=null;
+  state.routeDraft=null;state.routeDraftVersion=null;
   state.simulation=null;
   toast(`配置已保存 · v${result.version}`);
   await loadPage(false);

@@ -2,7 +2,8 @@
 // 路由由若干组按顺序组成：请求先在第 1 组按该组策略选候选，本组全部不可用或都接不了时才轮到下一组。
 import {$,$$,E,state} from './core.js';
 import {icon} from './icons.js';
-import {tag} from './ui.js';
+import {check,field,selectField,tag} from './ui.js';
+import {mountCandidatePicker} from './candidate-picker.js';
 
 // 画布与草稿都以组为单位：state.routeDraft 是未应用排序的组数组
 export const groupsOf=r=>state.routeDraft||r?.groups||[];
@@ -23,75 +24,89 @@ export function affinityText(r){
   return gs.map(g=>`${g.name}：${g.affinity?'开':'关'}`).join(' · ');
 }
 
-// 画布：每组一节；组与组之间一条「本组不行才轮到下一组」的连接线。只有一组时不画组头，与分组之前的画布一致
+// 每组保留编辑入口与空组落点，单组也可直接进入候选编辑。
 export function groupSections(groups,card,strategyName){
-  return groups.map((g,gi)=>`${gi?'<div class="group-link" aria-hidden="true">↓ 上一组全部不可用，或都接不了这次请求时</div>':''}<section class="route-group" data-group="${gi}">${groups.length>1?`<header class="route-group-head"><strong>${E(g.name)}</strong>${tag(strategyName(g.strategy),'neutral')}${tag(g.affinity?'会话亲和':'无亲和','neutral')}${gi?tag('备用组','warning'):''}</header>`:''}<div class="route-group-list">${(g.candidates||[]).map((x,i)=>card(x,i,gi)).join('')||'<div class="small muted">本组没有候选，请编辑路由添加模型。</div>'}</div></section>`).join('');
+  return groups.map((g,gi)=>`${gi?'<div class="group-link" aria-hidden="true">↓ 上一组全部不可用，或都接不了这次请求时</div>':''}<section class="route-group" data-group="${gi}"><header class="route-group-head"><strong>${gi+1} · ${E(g.name)}</strong>${tag(strategyName(g.strategy),'neutral')}${tag(g.affinity?'会话亲和':'无亲和','neutral')}<span class="tiny muted">${g.candidates.length} 个模型</span><button class="btn small ghost group-edit" data-action="edit-route-group" data-group="${gi}">编辑本组</button></header><div class="route-group-list" data-drop-group="${gi}">${(g.candidates||[]).map((x,i)=>card(x,i,gi)).join('')}<div class="route-drop-zone">${g.candidates.length?'拖到这里，放在本组末尾':'空组 · 拖入模型，或点击编辑本组添加'}</div></div></section>`).join('');
 }
 
-function groupRow(g,gid,strategies,canDelete){
-  return `<div class="group-row" data-gid="${E(gid)}"><input class="group-name" value="${E(g.name||'')}" maxlength="40" required aria-label="组名"><select class="group-strategy" aria-label="组策略">${strategies.map(x=>`<option value="${x[0]}" title="${E(x[1])}" ${x[0]===g.strategy?'selected':''}>${E(x[2])}</option>`).join('')}</select><label class="checkline tiny"><input type="checkbox" class="group-affinity" ${g.affinity?'checked':''}><span>会话亲和</span></label><span class="group-ops"><button type="button" class="icon-btn" data-grp="up" aria-label="上移该组">${icon('up')}</button><button type="button" class="icon-btn" data-grp="down" aria-label="下移该组">${icon('down')}</button><button type="button" class="icon-btn" data-grp="del" aria-label="删除该组" ${canDelete?'':'disabled'}>${icon('trash')}</button></span></div>`;
+// 目标位置是移除源候选后的索引；只搬移整个对象，保留权重、暂停与未知字段。
+export function moveGroupCandidate(groups,fromGroup,from,toGroup,to){
+  if(![fromGroup,from,toGroup,to].every(Number.isInteger))return false;
+  const source=groups[fromGroup]?.candidates,target=groups[toGroup]?.candidates;
+  if(!source||!target||from<0||from>=source.length||to<0||to>target.length-(source===target?1:0))return false;
+  if(source===target&&from===to)return false;
+  target.splice(to,0,source.splice(from,1)[0]);
+  return true;
 }
 
-// 编辑器里的组表。每行的 data-gid 是稳定标识：候选的「所属组」下拉按它记录，组上移、下移、删除后仍然对得上
-export function groupEditor(groups,strategies){
-  return `<div class="form-section"><h3>候选分组</h3><p class="small muted" style="margin:8px 0 14px">请求先在第 1 组按该组的策略选候选；本组全部不可用，或都接不了这次请求时，才轮到下一组。每组有自己的策略与会话亲和，同一个模型只能放在一个组里。想要兜底，就把贵但什么都能接的模型放在后面的组。</p><div id="group-table">${groups.map((g,i)=>groupRow(g,'g'+i,strategies,groups.length>1)).join('')}</div><button type="button" class="btn ghost small" id="group-add">${icon('plus')}添加一组</button></div>`;
-}
-
-// 模型所在组在编辑器里的稳定标识，用作候选行下拉的初始值
-export const initialGid=(groups,id)=>{
-  const i=groups.findIndex(g=>(g.candidates||[]).some(c=>c.model_id===id));
-  return 'g'+Math.max(i,0);
-};
-
-export function bindGroupEditor(strategies){
-  const table=$('#group-table');
-  if(!table)return;
-  let seq=0;
-  const rows=()=>$$('.group-row',table);
-  // 组的增删与改名之后，候选行的下拉、各组按钮的可用状态都要跟着刷新
-  const refresh=()=>{
-    const rs=rows();
-    $$('select.group-select').forEach(sel=>{
-      const cur=sel.value||sel.dataset.initial;
-      sel.innerHTML=rs.map((r,i)=>`<option value="${E(r.dataset.gid)}">${i+1} · ${E($('.group-name',r).value||'未命名')}</option>`).join('');
-      sel.value=rs.some(r=>r.dataset.gid===cur)?cur:rs[0]?.dataset.gid;
-      sel.hidden=rs.length<2;
-    });
-    rs.forEach((r,i)=>{
-      $('[data-grp=up]',r).disabled=i===0;
-      $('[data-grp=down]',r).disabled=i===rs.length-1;
-      $('[data-grp=del]',r).disabled=rs.length===1;
-    });
-    $('#group-add').disabled=rs.length>=MAX_GROUPS;
+export function bindCandidateDrag(move){
+  let drag=null;
+  const clear=()=>{
+    state.routeDragging=false;drag=null;
+    $$('.candidate.dragging,.route-group-list.drag-over').forEach(el=>el.classList.remove('dragging','drag-over'));
   };
-  table.addEventListener('click',ev=>{
-    const b=ev.target.closest('[data-grp]');
-    if(!b||b.disabled)return;
-    const row=b.closest('.group-row');
-    if(b.dataset.grp==='up')row.previousElementSibling?.before(row);
-    else if(b.dataset.grp==='down')row.nextElementSibling?.after(row);
-    else row.remove();
-    refresh();
+  $$('.candidate[data-drag-kind="candidate"]').forEach(el=>{
+    el.addEventListener('dragstart',ev=>{
+      if(ev.target.closest('button,input,select,a')){ev.preventDefault();return;}
+      drag={group:Number(el.dataset.group),index:Number(el.dataset.dragIndex)};
+      state.routeDragging=true;
+      ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(drag.index));
+      el.classList.add('dragging');
+    });
+    el.addEventListener('dragend',clear);
   });
-  table.addEventListener('input',refresh);
-  $('#group-add').addEventListener('click',()=>{
-    const n=rows().length;
-    if(n>=MAX_GROUPS)return;
-    table.insertAdjacentHTML('beforeend',groupRow({name:`第 ${n+1} 组`,strategy:'priority',affinity:true},`n${++seq}`,strategies,true));
-    refresh();
+  $$('[data-drop-group]').forEach(list=>{
+    list.addEventListener('dragover',ev=>{
+      if(!drag)return;
+      ev.preventDefault();ev.dataTransfer.dropEffect='move';list.classList.add('drag-over');
+    });
+    list.addEventListener('dragleave',ev=>{if(!list.contains(ev.relatedTarget))list.classList.remove('drag-over');});
+    list.addEventListener('drop',ev=>{
+      if(!drag)return;
+      ev.preventDefault();ev.stopPropagation();
+      const group=Number(list.dataset.dropGroup),card=ev.target.closest('.candidate');
+      let index=$$('.candidate',list).length;
+      if(card){const box=card.getBoundingClientRect();index=Number(card.dataset.dragIndex)+(ev.clientY>=box.top+box.height/2?1:0);}
+      const from=drag;
+      if(from.group===group&&from.index<index)index--;
+      clear();move(from.group,from.index,index,group);
+    });
   });
-  refresh();
 }
 
-// 从表单读出各组及组内候选。候选保持表单里的先后顺序（编辑器把已有候选按原顺序排在最前）；
-// 暂停状态沿用旧路由里的，编辑器不改它
-export function collectGroups(f,oldGroups){
-  const groups=$$('#group-table .group-row',f).map(r=>({gid:r.dataset.gid,name:$('.group-name',r).value.trim(),strategy:$('.group-strategy',r).value,affinity:$('.group-affinity',r).checked,candidates:[]}));
-  const paused=new Set(flatCandidates(oldGroups).filter(x=>x.disabled).map(x=>x.model_id));
-  for(const cb of $$('input[name=candidate]:checked',f)){
-    const row=cb.closest('.candidate-row');
-    const g=groups.find(x=>x.gid===$('.group-select',row)?.value)||groups[0];
-    g.candidates.push({model_id:cb.value,weight:Number($('[data-weight]',row).value),disabled:paused.has(cb.value)});
-  }
-  return groups.map(({gid,...g})=>g);
+// 当前组以对象引用保持身份，排序后重新计算索引，候选不会跟错组。
+export function mountGroupEditor(root,groups,strategies,initialGroup=0){
+  let active=groups[initialGroup]||groups[0];
+  root.innerHTML='<div class="group-editor-nav" role="group" aria-label="选择要编辑的分组"></div><div class="group-editor-panel"></div>';
+  const nav=$('.group-editor-nav',root),panel=$('.group-editor-panel',root);
+  const refreshNav=()=>{
+    nav.innerHTML=groups.map((g,i)=>`<button type="button" class="filter-chip ${g===active?'active':''}" aria-pressed="${g===active}" data-group-select="${i}">${i+1} · ${E(g.name||'未命名')}<span class="filter-count">${g.candidates.length}</span></button>`).join('')+`<button type="button" class="btn small ghost" id="group-add" data-group-op="add" ${groups.length>=MAX_GROUPS?'disabled':''}>${icon('plus')}添加组</button>`;
+  };
+  const render=()=>{
+    refreshNav();
+    const index=groups.indexOf(active);
+    panel.innerHTML=`<div class="group-editor-head"><h3>第 ${index+1} 组</h3><div class="flex"><button type="button" class="btn small ghost" data-group-op="up" ${index===0?'disabled':''}>上移组</button><button type="button" class="btn small ghost" data-group-op="down" ${index===groups.length-1?'disabled':''}>下移组</button><button type="button" class="btn small ghost" data-group-op="delete" ${groups.length===1||active.candidates.length?'disabled':''} title="只能删除空组，且至少保留一组">删除空组</button></div></div><div class="form-grid">${field('组名','group-name',active.name,'text','','required maxlength="40"')}${selectField('选择策略','group-strategy',active.strategy,strategies.map(([value,desc])=>[value,desc]))}</div>${check('会话亲和','group-affinity',active.affinity)}<p class="tiny muted">请求先尝试前面的组，本组不可用才轮到下一组。非空组请先移出或移除候选后再删除。</p><div class="group-candidate-picker"></div>`;
+    mountCandidatePicker($('.group-candidate-picker',panel),{groups,groupIndex:index,onChange:()=>{
+      refreshNav();$('[data-group-op="delete"]',panel).disabled=groups.length===1||active.candidates.length>0;
+    }});
+  };
+  root.addEventListener('input',ev=>{
+    if(ev.target.name==='group-name'){active.name=ev.target.value;refreshNav();}
+  });
+  root.addEventListener('change',ev=>{
+    if(ev.target.name==='group-strategy')active.strategy=ev.target.value;
+    if(ev.target.name==='group-affinity')active.affinity=ev.target.checked;
+  });
+  root.addEventListener('click',ev=>{
+    const button=ev.target.closest('[data-group-select],[data-group-op]');
+    if(!button||button.disabled)return;
+    const index=groups.indexOf(active),op=button.dataset.groupOp;
+    if(button.dataset.groupSelect!==undefined)active=groups[Number(button.dataset.groupSelect)];
+    else if(op==='add'&&groups.length<MAX_GROUPS){active={name:`第 ${groups.length+1} 组`,strategy:'priority',affinity:true,candidates:[]};groups.push(active);}
+    else if(op==='delete'&&groups.length>1&&!active.candidates.length){groups.splice(index,1);active=groups[Math.min(index,groups.length-1)];}
+    else if(op==='up'&&index>0)groups.splice(index-1,0,groups.splice(index,1)[0]);
+    else if(op==='down'&&index<groups.length-1)groups.splice(index+1,0,groups.splice(index,1)[0]);
+    render();$(`[data-group-select="${groups.indexOf(active)}"]`,nav)?.focus();
+  });
+  render();
 }

@@ -19,6 +19,9 @@ func TestEmbeddedAssetsAreServable(t *testing.T) {
 		{"/assets/app.css", ".setting-row"},
 		{"/assets/api.js", "api.json"},
 		{"/assets/icons.js", "svg"},
+		{"/assets/route-editor.js", "openRouteEditor"},
+		{"/assets/candidate-picker.js", "mountCandidatePicker"},
+		{"/assets/candidate-picker.css", ".candidate-picker"},
 	} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest("GET", "http://localhost"+tc.path, nil))

@@ -17,6 +17,8 @@ lint:
 	else echo "staticcheck 未安装，跳过（go install honnef.co/go/tools/cmd/staticcheck@latest）"; fi
 ui-unit:
 	node --experimental-vm-modules scripts/test_model_filters.mjs
+	node --experimental-vm-modules scripts/test_candidate_picker.mjs
+	node --experimental-vm-modules scripts/test_route_editing.mjs
 ui: build
 	python3 scripts/ui_smoke.py --binary ./$(BINARY)
 	python3 scripts/ui_request_filters.py --binary ./$(BINARY)

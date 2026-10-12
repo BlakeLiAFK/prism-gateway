@@ -4,8 +4,7 @@ import {$,$$,E,json,ms,pages,state} from './core.js';
 import {icon} from './icons.js';
 import {avatar,badge,btn,checked,closeDialog,confirm,copy,empty,field,footer,getModel,getProvider,nval,pillStatus,report,save,showDialog,tag,toast,val} from './ui.js';
 import {buildQuestions,connectionGuide,defaultQuestions,jobs,keyEditor,keys,overview,playground,preservePlayground,providerEditor,providers,requestDetail,requests,sessions,settings,usage} from './views.js';
-import {aliasEditor,moveCandidate,routeEditor,routes} from './routes.js';
-import {bindRoutes,routeActions} from './routes.js';
+import {aliasEditor,bindRoutes,routeActions,routeEditor,routeHasChanges,routes} from './routes.js';
 import {modelEditor,models} from './models.js';
 import {bindModels,modelActions} from './models.js';
 import {usageActions} from './usage.js';
@@ -148,12 +147,15 @@ export function renderPage(animated=false){
 
 export async function navigate(page){
   if(!pages.some(x=>x[0]===page))return;
+  if(routeHasChanges()&&page!==state.page){
+    history.replaceState(null,'','#'+state.page);toast('请先保存或放弃当前路由修改',true);return;}
+  if(routeHasChanges())return;
   closeDialog();
   $('.sidebar')?.classList.remove('open');
   if(state.page===page)return;
   state.page=page;
   state.simulation=null;
-  state.routeDraft=null;
+  state.routeDraft=null;state.routeDraftVersion=null;
   await loadPage();
 
 }
@@ -186,29 +188,27 @@ export function bindPage(){
 // 拖完立刻落库：这里没有「应用排序」按钮，改完不存等于没改。
 // kind 为 route 或 provider，对应 config 里的 routes / providers 与同名 reorder 动作
 async function reorderList(kind,from,to){
+  if(routeHasChanges()){toast('请先应用或放弃当前路由修改',true);return;}
   const ids=state.config[kind+'s'].map(x=>x.id);
   if(from===to||from<0||to<0||from>=ids.length||to>=ids.length)return;
   const [moved]=ids.splice(from,1);
   ids.splice(to,0,moved);
   try{await save(kind+'.reorder',{ids});}catch(e){report(e);}
 }
-
- let from=-1;
-
- let fromKind="";let fromGroup="";
-  $$('[data-drag-index]').forEach(el=>{el.addEventListener('dragstart',ev=>{from=Number(el.dataset.dragIndex);fromKind=el.dataset.dragKind;fromGroup=el.dataset.group||'';ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(from));el.classList.add('dragging');});el.addEventListener('dragend',()=>el.classList.remove('dragging'));el.addEventListener('dragover',ev=>{if(el.dataset.dragKind!==fromKind||(el.dataset.group||'')!==fromGroup)return;ev.preventDefault();ev.dataTransfer.dropEffect='move';});el.addEventListener('drop',async ev=>{
-    // 路由和候选是两份列表，跨着拖没有意义，直接忽略
-    // 候选只能在本组内拖动：换组在编辑器里选，拖拽不跨组
-    if(el.dataset.dragKind!==fromKind||(el.dataset.group||'')!==fromGroup)return;
-    ev.preventDefault();
-    const to=Number(el.dataset.dragIndex);
-    if(fromKind==='route'||fromKind==='provider')await reorderList(fromKind,from,to);
-    else moveCandidate(Number(el.dataset.group),from,to);
-  });});
-
+ let from=-1,fromKind='';
+  $$('[data-drag-kind="route"],[data-drag-kind="provider"]').forEach(el=>{
+    el.addEventListener('dragstart',ev=>{from=Number(el.dataset.dragIndex);fromKind=el.dataset.dragKind;ev.dataTransfer.effectAllowed='move';ev.dataTransfer.setData('text/plain',String(from));el.classList.add('dragging');});
+    el.addEventListener('dragend',()=>{el.classList.remove('dragging');fromKind='';});
+    el.addEventListener('dragover',ev=>{if(el.dataset.dragKind===fromKind){ev.preventDefault();ev.dataTransfer.dropEffect='move';}});
+    el.addEventListener('drop',async ev=>{
+      if(el.dataset.dragKind!==fromKind)return;
+      ev.preventDefault();await reorderList(fromKind,from,Number(el.dataset.dragIndex));
+    });
+  });
 }
 
 export function palette(){
+  if(routeHasChanges()){toast('请先保存或放弃当前路由修改',true);return;}
   closeDialog();
   const d=document.createElement('dialog');
   d.className='palette-dialog';
@@ -261,6 +261,7 @@ export function toggleTheme(){
 
 export async function handleAction(el){
   const action=el.dataset.action,id=el.dataset.id||'';
+  if(state.routeDraft&&['add-route','add-alias','toggle-route','logout'].includes(action)){toast('请先应用或放弃当前路由修改',true);return;}
   switch(action){
 
  case 'close-dialog':closeDialog();
@@ -404,30 +405,20 @@ export async function handleAction(el){
 
     }
 
- case 'select-route':state.routeID=id;
-    state.routeDraft=null;
-    state.simulation=null;
+ case 'select-route':
+    if(id===state.routeID)break;
+    if(state.routeDraft){toast('请先应用或放弃当前路由修改',true);break;}
+    state.routeID=id;state.routeDraftVersion=null;state.simulation=null;
     renderPage(false);
     break;
-
- case 'candidate-up':moveCandidate(Number(el.dataset.group),Number(el.dataset.index),Number(el.dataset.index)-1);
-    break;
-
- case 'candidate-down':moveCandidate(Number(el.dataset.group),Number(el.dataset.index),Number(el.dataset.index)+1);
-    break;
-
  case 'toggle-candidate':{
-      // 在画布当前顺序上翻转；有未应用的排序时一并保存，不让拖好的顺序丢失
+      // 有编排草稿时只更新草稿，避免暂停操作意外提交尚未应用的移动。
       const r=state.config.routes.find(x=>x.id===state.routeID);
       const groups=structuredClone(state.routeDraft||r.groups).map(g=>({...g,candidates:g.candidates.map(x=>x.model_id===id?{...x,disabled:!x.disabled}:x)}));
-      await save('route.save',{id:state.routeID,route:{groups}});
+      if(state.routeDraft){state.routeDraft=groups;renderPage(false);}
+      else await save('route.save',{id:state.routeID,route:{groups}});
       break;
-
     }
-
- case 'save-route-order':await save('route.save',{id:state.routeID,route:{groups:state.routeDraft}});
-    break;
-
  case 'play-protocol':preservePlayground();
     state.playProtocol=el.dataset.value;
     state.playResult=null;
@@ -495,7 +486,7 @@ export async function handleAction(el){
   }
 }
 
-
+window.addEventListener('beforeunload',ev=>{if(routeHasChanges()){ev.preventDefault();ev.returnValue='';}});
 window.addEventListener('hashchange',()=>navigate(location.hash.slice(1)).catch(report));
 
 document.addEventListener('click',ev=>{const el=ev.target.closest('[data-action]');if(!el||el.disabled)return;ev.preventDefault();handleAction(el).catch(report);});
