@@ -90,11 +90,15 @@ export function getProvider(id){
 
 }
 
-// 来源供应商标签：按供应商序号用黄金角取色相，同类供应商也能一眼区分
+// 名称 hash 保持排序和增删后的颜色稳定；限定绿到紫色域，避开错误与警告色。
 export function sourceTag(id){
-  const i=state.config.providers.findIndex(p=>p.id===id);
-  if(i<0)return '';
-  return `<span class="source-tag" style="--h:${Math.round(i*137.5)%360}" title="供应商 ${E(id)}">${E(state.config.providers[i].name||id)}</span>`;
+  const p=getProvider(id);
+  if(!p)return '';
+  const name=p.name||id;
+  let hash=2166136261;
+  for(let i=0;i<name.length;i++)hash=Math.imul(hash^name.charCodeAt(i),16777619);
+  const hue=100+(hash>>>0)%181;
+  return `<span class="source-tag" style="--h:${hue}" title="供应商 ${E(id)}">${E(name)}</span>`;
 
 }
 

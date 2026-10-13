@@ -16,6 +16,7 @@ lint:
 	@if command -v staticcheck >/dev/null 2>&1; then staticcheck ./...; \
 	else echo "staticcheck 未安装，跳过（go install honnef.co/go/tools/cmd/staticcheck@latest）"; fi
 ui-unit:
+	node --experimental-vm-modules scripts/test_source_tags.mjs
 	node --experimental-vm-modules scripts/test_model_filters.mjs
 	node --experimental-vm-modules scripts/test_candidate_picker.mjs
 	node --experimental-vm-modules scripts/test_route_editing.mjs
