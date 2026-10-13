@@ -80,7 +80,7 @@ curl http://127.0.0.1:8080/api.json \
 | `watch.token_list` | `{}` | 有效的监控令牌（不含令牌本身）：`id`、`name`、`created_at`、`expires_at`、`last_used_at` |
 | `watch.token_revoke` | `{id}` | 撤销监控令牌；正在使用它的终端在几秒内断开 |
 | `schedule.get` | `{}` | 定时任务配置、每项最近一次运行 `runs.{task}:{at,status,result}`、推送通道是否可用 `channel` |
-| `schedule.save` | 配置字段（只覆盖提交的字段） | `utc_offset`、`{backup,quota,report,expiry,maintain,upstream}_enabled`、`backup_hour`、`backup_keep`、`quota_percent`、`quota_minutes`、`report_hour`、`expiry_days`、`maintain_hour`、`upstream_hours`、`free_enabled`、`free_hours`、`free_route`、`free_min_context`、`free_require_tools`、`free_drop_reasoning`、`free_exclude`（逗号分隔的上游 ID） |
+| `schedule.save` | 配置字段（只覆盖提交的字段） | `utc_offset`、`{backup,quota,report,expiry,maintain,upstream,price}_enabled`、`backup_hour`、`backup_keep`、`quota_percent`、`quota_minutes`、`report_hour`、`expiry_days`、`maintain_hour`、`upstream_hours`、`price_hours`（1–168）、`free_enabled`、`free_hours`、`free_route`、`free_min_context`、`free_require_tools`、`free_drop_reasoning`、`free_exclude`（逗号分隔的上游 ID）；`price_sync_version` 是服务端维护的内部迁移字段，提交值会被忽略 |
 | `schedule.run` | `{"task":"backup"}` | 立即运行一次，返回 `{at,status,result}`；`result` 为空表示无事可做 |
 | `model.stats` | `{days?}` | 读取用量小时汇总表，近 N 天（默认 7，最多 90）按模型与供应商汇总的请求、成功、失败、tokens、估算花费、未计价次数、平均耗时、最后使用时间 |
 | `model.usage` | `{id, days?, tz_offset_min?}` | 单个模型近 N 天（默认 30）的每日用量（按浏览器时区分日）与按 `agent_role` 的拆分 |
@@ -143,11 +143,12 @@ curl http://127.0.0.1:8080/api.json \
       "max_output_tokens":4096,
       "concurrency":2,
       "rpm":0,
-      "pricing_set":false,
-      "input_price":0,
-      "output_price":0,
-      "cache_price":0,
-      "write_price":0,
+      "pricing_set":true,
+      "price_locked":false,
+      "input_price":3,
+      "output_price":15,
+      "cache_price":0.3,
+      "write_price":3.75,
       "limit_5h":0,
       "limit_7d":0,
       "limit_30d":0
@@ -156,7 +157,7 @@ curl http://127.0.0.1:8080/api.json \
 }
 ```
 
-价格是 USD / 百万 token。限额是 USD，0 表示不添加该项本地限制。上例能力和容量是结构示例，不是任何型号的性能承诺。`pricing_set=false` 表示未知，不能据此设置非零美元限额。没有 `quota.reset` 上游重置功能。
+价格是 USD / 百万 token。自动同步的 `price_source`、`price_updated_at`、`price_tiers` 通过 `model.list` / `config.get` 读取，`model.save` 不接受覆盖这些字段。`price_source` 是 `upstream` 或 `models.dev:<providerKey>`；`price_updated_at` 只在价格或来源改变时更新。`price_tiers` 按 `min_input_tokens` 表示适用起点，可包含输入、输出、缓存读取与缓存写入价。手动修改基础价格或计价确认状态后保存，会清除来源和分档，成为固定单价；`price_locked=true` 时自动同步不修改该模型。限额是 USD，0 表示不添加该项本地限制。上例价格、能力和容量仅说明结构，不是任何型号的价格或性能承诺。`pricing_set=false` 表示未知，不能据此设置非零美元限额。没有 `quota.reset` 上游重置功能。
 
 ```json
 {
@@ -424,17 +425,18 @@ curl -sN --fail-with-body https://HOST/api.json \
 
 ## 自动价格、报告与告警
 
-以下字段通过 `schedule.get/save` 读写，新增任务默认关闭。`schedule.run` 可手动运行对应任务。
+以下字段通过 `schedule.get/save` 读写。`schedule.run` 可手动运行对应任务。
 
 | 任务 ID | 配置字段 | 默认与范围 |
 | --- | --- | --- |
-| price | price_enabled、price_hours | 关闭；24小时，1–168 |
+| price | price_enabled、price_hours | 启用；1小时，1–168。缺少内部版本字段的旧配置首次读取时也迁移为启用、1小时；保存后显式关闭或合法周期会持久保留 |
 | weekly | weekly_enabled、weekly_weekday、weekly_hour | 关闭；周一（1–7）、9点（0–23） |
 | spend | spend_enabled、spend_multiple、spend_minimum | 关闭；2倍、最低10美元；每小时检查 |
 | failure | failure_enabled、failure_minutes、failure_min_samples、failure_percent、failure_cooldown_minutes | 关闭；15分钟、20样本、20%、60分钟冷却；每5分钟检查 |
 | key-budget | key_budget_enabled、key_budget_percent、key_budget_cooldown_minutes | 关闭；80%、1440分钟冷却；每小时检查 |
 
-- `model.save` 的 `model.price_locked` 默认为 false；自动价格同步跳过锁定模型，仅处理启用的 OpenRouter 供应商，先完整获取再通过配置事务写入。缺失或非法价格不覆盖现值，无变化不生成配置版本。开启同步或手动运行即确认有效上游标价。
+- `model.save` 的 `model.price_locked` 默认为 false。自动价格同步跳过锁定模型，按已启用供应商逐家处理：供应商模型接口中的有效价格优先；请求失败或缺少价格时，再按精确 provider key 与 model ID 从 models.dev 获取。models.dev 单价按 USD / 百万 token 读取，分档保存在 `price_tiers`。没有精确匹配时保留原价并写入任务报告，不把订阅额度当成单价或无限免费；单家失败不阻止其他供应商的有效更新。
+- 自动价格的 `price_source` 为 `upstream` 或 `models.dev:<providerKey>`，`price_updated_at` 只在价格或来源改变时更新。手动修改基础价格或计价确认状态后保存，会清除自动来源和分档并成为固定单价；要保留手动价格，请同时设置 `price_locked=true`，否则下轮同步仍可更新。同步无价格变化时不生成配置版本，任务最近运行时间仍正常更新。
 - 周报覆盖上一个完整周一至周日，按配置时区、星期和时刻发送；错过本周时刻会补跑一次。日报、周报中的模型优先使用显示名称，删除后回退 ID。
 - 花费异常比较今日与前七个完整自然日均值；均值为零不计算倍率。统计口径包含已记录实际费用、本地估算及异常预留，不能视为供应商账单。
 - 失败率按请求尝试的精确分钟窗口统计，排除演示与进行中请求；错误与状态未知均计入，保留原有连续失败告警。

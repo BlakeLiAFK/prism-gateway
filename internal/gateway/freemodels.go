@@ -169,8 +169,9 @@ func applyFreeModels(nc *Config, p Provider, items []any, c scheduleConfig) (ch 
 
 // enableFree 启用免费模型：价格就是 0，直接确认；丢弃推理内容只在管理员开了选项时打开，不会被关掉
 func enableFree(m *Model, c scheduleConfig) {
-	m.Enabled, m.PricingSet = true, true
-	m.InputPrice, m.OutputPrice, m.CachePrice, m.WritePrice = 0, 0, 0, 0
+	m.Enabled = true
+	zero := 0.0
+	applyModelPrice(m, syncedModelPrice{cache: &zero, write: &zero})
 	m.DropReasoning = m.DropReasoning || c.FreeDropReasoning
 }
 

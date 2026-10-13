@@ -15,23 +15,24 @@ import (
 )
 
 type App struct {
-	Store      *Store
-	Engine     *Engine
-	UI         http.Handler
-	Listen     *Listener
-	Started    int64
-	Context    context.Context
-	loginMu    sync.Mutex
-	logins     map[string][]int64
-	workers    sync.WaitGroup
-	background sync.WaitGroup
-	usageMu    sync.Mutex
-	usageCache map[string]usageCacheEntry
-	alerts     alerter
-	statsMu    sync.Mutex
-	statsCache map[int]statsCacheEntry
-	missing    missingModels
-	sched      scheduler
+	Store         *Store
+	Engine        *Engine
+	UI            http.Handler
+	Listen        *Listener
+	Started       int64
+	Context       context.Context
+	loginMu       sync.Mutex
+	logins        map[string][]int64
+	workers       sync.WaitGroup
+	background    sync.WaitGroup
+	usageMu       sync.Mutex
+	usageCache    map[string]usageCacheEntry
+	alerts        alerter
+	statsMu       sync.Mutex
+	statsCache    map[int]statsCacheEntry
+	missing       missingModels
+	sched         scheduler
+	pricingClient *http.Client
 }
 
 func NewApp(ctx context.Context, s *Store, ui http.Handler) *App {

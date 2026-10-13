@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.37.6"
+const Version = "1.38.0"
 
 type Object = map[string]any
 
@@ -54,20 +54,23 @@ type Model struct {
 	DropReasoning bool `json:"drop_reasoning"`
 	// 跨协议目标收不了文档（PDF 等）时，由管理员显式打开：文档块换成一行占位说明，
 	// 并在响应头 X-Prism-Dropped 中标注。与 DropReasoning 各管各的，不互相扩权。
-	DropDocuments bool    `json:"drop_documents"`
-	Context       int     `json:"context_window"`
-	MaxOutput     int     `json:"max_output_tokens"`
-	Concurrency   int     `json:"concurrency"`
-	RPM           int     `json:"rpm"`
-	InputPrice    float64 `json:"input_price"`
-	OutputPrice   float64 `json:"output_price"`
-	CachePrice    float64 `json:"cache_price"`
-	WritePrice    float64 `json:"write_price"`
-	PricingSet    bool    `json:"pricing_set"`
-	PriceLocked   bool    `json:"price_locked"`
-	Limit5h       float64 `json:"limit_5h"`
-	Limit7d       float64 `json:"limit_7d"`
-	Limit30d      float64 `json:"limit_30d"`
+	DropDocuments  bool        `json:"drop_documents"`
+	Context        int         `json:"context_window"`
+	MaxOutput      int         `json:"max_output_tokens"`
+	Concurrency    int         `json:"concurrency"`
+	RPM            int         `json:"rpm"`
+	InputPrice     float64     `json:"input_price"`
+	OutputPrice    float64     `json:"output_price"`
+	CachePrice     float64     `json:"cache_price"`
+	WritePrice     float64     `json:"write_price"`
+	PricingSet     bool        `json:"pricing_set"`
+	PriceLocked    bool        `json:"price_locked"`
+	PriceSource    string      `json:"price_source,omitempty"`
+	PriceUpdatedAt int64       `json:"price_updated_at,omitempty"`
+	PriceTiers     []PriceTier `json:"price_tiers,omitempty"`
+	Limit5h        float64     `json:"limit_5h"`
+	Limit7d        float64     `json:"limit_7d"`
+	Limit30d       float64     `json:"limit_30d"`
 }
 type Candidate struct {
 	ModelID string `json:"model_id"`
@@ -308,6 +311,9 @@ func (c Config) Validate() error {
 		}
 		if !m.PricingSet && (m.Limit5h > 0 || m.Limit7d > 0 || m.Limit30d > 0) {
 			return errors.New("启用美元限额前必须确认模型计价")
+		}
+		if e := validatePriceTiers(m.PriceTiers); e != nil {
+			return e
 		}
 	}
 	for _, r := range c.Routes {

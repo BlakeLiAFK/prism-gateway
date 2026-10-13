@@ -44,10 +44,11 @@ func TestPriceSyncAllProvidersLocksAndMissingCache(t *testing.T) {
 	second := priceSyncProvider(t, `{"data":[{"id":"vendor/b","pricing":{"prompt":0.000003,"completion":0.000004,"input_cache_write":0.0000005}}]}`, &secondCalls)
 	disabled := priceSyncProvider(t, `{"data":[{"id":"vendor/off","pricing":{"prompt":"0.1","completion":"0.1"}}]}`, &disabledCalls)
 	h := newHarness(t)
+	priceSyncCatalog(t, h, Object{}, nil)
 	h.change(t, func(c *Config) {
 		c.Providers = []Provider{
 			{ID: "p_one", Name: "OpenRouter One", Kind: "openrouter", BaseURL: first.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
-			{ID: "p_two", Name: "OpenRouter Two", Kind: "openrouter", BaseURL: second.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
+			{ID: "p_two", Name: "DeepSeek", Kind: "deepseek", BaseURL: second.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
 			{ID: "p_off", Name: "Disabled", Kind: "openrouter", BaseURL: disabled.URL, Auth: "none", Enabled: false, AllowPrivate: true, TimeoutSec: 30},
 		}
 		locked := pricedModel("locked", "p_one", "vendor/locked", 7, 8, 9, 10)
@@ -99,32 +100,34 @@ func TestPriceSyncAllProvidersLocksAndMissingCache(t *testing.T) {
 	}
 
 	version := h.s.Config().Version
-	if result, err = h.a.taskPriceSync(scheduleConfig{}); err != nil || result != "" || h.s.Config().Version != version {
+	if result, err = h.a.taskPriceSync(scheduleConfig{}); err != nil || !strings.Contains(result, "negative") || h.s.Config().Version != version {
 		t.Fatalf("无变化不应产生新版本: result=%q err=%v v%d→v%d", result, err, version, h.s.Config().Version)
 	}
 }
 
-func TestPriceSyncFetchFailureIsAtomic(t *testing.T) {
+func TestPriceSyncFetchFailureKeepsOtherUpdates(t *testing.T) {
 	var calls atomic.Int32
 	good := priceSyncProvider(t, `{"data":[{"id":"vendor/a","pricing":{"prompt":"0.000001","completion":"0.000002"}}]}`, &calls)
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
 	t.Cleanup(bad.Close)
 	h := newHarness(t)
+	priceSyncCatalog(t, h, Object{}, nil)
 	h.change(t, func(c *Config) {
 		c.Providers = []Provider{
 			{ID: "p_good", Name: "Good", Kind: "openrouter", BaseURL: good.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
 			{ID: "p_bad", Name: "Bad", Kind: "openrouter", BaseURL: bad.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
 		}
-		c.Models = []Model{pricedModel("a", "p_good", "vendor/a", 10, 20, 30, 40)}
+		c.Models = []Model{pricedModel("a", "p_good", "vendor/a", 10, 20, 30, 40), pricedModel("unresolved", "p_bad", "vendor/b", 11, 22, 33, 44)}
 	})
 	version := h.s.Config().Version
 	result, err := h.a.taskPriceSync(scheduleConfig{})
-	if err == nil || !strings.Contains(err.Error(), "Bad") || result != "" {
-		t.Fatalf("应返回明确的供应商错误: result=%q err=%v", result, err)
+	if err != nil || !strings.Contains(result, "unresolved") || !strings.Contains(result, "1 个模型") {
+		t.Fatalf("应更新有效供应商并报告未匹配模型: result=%q err=%v", result, err)
 	}
 	m, _ := h.s.Config().model("a")
-	if m.InputPrice != 10 || h.s.Config().Version != version {
-		t.Fatalf("抓取失败不应部分更新: %+v v%d→v%d", m, version, h.s.Config().Version)
+	unresolved, _ := h.s.Config().model("unresolved")
+	if m.InputPrice != 1 || unresolved.InputPrice != 11 || h.s.Config().Version != version+1 {
+		t.Fatalf("有效价格应一次事务更新，未匹配价格应保留: %+v %+v", m, unresolved)
 	}
 }
 
@@ -137,6 +140,7 @@ func TestPriceSyncRejectsConcurrentConfigChange(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	h := newHarness(t)
+	priceSyncCatalog(t, h, Object{}, nil)
 	h.change(t, func(c *Config) {
 		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", Kind: "openrouter", BaseURL: server.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
 		c.Models = []Model{pricedModel("a", "p_or", "vendor/a", 10, 20, 30, 40)}
@@ -168,6 +172,7 @@ func TestPriceSyncScheduleHandler(t *testing.T) {
 	var calls atomic.Int32
 	server := priceSyncProvider(t, `{"data":[{"id":"vendor/a","pricing":{"prompt":"0.000001","completion":"0.000002"}}]}`, &calls)
 	h := newHarness(t)
+	priceSyncCatalog(t, h, Object{}, nil)
 	h.change(t, func(c *Config) {
 		c.Providers = []Provider{{ID: "p_or", Name: "OpenRouter", Kind: "openrouter", BaseURL: server.URL, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
 		c.Models = []Model{pricedModel("a", "p_or", "vendor/a", 10, 20, 30, 40)}
@@ -175,8 +180,8 @@ func TestPriceSyncScheduleHandler(t *testing.T) {
 
 	_, out := h.rpc(t, "schedule.get", Object{}, h.token)
 	config := obj(obj(out["data"])["config"])
-	if config["price_enabled"] != false || num(config, "price_hours") != 24 {
-		t.Fatalf("价格同步应默认关闭且间隔 24 小时: %v", config)
+	if config["price_enabled"] != true || num(config, "price_hours") != 1 {
+		t.Fatalf("价格同步应默认开启且间隔 1 小时: %v", config)
 	}
 	w, _ := h.rpc(t, "schedule.save", Object{"price_enabled": true, "price_hours": 12}, h.token)
 	requireStatus(t, w, http.StatusOK)

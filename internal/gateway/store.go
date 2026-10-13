@@ -349,6 +349,7 @@ func cloneConfig(c Config) Config {
 	out.Models = append([]Model{}, c.Models...)
 	for i, m := range out.Models {
 		out.Models[i].Protocols = slices.Clone(m.Protocols)
+		out.Models[i].PriceTiers = clonePriceTiers(m.PriceTiers)
 	}
 	out.Routes = append([]Route{}, c.Routes...)
 	for i := range out.Routes {

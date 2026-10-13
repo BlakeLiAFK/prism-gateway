@@ -38,6 +38,7 @@ type scheduleConfig struct {
 	MaintainHour             int     `json:"maintain_hour"`
 	UpstreamEnabled          bool    `json:"upstream_enabled"`
 	UpstreamHours            int     `json:"upstream_hours"`
+	PriceSyncVersion         int     `json:"price_sync_version"`
 	PriceEnabled             bool    `json:"price_enabled"`
 	PriceHours               int     `json:"price_hours"`
 	SpendEnabled             bool    `json:"spend_enabled"`
@@ -64,7 +65,7 @@ type scheduleConfig struct {
 // 自动备份、远程备份与每日日报默认关闭，由管理员自己开启
 var defaultSchedule = scheduleConfig{UTCOffset: 8, BackupHour: 4, BackupKeep: 7, RemoteMinutes: 60, RemoteKeep: 48, QuotaEnabled: true, QuotaPercent: 80, QuotaMinutes: 10,
 	ReportHour: 9, WeeklyWeekday: 1, WeeklyHour: 9, ExpiryEnabled: true, ExpiryDays: 3, MaintainEnabled: true, MaintainHour: 5, UpstreamEnabled: true, UpstreamHours: 6,
-	PriceHours: 24, SpendMultiple: 2, SpendMinimum: 10, FailureMinutes: 15, FailureMinSamples: 20, FailurePercent: 20, FailureCooldownMinutes: 60,
+	PriceSyncVersion: 1, PriceEnabled: true, PriceHours: 1, SpendMultiple: 2, SpendMinimum: 10, FailureMinutes: 15, FailureMinSamples: 20, FailurePercent: 20, FailureCooldownMinutes: 60,
 	KeyBudgetPercent: 80, KeyBudgetCooldownMinutes: 1440, FreeHours: 6, FreeRoute: "lite", FreeMinContext: 128000, FreeRequireTools: true}
 
 type taskRun struct {
@@ -229,7 +230,14 @@ func (a *App) loadSchedule() (scheduleConfig, error) {
 	if err != nil || len(rows) == 0 {
 		return c, err
 	}
-	return c, json.Unmarshal([]byte(rows[0].String("value")), &c)
+	c.PriceSyncVersion = 0
+	if err = json.Unmarshal([]byte(rows[0].String("value")), &c); err != nil {
+		return c, err
+	}
+	if c.PriceSyncVersion == 0 {
+		c.PriceSyncVersion, c.PriceEnabled, c.PriceHours = 1, true, 1
+	}
+	return c, nil
 }
 
 func (a *App) saveSchedule(p Object) (any, error) {
@@ -241,6 +249,7 @@ func (a *App) saveSchedule(p Object) (any, error) {
 	if err = json.Unmarshal([]byte(raw(p)), &c); err != nil {
 		return nil, fail("INVALID_PARAMS", "定时任务参数格式不正确", 400)
 	}
+	c.PriceSyncVersion = 1
 	if err = c.validate(); err != nil {
 		return nil, err
 	}

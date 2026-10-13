@@ -100,27 +100,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 			return nil
 		})
 	case "model.save":
-		v := Model{ID: id, Enabled: true, Protocol: "chat", ToolsUnknown: true, VisionUnknown: true, Context: 128000, MaxOutput: 4096, Concurrency: 2}
-		if old, ok := c.model(id); ok {
-			v = old
-		}
-		if er := decode(p["model"], &v); er != nil {
-			return nil, fail("INVALID_PARAMS", er.Error(), 400)
-		}
-		confirmCapabilities(&v, obj(p["model"]))
-		if v.ID == "" {
-			v.ID = randomID("m_")
-		}
-		return a.Store.Change(version, action, v.ID, func(c *Config) error {
-			for i, x := range c.Models {
-				if x.ID == v.ID {
-					c.Models[i] = v
-					return nil
-				}
-			}
-			c.Models = append(c.Models, v)
-			return nil
-		})
+		return a.saveModel(c, version, id, p["model"])
 	case "route.save":
 		v := Route{ID: id, Enabled: true, Groups: []Group{{Name: "主", Strategy: "priority", Affinity: true, Candidates: []Candidate{}}}}
 		if old, ok := c.route(id); ok {

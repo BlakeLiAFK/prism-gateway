@@ -283,7 +283,11 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 					return nil, nil, err
 				}
 				l := e.load(m)
-				score := baseScore(g.Strategy, i, cm, m, pressure, l)
+				priced := m
+				if g.Strategy == "cost" && len(m.PriceTiers) > 0 {
+					priced = modelPriceAt(m, estimateInput(body))
+				}
+				score := baseScore(g.Strategy, i, cm, priced, pressure, l)
 				if g.Pinned == m.ID {
 					score += affinityBonus
 				}

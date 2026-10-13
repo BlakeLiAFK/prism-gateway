@@ -43,6 +43,8 @@ assert.equal(candidateMatches(models[121],'备用渠道',{protocol:'chat'}),fals
 assert.equal(candidateMatches(models[122],'主渠道',{free:true}),false);
 assert.equal(candidateMatches({...models[120],pricing_set:false},'主渠道',{free:true}),false);
 assert.equal(candidateMatches({...models[120],cache_price:0.01},'主渠道',{free:true}),false);
+assert.equal(candidateMatches({...models[120],price_tiers:[{min_input_tokens:200000,input_price:0.01,output_price:0}]},'主渠道',{free:true}),false);
+assert.equal(candidateMatches({...models[120],price_tiers:[{min_input_tokens:200000,input_price:0,output_price:0}]},'主渠道',{free:true}),true);
 assert.equal(candidateMatches({...models[120],context_window:undefined},'主渠道',{minContext:128000}),false);
 assert.equal(candidateMatches(models[120],'主渠道',{provider:'p0',q:'主渠道'}),true);
 

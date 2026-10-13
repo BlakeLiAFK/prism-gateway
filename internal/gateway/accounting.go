@@ -18,6 +18,7 @@ func cost(m Model, u Usage) int64 {
 	if !m.PricingSet {
 		return 0
 	}
+	m = modelPriceAt(m, u.Input)
 	uncached := max(int64(0), u.Input-u.Cache-u.Write)
 	v := (float64(uncached)*m.InputPrice + float64(u.Output)*m.OutputPrice + float64(u.Cache)*m.CachePrice + float64(u.Write)*m.WritePrice) * 1000
 	return int64(math.Ceil(v))

@@ -42,6 +42,8 @@ assert.equal(matches({free:true},{pricing_set:false}),false);
 for(const field of ['input_price','output_price','cache_price','write_price']){
   assert.equal(matches({free:true},{[field]:0.000001}),false,field);
 }
+assert.equal(matches({free:true},{price_tiers:[{min_input_tokens:200000,input_price:0,output_price:1}]}),false);
+assert.equal(matches({free:true},{price_tiers:[{min_input_tokens:200000,input_price:0,output_price:0}]}),true);
 for(const minContext of [128000,200000,256000,512000,1000000,2000000]){
   for(const [size,want] of [[minContext-1,false],[minContext,true],[minContext+1,true],[0,false],[undefined,false]]){
     assert.equal(matches({minContext},{context_window:size}),want,`${minContext}: ${size}`);

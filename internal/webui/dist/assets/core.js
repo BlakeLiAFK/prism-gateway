@@ -23,6 +23,8 @@ export const formatTokens=(value,mode=state.tokenDisplay)=>{
 
 export const money=n=>'$'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:Number(n)>0&&Number(n)<.01?6:4});
 
+export const isFreeModel=m=>!!m?.pricing_set&&[m,...(m.price_tiers||[])].every(p=>['input_price','output_price','cache_price','write_price'].every(k=>p[k]==null||p[k]===0));
+
 export const dateTimeSec=n=>n?new Date(n).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}):'—';
 
 export const dateTime=n=>n?new Date(n).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'—';

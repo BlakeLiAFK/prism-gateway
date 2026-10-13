@@ -1,5 +1,5 @@
 // 路由候选选择器：已选项编排与大量模型筛选保持在本地草稿中。
-import {$,$$,E,formatTokens,state} from './core.js';
+import {$,$$,E,formatTokens,isFreeModel,state} from './core.js';
 import {sourceTag} from './ui.js';
 
 export const CANDIDATE_PAGE_SIZE=50;
@@ -21,7 +21,7 @@ export function candidateMatches(m,providerName,filters){
   if(filters.vision&&(!m.vision||m.vision_unknown))return false;
   if(filters.out64k&&!(m.max_output_tokens>=64000))return false;
   if(filters.priced&&!m.pricing_set)return false;
-  if(filters.free&&(!m.pricing_set||m.input_price||m.output_price||m.cache_price||m.write_price))return false;
+  if(filters.free&&!isFreeModel(m))return false;
   if(filters.stealth&&![m.id,m.name,m.upstream].some(v=>String(v||'').toLowerCase().includes('stealth')))return false;
   if(filters.minContext&&!(m.context_window>=filters.minContext))return false;
   return true;
