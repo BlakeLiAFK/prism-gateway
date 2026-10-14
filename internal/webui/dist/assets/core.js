@@ -29,6 +29,16 @@ export const dateTimeSec=n=>n?new Date(n).toLocaleString('zh-CN',{month:'2-digit
 
 export const dateTime=n=>n?new Date(n).toLocaleString('zh-CN',{month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hour12:false}):'—';
 
+// 把毫秒时间戳写成「今天/明天 HH:mm」，更晚的退回完整日期；比一串数字更看得懂恢复时间。
+export function untilText(ts){
+  const d=new Date(ts),base=new Date();
+  const days=Math.round((new Date(d.getFullYear(),d.getMonth(),d.getDate())-new Date(base.getFullYear(),base.getMonth(),base.getDate()))/86400000);
+  const hm=d.toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false});
+  if(days===0)return `今天 ${hm}`;
+  if(days===1)return `明天 ${hm}`;
+  return dateTime(ts);
+}
+
 export const ms=n=>Number(n)>=1000?(Number(n)/1000).toFixed(2)+' s':Math.round(Number(n)||0)+' ms';
 
 export const json=v=>JSON.stringify(v,null,2);

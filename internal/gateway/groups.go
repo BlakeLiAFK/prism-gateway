@@ -16,12 +16,17 @@ const (
 	maxGroups = 5
 	// groupPenalty 让后一组的所有候选排在前一组之后：比任何策略分、亲和分与不健康扣分的组合都大
 	groupPenalty = 1e9
+	// defaultAffinity 是路由与组都没设置亲和时的兜底，与新建路由「主」组一直以来的默认一致
+	defaultAffinity = true
 )
 
 type Group struct {
-	Name       string      `json:"name"`
-	Strategy   string      `json:"strategy"`
-	Affinity   bool        `json:"affinity"`
+	Name     string `json:"name"`
+	Strategy string `json:"strategy"`
+	// Affinity 由客户端提交时是三态：nil = 继承路由的 AffinityDefault，true / false = 本组显式设置。
+	// normalize 会把它解析成确定值并写回非 nil，此后运行时（读绑定 / 亲和加分 / 写绑定）
+	// 直接读它，不再重复做默认值判断。已解析的配置序列化后始终输出明确 true / false。
+	Affinity   *bool       `json:"affinity"`
 	Candidates []Candidate `json:"candidates"`
 }
 
@@ -42,6 +47,8 @@ func (r Route) primaryStrategy() string {
 	return r.Groups[0].Strategy
 }
 
+func boolPtr(v bool) *bool { return &v }
+
 func cloneGroups(gs []Group) []Group {
 	if gs == nil {
 		return nil
@@ -49,6 +56,9 @@ func cloneGroups(gs []Group) []Group {
 	out := make([]Group, len(gs))
 	for i, g := range gs {
 		out[i] = g
+		if g.Affinity != nil {
+			out[i].Affinity = boolPtr(*g.Affinity)
+		}
 		out[i].Candidates = slices.Clone(g.Candidates)
 		if out[i].Candidates == nil {
 			out[i].Candidates = []Candidate{}
@@ -57,24 +67,37 @@ func cloneGroups(gs []Group) []Group {
 	return out
 }
 
-// normalize 把旧版单组字段（以及 1.36.0 的 fallback 标记）转成 groups。
+// normalize 把旧版单组字段（以及 1.36.0 的 fallback 标记）转成 groups，并把亲和解析成确定值。
 // load、Store.Change（含 config.import）、route.save 都走这里，保证内存里的路由只有一种形态。
 func (r *Route) normalize() error {
-	legacy := r.Strategy != "" || r.Affinity || len(r.Candidates) > 0
-	if len(r.Groups) > 0 && legacy {
+	affinity := defaultAffinity
+	if r.AffinityDefault != nil {
+		affinity = *r.AffinityDefault
+	}
+	// 没有 groups 且没给 AffinityDefault，说明这是旧形态的路由：那时顶层 affinity 字段一直存在，
+	// 布尔零值 false 同样是有意义的「显式关闭」，没有「未设置」这一态，所以取旧字段的原值
+	if len(r.Groups) == 0 && r.AffinityDefault == nil {
+		affinity = r.Affinity
+	}
+	if len(r.Groups) > 0 && (r.Strategy != "" || r.Affinity || len(r.Candidates) > 0) {
 		return errors.New("路由不能同时带 groups 与旧版的 strategy / affinity / candidates")
 	}
 	if len(r.Groups) == 0 {
 		primary, fallback := splitFallback(r.Candidates)
-		r.Groups = []Group{{Name: "主", Strategy: cmp.Or(r.Strategy, "priority"), Affinity: r.Affinity, Candidates: primary}}
+		r.Groups = []Group{{Name: "主", Strategy: cmp.Or(r.Strategy, "priority"), Affinity: boolPtr(affinity), Candidates: primary}}
 		if len(fallback) > 0 {
-			r.Groups = append(r.Groups, Group{Name: "兜底", Strategy: "priority", Affinity: true, Candidates: fallback})
+			r.Groups = append(r.Groups, Group{Name: "兜底", Strategy: "priority", Affinity: boolPtr(true), Candidates: fallback})
 		}
 	}
+	// 旧字段已经被读进第 1 组，之后不再输出
 	r.Strategy, r.Affinity, r.Candidates = "", false, nil
+	// 存确定的默认值：组保留 nil（继承）时，这里就是它们解析出的值
+	r.AffinityDefault = boolPtr(affinity)
 	for i := range r.Groups {
 		g := &r.Groups[i]
 		g.Name = cmp.Or(strings.TrimSpace(g.Name), fmt.Sprintf("第 %d 组", i+1))
+		// 组不写回解析值：nil 表示「继承路由默认值」，把这个状态持久化下来，
+		// 之后拨动路由开关才能一次影响所有没单独设置的组（groupAffinity 在运行时解析）
 		if g.Candidates == nil {
 			g.Candidates = []Candidate{}
 		}
@@ -161,20 +184,23 @@ func (r *Route) applyLegacy(legacy Object) error {
 		return fail("INVALID_PARAMS", er.Error(), 400)
 	}
 	if len(r.Groups) == 0 {
-		r.Groups = []Group{{Name: "主", Strategy: "priority", Affinity: true, Candidates: []Candidate{}}}
+		r.Groups = []Group{{Name: "主", Strategy: "priority", Affinity: boolPtr(defaultAffinity), Candidates: []Candidate{}}}
 	}
 	g := &r.Groups[0]
 	if in.Strategy != nil {
 		g.Strategy = *in.Strategy
 	}
 	if in.Affinity != nil {
-		g.Affinity = *in.Affinity
+		// 旧字段落到第 1 组的同时也定下路由默认值：旧客户端不会分「路由默认」与「本组设置」，
+		// 只有这样，只发 affinity 的旧调用（含本组的暂停开关）才会在 normalize 里保持原意
+		g.Affinity = boolPtr(*in.Affinity)
+		r.AffinityDefault = boolPtr(*in.Affinity)
 	}
 	if in.Candidates != nil {
 		primary, fallback := splitFallback(*in.Candidates)
 		g.Candidates = primary
 		if len(fallback) > 0 {
-			r.Groups = append(r.Groups[:1], Group{Name: "兜底", Strategy: "priority", Affinity: true, Candidates: fallback})
+			r.Groups = append(r.Groups[:1], Group{Name: "兜底", Strategy: "priority", Affinity: boolPtr(true), Candidates: fallback})
 		}
 	}
 	return nil
@@ -188,7 +214,8 @@ func sessionKey(session string, group int) string {
 	return fmt.Sprintf("%s:g%d", session, group)
 }
 
-// groupPlan 是一次请求里某一组的候选与该组读到的会话绑定
+// groupPlan 是一次请求里某一组的候选与该组读到的会话绑定。
+// Affinity 是 normalize 解析后的确定值，一路透传到具体模型，下游不再做默认值判断。
 type groupPlan struct {
 	Name       string
 	Strategy   string
@@ -209,7 +236,7 @@ func (e *Engine) expandGroups(c Config, resolved string, o Object, session strin
 			return nil, route, true, unsupported("有服务端会话状态的请求必须指定固定模型，不能使用自动路由")
 		}
 		for _, g := range route.Groups {
-			plans = append(plans, groupPlan{g.Name, g.Strategy, g.Affinity, g.Candidates, ""})
+			plans = append(plans, groupPlan{g.Name, g.Strategy, route.affinity(g), g.Candidates, ""})
 		}
 		e.readPins(c, plans, session)
 		return plans, route, true, nil
@@ -218,6 +245,18 @@ func (e *Engine) expandGroups(c Config, resolved string, o Object, session strin
 		return []groupPlan{{Strategy: "priority", Candidates: []Candidate{{ModelID: resolved, Weight: 1}}}}, route, false, nil
 	}
 	return nil, route, false, fail("MODEL_NOT_FOUND", "模型或路由不存在", 404)
+}
+
+// affinity 取本组解析后的亲和值：组显式设置就用它，nil（继承）时用路由的默认值。
+// 这是全链路唯一的默认值判断点，解析后的布尔值一路透传到具体模型，下游直接读。
+func (r Route) affinity(g Group) bool {
+	if g.Affinity != nil {
+		return *g.Affinity
+	}
+	if r.AffinityDefault != nil {
+		return *r.AffinityDefault
+	}
+	return defaultAffinity
 }
 
 // readPins 一次查询读出所有开了亲和的组的会话绑定

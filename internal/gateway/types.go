@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.38.1"
+const Version = "1.39.0"
 
 type Object = map[string]any
 
@@ -86,6 +86,9 @@ type Route struct {
 	Enabled     bool    `json:"enabled"`
 	Groups      []Group `json:"groups"`
 	Description string  `json:"description"`
+	// AffinityDefault 是路由级的会话亲和默认值：组没显式设置 affinity 时继承它。
+	// 未设置（nil）时按 true 兜底，与「主」组一直以来的默认一致。
+	AffinityDefault *bool `json:"affinity_default,omitempty"`
 	// Strategy / Affinity / Candidates 是 1.36.0 及以前的单组字段，只用于读取旧配置与旧客户端；
 	// 规范化（groups.go normalize）之后清空，不再输出
 	Strategy   string      `json:"strategy,omitempty"`

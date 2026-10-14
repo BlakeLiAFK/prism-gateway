@@ -31,7 +31,7 @@
 .sim-out{font-size:11px;color:var(--warn);background:var(--warn-bg);border-radius:7px;padding:8px 10px;margin:7px 0}
 .sim-out b{color:inherit}
 
-/* 分组画布与按组编辑抽屉。 */
+/* 分组画布与按组编辑工作区。 */
 .route-group{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
 .route-group-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px}
 .route-group-head strong{overflow-wrap:anywhere;min-width:0}.group-edit{margin-left:auto}
@@ -47,12 +47,30 @@
 .route-close-confirm p{margin-bottom:10px}.route-close-confirm .flex{flex-wrap:wrap}
 .route-draft-note{margin:12px 20px;padding:9px 12px;background:var(--warn-bg);color:var(--warn);border-radius:8px;font-size:11px}
 
+/* 路由候选多，使用居中大工作区；其他配置继续使用原抽屉。 */
+dialog.drawer.route-editor-dialog{margin:auto;width:min(1600px,calc(100vw - 48px));height:calc(100dvh - 48px);max-height:calc(100dvh - 48px);border:1px solid var(--line);border-radius:16px;animation:enter .18s ease-out}
+.route-editor-dialog .drawer-head,.route-editor-dialog .drawer-footer{flex-shrink:0}
+.route-editor-dialog .drawer-body{min-height:0;overscroll-behavior:contain}
+.route-editor-dialog .drawer-footer{flex-wrap:wrap}
+.route-editor-dialog .route-close-confirm{flex-basis:100%;margin:0;padding:12px 14px;background:var(--warn-bg);color:var(--warn)}
+.route-editor-dialog .candidate-picker{grid-template-columns:minmax(0,1fr) minmax(0,1fr);align-items:start}
+.route-editor-dialog .candidate-picker-summary{grid-column:1/-1}
+.route-editor-dialog [data-selected-panel],.route-editor-dialog [data-available-panel]{min-width:0}
+.route-editor-dialog [data-selected-panel] .candidate-picker-row{flex-wrap:wrap}
+.route-editor-dialog [data-selected-panel] .candidate-picker-info{flex-basis:100%}
+.route-editor-dialog .candidate-picker-list{max-height:min(52dvh,560px)}
+
+@media(max-width:1100px){
+  .route-editor-dialog .candidate-picker{grid-template-columns:minmax(0,1fr)}
+}
+
 @media(max-width:1180px){
   /* 指标太多，一行放不下就折到两行 */
   .live-grid{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:12px}
 }
 
 @media(max-width:700px){
+  dialog.drawer.route-editor-dialog{margin:0;width:100vw;height:100dvh;max-height:100dvh;border:0;border-radius:0}
   .cand-share-bar,.cand-live-bar{max-width:none}
   .candidate-flags{gap:4px}
   .route-live{padding:13px 17px}

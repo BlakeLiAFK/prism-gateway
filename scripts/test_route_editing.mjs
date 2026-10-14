@@ -1,4 +1,5 @@
 // 无浏览器回归：实际执行分组草稿、画布拖放绑定与编辑器切组逻辑。
+import './test_route_editor_dialog.mjs';
 import assert from 'node:assert/strict';
 import {readFile,readdir} from 'node:fs/promises';
 import {createContext,SourceTextModule,SyntheticModule} from 'node:vm';
@@ -33,7 +34,7 @@ async function load(name){
   return module;
 }
 const {state}=(await load('core.js')).namespace;
-const {moveGroupCandidate,groupSections,bindCandidateDrag,mountGroupEditor}=(await load('route-groups.js')).namespace;
+const {moveGroupCandidate,groupSections,bindCandidateDrag,mountGroupEditor,resolvedAffinity,routeAffinityDefault}=(await load('route-groups.js')).namespace;
 const {moveCandidate,routeActions,routeHasChanges,routes}=(await load('routes.js')).namespace;
 const candidate=id=>({model_id:id,weight:37,disabled:true,extra:'保留'});
 const fixture=()=>[{name:'主',strategy:'priority',affinity:true,candidates:[candidate('a'),candidate('b')]},{name:'备用',strategy:'cost',affinity:false,candidates:[candidate('c')]},{name:'空',strategy:'priority',affinity:true,candidates:[]}];
@@ -72,6 +73,19 @@ assert.equal(renders,5);
 
 const html=groupSections([{name:'<unsafe>',strategy:'priority',affinity:true,candidates:[]}],()=>'',x=>x);
 assert.match(html,/&lt;unsafe&gt;/);assert.match(html,/data-drop-group="0"/);assert.match(html,/编辑本组/);assert.match(html,/空组/);
+
+// 亲和的三态解析必须与后端 route.affinity 一致：组显式覆盖，nil 继承路由默认值，都没有按 true 兜底
+assert.equal(routeAffinityDefault({}),true,'路由未设置默认值时按 true');
+assert.equal(routeAffinityDefault({affinity_default:false}),false);
+assert.equal(resolvedAffinity({affinity_default:false},{affinity:true}),true,'组显式打开应覆盖路由的关闭');
+assert.equal(resolvedAffinity({affinity_default:true},{affinity:false}),false,'组显式关闭应覆盖路由的开启');
+assert.equal(resolvedAffinity({affinity_default:false},{}),false,'组未设置应继承路由的关闭');
+assert.equal(resolvedAffinity({affinity_default:false},{affinity:null}),false,'组显式 null 同样按继承');
+assert.equal(resolvedAffinity({},{}),true,'路由与组都未设置按 true');
+// 画布标签用解析后的值，不是组的原始字段
+const label=affinityOf=>groupSections([{name:'主',strategy:'priority',affinity:true,candidates:[]}],()=>'',x=>x,affinityOf);
+assert.match(label(()=>'会话亲和'),/会话亲和/);
+assert.match(label(()=>'无亲和'),/无亲和/);
 
 // 最小事件替身验证真实拖拽监听：空组、末尾和同组向后插入。
 const node=(dataset={})=>({dataset,listeners:{},classList:{add(){},remove(){}},

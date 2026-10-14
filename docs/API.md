@@ -96,6 +96,7 @@ curl http://127.0.0.1:8080/api.json \
 | `route.save` | `{version,id?,route}` | 新 Config |
 | `route.delete` | `{version,id}` | 新 Config |
 | `route.reorder` | `{version,ids:[]}` | 新 Config；按 ids 顺序整体重排路由，未列出的保持原序号 |
+| `route.affinity` | `{version,id,affinity,group?}` | 新 Config；不带 `group` 改整条路由的亲和默认值并复位各组，带 `group`（从 0 起）只改那一组 |
 | `route.test` | `{id,protocol?,request?}` | ranked / checks / note；默认模拟 Chat 文本 |
 | `alias.list` | `{}` | Alias[] |
 | `alias.save` | `{version,alias:{id,target,enabled}}` | 新 Config |
@@ -108,7 +109,7 @@ curl http://127.0.0.1:8080/api.json \
 | `apikey.create` | `{name,allowed:[]}` | id / key / warning；key 仅创建时返回；可带 `expires_at`（毫秒，0 为永久）、`limit_day` / `limit_month`（USD，近 24 小时 / 30 天）、`rpm` |
 | `apikey.update` | `{id, name, allowed?, expires_at?, limit_day?, limit_month?, rpm?}` | 修改 Key 的名称、授权范围、到期与限额，密钥不变，立即生效 |
 | `apikey.revoke` | `{id}` | 撤销结果 |
-| `session.list` | `{}` | 有效期内最近 200 个本地亲和映射，附 `expires_at` |
+| `session.list` | `{}` | 有效期内最近 200 个本地亲和映射，附 `expires_at`、模型请求次数与已确认费用汇总 |
 | `session.delete` | `{id}` 或 `{model_id}` | 解除本地绑定（给 model_id 时解除该模型的全部绑定，返回 unbound 数量），不重置上游状态 |
 | `request.list` | `{page?,page_size?,q?,status?,provider_id?,from?,to?,min_input_tokens?,max_input_tokens?,min_output_tokens?,max_output_tokens?,min_cost?,max_cost?,sort?}` | items / page / page_size / total / from / to；默认过去24小时，单次最多30天 |
 | `request.get` | `{id}` | 单次上游尝试元数据 |
@@ -169,10 +170,11 @@ curl http://127.0.0.1:8080/api.json \
       "name":"Coding pool",
       "enabled":true,
       "description":"My internal coding route",
+      "affinity_default":true,
       "groups":[
         {"name":"日常","strategy":"weighted","affinity":true,
          "candidates":[{"model_id":"my-coder","weight":10},{"model_id":"my-coder-b","weight":10}]},
-        {"name":"兜底","strategy":"priority","affinity":true,
+        {"name":"兜底","strategy":"priority",
          "candidates":[{"model_id":"my-claude","weight":10}]}
       ]
     }
@@ -183,6 +185,18 @@ curl http://127.0.0.1:8080/api.json \
 路由由 1 到 5 个**组**按顺序组成。请求先在第 1 组按该组的 `strategy` 选候选；本组全部被淘汰、冷却、并发已满或上游失败，
 或都接不了这次请求时，才轮到第 2 组，依此类推。每组有自己的 `strategy` 与 `affinity`。同一个模型只能出现在一个组里；
 组内可以没有候选（新建路由、免费模型路由本来就允许）。`candidates[].disabled:true` 暂停候选。
+
+**会话亲和的根源开关**：路由顶层的 `affinity_default` 是整条路由的默认值（省缺为 `true`）。组上的 `affinity` 是三态——
+写 `true` / `false` 表示这一组显式设置，不写（或 `null`）表示继承 `affinity_default`。解析只发生在路由规范化时，
+解析后的布尔值一路透传到具体候选，运行时的读绑定、亲和加分与写绑定都直接用这一个值，不再重复判断默认值。
+因此拨动 `affinity_default` 会一次影响所有没单独设置的组，个别组仍可用自己的 `affinity` 覆盖。
+
+也可以直接调用 `route.affinity` 一次拨动整条路由：`{"action":"route.affinity","params":{"id":"auto","affinity":false}}`
+会设置 `affinity_default` 并清掉各组单独的设置，让它们重新继承；带上 `group`（从 0 起）则只改那一组。
+
+配置输出里，继承默认值的组输出 `affinity:null`（把继承状态持久化下来，之后拨动路由开关才会影响它们），
+显式设置过的组输出 `true` / `false`；`affinity_default` 在省缺为 `true` 时被省略。
+运行时的实际取值由 `affinity_default` 与组上的 `affinity` 一起决定，只在这一个位置解析，之后一路透传到候选。
 
 `strategy` 决定一个组内候选的尝试顺序：
 
@@ -472,3 +486,5 @@ Token 范围 `min_input_tokens` / `max_input_tokens` / `min_output_tokens` / `ma
 `sort` 为 `newest`（默认）、`oldest`、`input_desc`、`input_asc`、`output_desc`、`output_asc`、`cost_desc`、`cost_asc`。排序覆盖全部命中记录，然后分页；数值相同按开始时间和记录ID倒序排列，最早优先则按开始时间和记录ID升序排列。仍以一次上游尝试为一行，不合并同请求的多次候选尝试。
 
 金额范围仅匹配 `cost_known=1` 且 `usage_mode` 为 `reported_tokens`、`reported_tokens_repriced`、`reported_cost`、`rejected` 的记录。进行中预留、结果不明保留和未知金额不当成零，也不混入消费筛选。Token 范围仅匹配 `reported_tokens`、`reported_tokens_repriced`，以及 `reported_cost` 中对应Token值大于0的记录：旧数据没有独立Token已知标记，仅报告金额时的零无法证明是已知用量，因此不猜测。未知值排序靠后。估算价值仍非供应商最终账单，不改变现有计费或预算语义。
+
+`session.list` 保留每条亲和映射的原字段，并增加 `models`、`usage_requests`、`cost_nano`、`cost_known_requests`、`cost_unknown_requests`、`demo_requests`。`models` 元素为 `{model_id,provider_id,requests,success_requests}`，请求次数包含失败尝试；同一会话的多组亲和映射共享按基础会话键汇总的完整历史。`cost_nano` 只合计非演示的已确认金额，`rejected` 计为已知零；演示、拒绝和不兼容记录不计为费用未知，预留或其他未确认费用只增加 `cost_unknown_requests`。

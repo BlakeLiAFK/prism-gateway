@@ -16,6 +16,7 @@ func TestEmbeddedAssetsAreServable(t *testing.T) {
 		{"/assets/core.js", "export const state"},
 		{"/assets/ui.js", "export function btn"},
 		{"/assets/views.js", "export function settings"},
+		{"/assets/sessions.js", "export function sessions"},
 		{"/assets/app.css", ".setting-row"},
 		{"/assets/api.js", "api.json"},
 		{"/assets/icons.js", "svg"},

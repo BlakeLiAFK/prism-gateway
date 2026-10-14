@@ -102,7 +102,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 	case "model.save":
 		return a.saveModel(c, version, id, p["model"])
 	case "route.save":
-		v := Route{ID: id, Enabled: true, Groups: []Group{{Name: "主", Strategy: "priority", Affinity: true, Candidates: []Candidate{}}}}
+		v := Route{ID: id, Enabled: true, Groups: []Group{{Name: "主", Strategy: "priority", Affinity: boolPtr(true), Candidates: []Candidate{}}}}
 		if old, ok := c.route(id); ok {
 			v = old
 		}
@@ -133,6 +133,45 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 				}
 			}
 			c.Routes = append(c.Routes, v)
+			return nil
+		})
+	case "route.affinity":
+		// 路由级的会话亲和根源开关：一次改变所有键在它下面的请求，包括每个没单独设置的组。
+		// 带 group 时只改那一组；不带时改路由默认值并清掉各组单独的设置，让它们重新继承
+		on, ok := p["affinity"].(bool)
+		if !ok {
+			return nil, fail("INVALID_PARAMS", "affinity 必须是布尔值", 400)
+		}
+		ri := -1
+		for i := range c.Routes {
+			if c.Routes[i].ID == id {
+				ri = i
+			}
+		}
+		if ri < 0 {
+			return nil, fail("NOT_FOUND", "路由不存在", 404)
+		}
+		var group *int
+		if v, has := p["group"]; has {
+			n, ok := v.(float64)
+			if !ok || n != float64(int(n)) || int(n) < 0 || int(n) >= len(c.Routes[ri].Groups) {
+				return nil, fail("INVALID_PARAMS", "group 超出该路由的分组范围", 400)
+			}
+			g := int(n)
+			group = &g
+		}
+		return a.Store.Change(version, action, id, func(c *Config) error {
+			r := &c.Routes[ri]
+			if group != nil {
+				r.Groups[*group].Affinity = boolPtr(on)
+				return nil
+			}
+			// 只改默认值不够：已经逐个设过的组会继续盖过它。这里清掉组级设置，
+			// 让所有组重新继承，否则「关掉整条路由的亲和」对它们不起作用
+			r.AffinityDefault = boolPtr(on)
+			for i := range r.Groups {
+				r.Groups[i].Affinity = nil
+			}
 			return nil
 		})
 	case "route.reorder", "provider.reorder":
@@ -335,7 +374,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		return Object{"id": id, "revoked": true}, er
 	case "session.list":
 		ttl := int64(c.Settings.SessionTTLHours) * 3600000
-		return a.Store.DB.Query("SELECT *, updated_at+? expires_at FROM sessions WHERE updated_at>? ORDER BY updated_at DESC LIMIT 200", ttl, now()-ttl)
+		return a.sessionList(ttl)
 	case "session.delete":
 		return a.deleteSessions(id, str(p, "model_id"))
 	case "request.list":

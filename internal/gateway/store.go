@@ -132,6 +132,7 @@ func (s *Store) migrate() error {
 			`CREATE INDEX IF NOT EXISTS requests_model_time ON requests(model_id,started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_time ON requests(started_at)`,
 			`CREATE INDEX IF NOT EXISTS requests_key_time ON requests(key_id,started_at)`,
+			`CREATE INDEX IF NOT EXISTS requests_session ON requests(session_id)`,
 			rollupTable,
 			watchTokenTable,
 			cacheRollupTable,
@@ -355,6 +356,9 @@ func cloneConfig(c Config) Config {
 	for i := range out.Routes {
 		out.Routes[i].Groups = cloneGroups(c.Routes[i].Groups)
 		out.Routes[i].Candidates = slices.Clone(c.Routes[i].Candidates)
+		if c.Routes[i].AffinityDefault != nil {
+			out.Routes[i].AffinityDefault = boolPtr(*c.Routes[i].AffinityDefault)
+		}
 	}
 	out.Aliases = append([]Alias{}, c.Aliases...)
 	return out

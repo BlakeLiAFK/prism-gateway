@@ -154,6 +154,9 @@ type selection struct {
 	Group     int
 	GroupName string
 	RouteID   string
+	// Affinity 是所在组解析后的会话亲和开关，由 normalize 定型、一路透传。
+	// 写会话绑定要用它：关闭亲和的组不该写入绑定，否则重新打开时会复活成关闭期间的落点
+	Affinity bool
 }
 
 func (e *Engine) selections(c Config, o Object, p, session string) ([]selection, []any, error) {
@@ -299,7 +302,7 @@ func (e *Engine) selections(c Config, o Object, p, session string) ([]selection,
 				}
 				// 后一组整体排在前一组之后：前一组健康时轮不到它，前一组全部失败或淘汰时才接手
 				score -= float64(gi) * groupPenalty
-				sel := selection{Model: m, Provider: pr, Body: body, Score: score, Cross: cross, Ignored: ignored, ToolImagesAdapted: toolImagesAdapted, Dropped: dropped, Group: gi}
+				sel := selection{Model: m, Provider: pr, Body: body, Score: score, Cross: cross, Ignored: ignored, ToolImagesAdapted: toolImagesAdapted, Dropped: dropped, Group: gi, Affinity: g.Affinity}
 				sel.Reason = fmt.Sprintf("%s; native=%t; affinity=%t; pressure=%.3f; cooling=%t; full=%t; ttfb=%.0f", g.Strategy, !cross, g.Pinned == m.ID, pressure, l.Cooling, l.Full, l.TTFB)
 				if routeOK {
 					sel.RouteID, sel.GroupName = route.ID, g.Name

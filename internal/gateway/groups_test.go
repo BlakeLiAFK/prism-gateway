@@ -28,8 +28,8 @@ func twoGroupHarness(t *testing.T) *harness {
 	h := newHarness(t)
 	h.configure(t, "http://127.0.0.1:1", modelFixture("a", "chat"), modelFixture("b", "chat"), modelFixture("c", "chat"))
 	groupRoute(h, t,
-		Group{Name: "日常", Strategy: "priority", Affinity: true, Candidates: []Candidate{{ModelID: "a", Weight: 10}}},
-		Group{Name: "兜底", Strategy: "weighted", Affinity: true, Candidates: []Candidate{{ModelID: "b", Weight: 10}, {ModelID: "c", Weight: 10}}})
+		Group{Name: "日常", Strategy: "priority", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "a", Weight: 10}}},
+		Group{Name: "兜底", Strategy: "weighted", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "b", Weight: 10}, {ModelID: "c", Weight: 10}}})
 	return h
 }
 
@@ -65,7 +65,7 @@ func TestRouteSaveDoesNotMutatePublishedSnapshot(t *testing.T) {
 func TestRouteSaveLegacyFields(t *testing.T) {
 	h := newHarness(t)
 	h.configure(t, "http://127.0.0.1:1", modelFixture("a", "chat"), modelFixture("b", "chat"))
-	groupRoute(h, t, Group{Name: "主", Strategy: "priority", Affinity: true, Candidates: []Candidate{{ModelID: "a", Weight: 10}}})
+	groupRoute(h, t, Group{Name: "主", Strategy: "priority", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "a", Weight: 10}}})
 	w, _ := h.routeSave(t, Object{"id": "r", "candidates": []any{Object{"model_id": "a", "weight": 5}, Object{"model_id": "b", "weight": 6, "disabled": true}}})
 	requireStatus(t, w, 200)
 	r, _ := h.s.Config().route("r")
@@ -76,7 +76,7 @@ func TestRouteSaveLegacyFields(t *testing.T) {
 	w, _ = h.routeSave(t, Object{"id": "r", "strategy": "weighted", "affinity": false})
 	requireStatus(t, w, 200)
 	r, _ = h.s.Config().route("r")
-	if r.Groups[0].Strategy != "weighted" || r.Groups[0].Affinity || len(r.Groups[0].Candidates) != 2 {
+	if r.Groups[0].Strategy != "weighted" || r.affinity(r.Groups[0]) || len(r.Groups[0].Candidates) != 2 {
 		t.Fatalf("只改策略不该动候选: %+v", r.Groups)
 	}
 	// 旧的 fallback 标记拆成第 2 组
@@ -132,7 +132,7 @@ func TestRouteGroupValidation(t *testing.T) {
 		Object{"name": "2", "strategy": "cost", "affinity": true, "candidates": []any{}}}})
 	requireStatus(t, w, 200)
 	r, _ := h.s.Config().route("r")
-	if r.Groups[0].Strategy != "latency" || r.Groups[1].Strategy != "cost" || r.Groups[0].Affinity || !r.Groups[1].Affinity {
+	if r.Groups[0].Strategy != "latency" || r.Groups[1].Strategy != "cost" || r.affinity(r.Groups[0]) || !r.affinity(r.Groups[1]) {
 		t.Fatalf("各组应保留自己的策略与亲和: %+v", r.Groups)
 	}
 }
@@ -155,7 +155,7 @@ func TestRouteGroupsPersistAndLegacyLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	old, ok := h.s.Config().route("old")
-	if !ok || len(old.Groups) != 2 || old.Groups[0].Strategy != "weighted" || old.Groups[0].Affinity || old.Groups[1].Candidates[0].ModelID != "b" || old.Strategy != "" || len(old.Candidates) != 0 {
+	if !ok || len(old.Groups) != 2 || old.Groups[0].Strategy != "weighted" || old.affinity(old.Groups[0]) || old.Groups[1].Candidates[0].ModelID != "b" || old.Strategy != "" || len(old.Candidates) != 0 {
 		t.Fatalf("旧路由应归成两组并清空旧字段: %+v", old)
 	}
 	if strings.Contains(raw(old), `"candidates":[{"model_id":"a"`) && strings.Contains(raw(old), `"strategy":"weighted","enabled"`) {
@@ -212,8 +212,8 @@ func TestGroupSwitchAffinityAndReturn(t *testing.T) {
 	h := newHarness(t)
 	h.configure(t, up.URL, modelFixture("a", "chat"), modelFixture("b", "chat"), modelFixture("c", "chat"))
 	groupRoute(h, t,
-		Group{Name: "日常", Strategy: "priority", Affinity: true, Candidates: []Candidate{{ModelID: "a", Weight: 10}}},
-		Group{Name: "兜底", Strategy: "weighted", Affinity: true, Candidates: []Candidate{{ModelID: "b", Weight: 10}, {ModelID: "c", Weight: 10}}})
+		Group{Name: "日常", Strategy: "priority", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "a", Weight: 10}}},
+		Group{Name: "兜底", Strategy: "weighted", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "b", Weight: 10}, {ModelID: "c", Weight: 10}}})
 	var alerts atomic.Int32
 	var alertKey atomic.Value
 	h.a.Engine.OnAlert = func(event, key, text string) {
@@ -296,8 +296,8 @@ func TestNoGroupAlertWhenEarlierGroupWasNeverTried(t *testing.T) {
 	h := newHarness(t)
 	h.configure(t, up.URL, modelFixture("a", "chat"), modelFixture("b", "chat"))
 	groupRoute(h, t,
-		Group{Name: "日常", Strategy: "priority", Affinity: true, Candidates: []Candidate{{ModelID: "a", Weight: 10, Disabled: true}}},
-		Group{Name: "兜底", Strategy: "priority", Affinity: true, Candidates: []Candidate{{ModelID: "b", Weight: 10}}})
+		Group{Name: "日常", Strategy: "priority", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "a", Weight: 10, Disabled: true}}},
+		Group{Name: "兜底", Strategy: "priority", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "b", Weight: 10}}})
 	alerts := captureAlerts(h)
 	w := h.generate(t, "chat", requestFixture("chat", "r"))
 	requireStatus(t, w, 200)

@@ -1,5 +1,11 @@
 package gateway
 
+import (
+	"strings"
+
+	"prism-gateway/internal/sqlite"
+)
+
 // 管理后台的观测类动作：给界面提供“现在为什么这样路由”的实时依据。
 // admin.go 的分发器在未命中时回落到这里。
 
@@ -66,4 +72,68 @@ func (a *App) deleteSessions(id, model string) (any, error) {
 	}
 	a.audit("session.delete", target)
 	return Object{"id": id, "model_id": model, "unbound": n[0].Int("n")}, nil
+}
+
+type sessionUsage struct {
+	models                               []any
+	requests, cost, known, unknown, demo int64
+}
+
+func (a *App) sessionList(ttl int64) (out []sqlite.Row, err error) {
+	err = a.Store.DB.Transaction(func(tx *sqlite.Tx) error {
+		out, err = tx.Query("SELECT *, updated_at+? expires_at FROM sessions WHERE updated_at>? ORDER BY updated_at DESC LIMIT 200", ttl, now()-ttl)
+		if err != nil || len(out) == 0 {
+			return err
+		}
+		ids, seen := []string{}, map[string]bool{}
+		for _, row := range out {
+			id, _, _ := strings.Cut(row.String("id"), ":")
+			if !seen[id] {
+				ids, seen[id] = append(ids, id), true
+			}
+		}
+		usage, err := sessionUsageByID(tx, ids)
+		if err != nil {
+			return err
+		}
+		for _, row := range out {
+			id, _, _ := strings.Cut(row.String("id"), ":")
+			u := usage[id]
+			row["models"], row["usage_requests"], row["cost_nano"] = u.models, u.requests, u.cost
+			row["cost_known_requests"], row["cost_unknown_requests"], row["demo_requests"] = u.known, u.unknown, u.demo
+		}
+		return nil
+	})
+	return out, err
+}
+
+func sessionUsageByID(tx *sqlite.Tx, ids []string) (map[string]*sessionUsage, error) {
+	usage, args := map[string]*sessionUsage{}, make([]any, len(ids))
+	for i, id := range ids {
+		usage[id], args[i] = &sessionUsage{models: []any{}}, id
+	}
+	known := "(" + knownRequestCost + " OR usage_mode='rejected')"
+	q := `SELECT session_id,model_id,provider_id,COUNT(*) requests,
+		SUM(status='success') success_requests,
+		SUM(CASE WHEN is_demo=0 AND usage_mode!='rejected' AND ` + knownRequestCost + ` THEN cost_nano ELSE 0 END) cost_nano,
+		SUM(CASE WHEN is_demo=0 AND ` + known + ` THEN 1 ELSE 0 END) cost_known_requests,
+		SUM(CASE WHEN is_demo=0 AND usage_mode NOT IN ('rejected','incompatible') AND NOT ` + knownRequestCost + ` THEN 1 ELSE 0 END) cost_unknown_requests,
+		SUM(is_demo=1) demo_requests FROM requests WHERE session_id IN (?` + strings.Repeat(",?", len(ids)-1) + `)
+		GROUP BY session_id,model_id,provider_id ORDER BY session_id,requests DESC,model_id,provider_id`
+	rows, err := tx.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		u := usage[row.String("session_id")]
+		u.requests += row.Int("requests")
+		u.cost += row.Int("cost_nano")
+		u.known += row.Int("cost_known_requests")
+		u.unknown += row.Int("cost_unknown_requests")
+		u.demo += row.Int("demo_requests")
+		if row.String("model_id") != "" {
+			u.models = append(u.models, Object{"model_id": row.String("model_id"), "provider_id": row.String("provider_id"), "requests": row.Int("requests"), "success_requests": row.Int("success_requests")})
+		}
+	}
+	return usage, nil
 }
