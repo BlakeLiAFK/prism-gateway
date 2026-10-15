@@ -70,7 +70,7 @@ curl http://127.0.0.1:8080/api.json \
 | `dashboard.get` | `{range:"24h"\|"7d"\|"30d"}` | 概览、24 个时间桶、top_models、recent、quotas、runtime |
 | `provider.list` | `{}` | Provider[] |
 | `provider.save` | `{version,id?,provider}` | 新 Config |
-| `provider.delete` | `{version,id}` | 新 Config；存在引用则拒绝 |
+| `provider.delete` | `{version,id}` | 新 Config；同一事务关联删除所属模型（含停用模型）、指向这些模型的别名和所有路由组中的对应候选；保留路由定义，因本次删除变空的路由自动停用；历史请求、用量、会话历史及客户端 Key 保留 |
 | `route.stats` | `{minutes?}` | 近 N 分钟（默认 60）各路由的实际落点 share（每个候选含 attempts、success、affinity 命中次数）与运行状态 runtime |
 | `route.live` | `{}` | 实时面板数据（缓存 5 秒）：全局并发；被路由引用的模型的并发、RPM、首字节、会话数、近 5 分钟请求与单请求 tok/s；各路由的并发 / 容量、近 60 秒 RPM 与输出 tok/s、近 5 分钟成功率、会话数、加权首字节 |
 | `alert.get` | `{}` | 告警推送配置：`enabled`、`kind`（telegram / webhook）、`chat_id`、`has_secret`、`events`；不返回凭证 |
@@ -88,7 +88,7 @@ curl http://127.0.0.1:8080/api.json \
 | `provider.reorder` | `{version,ids:[]}` | 新 Config；按 ids 顺序整体重排供应商，未列出的保持原序号 |
 | `provider.test` | `{id}` | GET /models HTTP 状态与耗时，不调用模型生成 |
 | `provider.sync_models` | `{id}` | `job_id`，异步执行 |
-| `provider.usage` | `{}` | 每个供应商一项：supported / note / headline / fields / error / limits；结果缓存 60 秒 |
+| `provider.usage` | `{}` | 每个供应商一项：supported / note / headline / fields / error / limits；结果缓存 60 秒。OpenCode Go 使用推理 Key 查询三段套餐用量及重置时间，不返回现金余额；Zen 不支持按推理 Key 查询 |
 | `model.list` | `{}` | Model[] |
 | `model.save` | `{version,id?,model}` | 新 Config；model.id 是对外名称 |
 | `model.delete` | `{version,id}` | 新 Config；检查路由与别名引用 |
@@ -122,6 +122,10 @@ curl http://127.0.0.1:8080/api.json \
 | `batch.read` | `{requests:[{action,params},...]}` | 每项独立 ok/data/error 数组 |
 
 `batch.read` 只接受实现中列出的只读 action，1–10 项，不保证多个查询处于同一个数据库读快照，不接收任何写操作。同步模型任务网络调用在 SQLite 事务外完成；提交时版本冲突会失败，不自动覆盖同时发生的编辑。
+
+OpenCode Go 的用量来自 `GET <Go Base URL>/usage`，使用该供应商的推理 Key。解析 `usage.rolling`、`weekly`、`monthly` 的已用百分比与上游 `resetsAt`；数字 0 是已确认零用量，缺失或非法字段为待确认。该接口不返回现金余额、token 总数或逐模型明细，不新增路由冷却行为。
+
+该端点是上游保留的兼容接口，尚未列入正式 API 文档；当前[官方代理源码](https://github.com/anomalyco/opencode/blob/d099d2cb2a0869d07d2f533c66348e4868325a78/packages/console/app/src/lib/inference-proxy.ts)仍转发此路径，[Go 产品说明](https://opencode.ai/v2/docs/console/go/)定义三段套餐限制。结构变化时返回明确错误，不把未知用量显示为零。
 
 ## 模型与路由结构
 

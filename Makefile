@@ -21,6 +21,7 @@ ui-unit:
 	node --experimental-vm-modules scripts/test_candidate_picker.mjs
 	node --experimental-vm-modules scripts/test_route_editing.mjs
 	node --experimental-vm-modules scripts/test_session_usage.mjs
+	node --experimental-vm-modules scripts/test_provider_delete.mjs
 ui: build
 	python3 scripts/ui_smoke.py --binary ./$(BINARY)
 	python3 scripts/ui_request_filters.py --binary ./$(BINARY)

@@ -1776,8 +1776,7 @@ func TestManagementMutationsAndDependencyGuards(t *testing.T) {
 	// 连接测试走真实 HTTP，但不消耗模型额度
 	call("provider.test", Object{"id": pid})
 
-	// 依赖仍在时不允许删除，避免留下悬空引用
-	reject("provider.delete", Object{"id": pid}, "")
+	// 单独删除模型仍保留依赖保护
 	reject("model.delete", Object{"id": "m_one"}, "")
 	reject("alias.save", Object{"alias": Object{"id": "a_bad", "target": "nowhere", "enabled": true}}, "INVALID_CONFIG")
 	reject("route.save", Object{"route": Object{"id": "r_bad", "name": "B", "strategy": "priority",
@@ -1785,13 +1784,17 @@ func TestManagementMutationsAndDependencyGuards(t *testing.T) {
 	reject("model.save", Object{"model": Object{"id": "m_bad", "provider_id": "ghost", "upstream": "x",
 		"protocol": "chat", "context_window": 1000, "max_output_tokens": 100, "concurrency": 1}}, "INVALID_CONFIG")
 
-	// 按依赖顺序拆除
-	call("alias.delete", Object{"id": "a_auto"})
-	call("route.delete", Object{"id": "r_auto"})
-	call("model.delete", Object{"id": "m_one"})
-	call("model.delete", Object{"id": "m_two"})
+	// 删除供应商会关联删除模型，并从路由移除对应候选
 	call("provider.delete", Object{"id": pid})
 	cfg := h.s.Config()
+	r, _ := cfg.route("r_auto")
+	if len(cfg.Providers) != 0 || len(cfg.Models) != 0 || r.Enabled || len(r.Groups[0].Candidates) != 0 || len(cfg.Aliases) != 1 {
+		t.Fatalf("供应商关联删除不完整: %+v", cfg)
+	}
+	// 其余对象仍按原接口拆除
+	call("alias.delete", Object{"id": "a_auto"})
+	call("route.delete", Object{"id": "r_auto"})
+	cfg = h.s.Config()
 	if len(cfg.Providers)+len(cfg.Models)+len(cfg.Routes)+len(cfg.Aliases) != 0 {
 		t.Fatalf("对象未清空: %+v", cfg)
 	}
@@ -2855,8 +2858,7 @@ func TestExhaustedFallsOverAndCoolsDownLonger(t *testing.T) {
 	}
 }
 
-// 上游额度查询：DeepSeek 这类有公开余额接口的精确解析，
-// OpenCode 这类形状未知的走通用扫描，Command Code 这类没有接口的必须明确说不支持。
+// 上游额度查询：DeepSeek 解析余额，OpenCode 解析套餐用量，Command Code 解析 credits。
 func TestProviderUsageQuery(t *testing.T) {
 	h := newHarness(t)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2871,7 +2873,7 @@ func TestProviderUsageQuery(t *testing.T) {
 		case "/zero/user/balance":
 			io.WriteString(w, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"10.30","granted_balance":"0.00","topped_up_balance":"10.30"}]}`)
 		case "/usage":
-			io.WriteString(w, `{"balance":12.5,"plan":"go"}`)
+			io.WriteString(w, `{"usage":{"rolling":{"status":"ok","percent":42},"weekly":{"status":"ok","percent":17},"monthly":{"status":"ok","percent":3}}}`)
 		case "/alpha/billing/credits":
 			io.WriteString(w, `{"credits":{"planId":"individual-goat","monthlyCredits":41.5,"purchasedCredits":8,"freeCredits":0.5,
 				"windowLimits":{"limited":true,"fiveHour":{"used":3.2,"cap":14},"weekly":{"used":9.75,"cap":35}}}}`)
@@ -2908,8 +2910,8 @@ func TestProviderUsageQuery(t *testing.T) {
 		t.Fatalf("DeepSeek 应有赠送与充值两项明细: %v", ds)
 	}
 	oc := got["p_oc"]
-	if oc["supported"] != true || str(oc, "headline") != "12.5" || len(arr(oc["fields"])) != 1 {
-		t.Fatalf("OpenCode 通用扫描应把 balance 提为主数值、plan 作明细: %v", oc)
+	if oc["supported"] != true || str(oc, "headline") != "5 小时已用 42%" || len(arr(oc["fields"])) != 4 {
+		t.Fatalf("OpenCode 套餐用量解析不正确: %v", oc)
 	}
 	// Command Code 的额度在 CLI 用的 /alpha/billing/credits 上，不在 Provider API 里
 	cc := got["p_cc2"]

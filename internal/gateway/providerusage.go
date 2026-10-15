@@ -39,6 +39,9 @@ func providerUsageURL(p Provider) (addr string, ok bool, note string) {
 	case isOpenRouter(p):
 		return "https://openrouter.ai/api/v1/credits", true, ""
 	case p.Kind == "opencode":
+		if strings.HasSuffix(base, "/zen/v1") {
+			return "", false, "OpenCode Zen 未提供按推理 Key 查询余额或用量的接口"
+		}
 		return base + "/usage", true, ""
 	case p.Kind == "commandcode":
 		// Provider API 那四个端点里没有额度接口，但 CLI 的 /usage 走的是同一个域名下的
@@ -210,6 +213,9 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 	headline, fields := parseUsage(p, o)
 	out["headline"] = headline
 	out["fields"] = fields
+	if p.Kind == "opencode" && headline == "" {
+		out["error"] = "OpenCode 用量接口未返回可识别的套餐用量"
+	}
 	return out
 }
 
@@ -218,6 +224,9 @@ func (a *App) fetchProviderUsage(ctx context.Context, p Provider) Object {
 // 未知形状回退到通用扫描——上游改字段时至少还能显示原始数值，而不是空卡片。
 func parseUsage(p Provider, o Object) (string, []any) {
 	host := strings.ToLower(p.BaseURL)
+	if p.Kind == "opencode" {
+		return parseOpenCodeUsage(o)
+	}
 	if p.Kind == "deepseek" || strings.Contains(host, "deepseek.com") {
 		infos := arr(o["balance_infos"])
 		// 账号可能同时持有人民币和美元两种余额，各是一条独立记录

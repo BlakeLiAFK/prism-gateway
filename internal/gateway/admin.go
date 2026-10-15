@@ -233,55 +233,7 @@ func (a *App) call(ctx context.Context, action string, p Object) (any, error) {
 		}
 		return cfg, nil
 	case "provider.delete", "model.delete", "route.delete", "alias.delete":
-		return a.Store.Change(version, action, id, func(c *Config) error {
-			found := false
-			switch action {
-			case "provider.delete":
-				xs := []Provider{}
-				for _, v := range c.Providers {
-					if v.ID == id {
-						found = true
-						continue
-					}
-					xs = append(xs, v)
-				}
-				c.Providers = xs
-			case "model.delete":
-				xs := []Model{}
-				for _, v := range c.Models {
-					if v.ID == id {
-						found = true
-						continue
-					}
-					xs = append(xs, v)
-				}
-				c.Models = xs
-			case "route.delete":
-				xs := []Route{}
-				for _, v := range c.Routes {
-					if v.ID == id {
-						found = true
-						continue
-					}
-					xs = append(xs, v)
-				}
-				c.Routes = xs
-			case "alias.delete":
-				xs := []Alias{}
-				for _, v := range c.Aliases {
-					if v.ID == id {
-						found = true
-						continue
-					}
-					xs = append(xs, v)
-				}
-				c.Aliases = xs
-			}
-			if !found {
-				return fail("NOT_FOUND", "对象不存在", 404)
-			}
-			return nil
-		})
+		return a.deleteConfig(version, action, id)
 	case "route.test":
 		o := obj(p["request"])
 		if o == nil {

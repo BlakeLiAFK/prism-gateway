@@ -398,7 +398,7 @@ export async function handleAction(el){
 
     }
 
- case 'delete-provider':case 'delete-model':case 'delete-route':case 'delete-alias':{
+ case 'delete-model':case 'delete-route':case 'delete-alias':{
       const kind=action.slice(7);
       if(await confirm('删除这个配置？','删除会检查引用关系。仍被模型、路由或别名引用的对象不能删除；历史用量记录会保留。','删除'))await save(kind+'.delete',{id});
       break;

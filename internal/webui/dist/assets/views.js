@@ -87,7 +87,6 @@ export function requestDetail(r){
     ['请求 ID',r.parent_id,true],
   ];
   return `<div class="detail-grid">${rows.map(([k,v,mono])=>`<div><small>${E(k)}</small><span class="${mono?'mono ':''}">${E(v)}</span></div>`).join('')}</div>${diagnostic?`<details class="request-diagnostic" open style="margin-top:18px"><summary class="small muted">脱敏请求结构诊断</summary><pre style="margin-top:10px">${E(diagnostic)}</pre></details>`:''}<details style="margin-top:18px"><summary class="small muted">原始记录</summary><pre style="margin-top:10px">${E(json(r))}</pre></details>`;
-
 }
 
 export function overview(){
@@ -108,7 +107,6 @@ export function overview(){
  (!total?`<div class="quickstart">${[['连接供应商','填入上游地址与凭证','add-provider',realProviders.length>0],['选择模型与路由','同步、确认能力后启用','go-models',enabled.length>0],['创建客户端 Key','隔离管理员与调用凭证','new-key',false]].map((x,i)=>`<div class="quickstep ${x[3]?'done':''}"><span class="quickstep-num">${x[3]?icon('check'):String(i+1).padStart(2,'0')}</span><div><h3>${x[0]}</h3><p>${x[1]}</p><br><button class="action-link" data-action="${x[2]}">${x[3]?'管理':'开始设置'} ${icon('arrow')}</button></div></div>`).join('')}</div>`:'')+
  `<section class="stats-grid"><article class="stat"><div class="stat-top">模型请求 <span class="stat-icon">${icon('route')}</span></div><div class="stat-value">${number(total)}</div><div class="stat-foot"><span><span class="positive">${success}</span> 成功率</span>${spark(d.series)}</div></article><article class="stat"><div class="stat-top"><span>Tokens 用量 <small class="stat-unit-hint">点击数字切换单位</small></span><span class="stat-icon">${icon('bolt')}</span></div><button type="button" class="stat-value stat-value-action${state.tokenDisplay==='exact'&&tokens>=1e8?' exact':''}" data-action="toggle-token-unit" aria-label="Tokens 用量 ${formatTokens(tokens)}，切换为${state.tokenDisplay==='auto'?'精确数量':'自动单位'}" aria-pressed="${state.tokenDisplay==='exact'}" title="点击切换为${state.tokenDisplay==='auto'?'精确数量':'自动单位'}">${formatTokens(tokens)}</button><div class="stat-foot"><span><span class="positive">${cache}</span> 输入缓存占比</span>${spark(d.series)}</div></article><article class="stat"><div class="stat-top">估算用量价值 <span class="stat-icon">${icon('usage')}</span></div><div class="stat-value">${money(s.cost_nano/1e9)}</div><div class="stat-foot"><span>${s.unpriced_requests?`<span class="warn-text">含 ${number(s.unpriced_requests)} 次未计价</span> · `:''}不等于订阅实付或官方账单</span></div></article><article class="stat"><div class="stat-top">平均请求耗时 <span class="stat-icon">${icon('clock')}</span></div><div class="stat-value">${s.latency_ms>=1000?(s.latency_ms/1000).toFixed(2):Math.round(s.latency_ms)}<span class="unit">${s.latency_ms>=1000?'s':'ms'}</span></div><div class="stat-foot"><span>完整响应 · 非首 Token 延迟</span></div></article></section>${unreachedNote}
  <div class="overview-grid"><div class="stack"><section class="card"><div class="card-head"><div><h2>请求趋势</h2><p class="card-sub">24 个时间桶 · 包含重试尝试与本地演示</p></div><div class="chart-legend"><span class="flex" style="gap:6px"><span class="legend-key"></span>请求量</span>${badge('LIVE')}</div></div>${chart(d.series)}<div class="chart-summary"><div><strong>${number(s.success)}</strong><small>成功尝试</small></div><div><strong>${number(s.errors)}</strong><small>失败 / 待确认</small></div><div><strong>${number(s.demo_requests)}</strong><small>本地演示</small></div><div><strong>${d.runtime.active}</strong><small>当前并发</small></div></div></section><section class="card"><div class="card-head"><div><h2>最近请求</h2><p class="card-sub">仅记录路由、耗时和用量元数据</p></div><a class="action-link" href="#requests">查看全部 ${icon('arrow')}</a></div>${recentRows(d.recent)}</section></div><div class="stack">${attentionCard()}<section class="card"><div class="card-head"><div><h2>本地预算水位</h2><p class="card-sub">包含在途预留 · 不是上游剩余额度</p></div><a class="icon-btn" href="#usage" aria-label="查看预算">${icon('arrow')}</a></div><div class="card-body">${pickQuotas(d.quotas).map(q=>`<div class="quota-item"><div class="quota-name"><span class="ellipsis">${E(q.name||q.id)}</span><span class="tiny muted mono">${money(q.used_30d)}</span></div>${quotaBars(q)}</div>`).join('')||`<div class="small muted" style="padding:12px 0 25px">添加模型并确认计价后，可以设置滚动安全预算。</div>`}<div class="quota-note">5 小时 / 7 天 / 30 天滚动统计。上游账单与重置时间以供应商为准。</div></div></section></div></div>`;
-
 }
 
 // 总览「本地预算水位」优先展示有信息量的模型：已启用且有用量或设了限额的，
@@ -315,7 +313,6 @@ function systemOneEditor(){
 
 export function renderPlayResult(r){
   const o=r.response||{
-
   };
   let text='';
   if(o.choices)text=o.choices[0]?.message?.content||'';
@@ -337,7 +334,6 @@ function upstreamLimits(runtime){
   const models=Object.entries(runtime?.models||{}).filter(([,v])=>v.limits&&Object.keys(v.limits).length);
   if(!models.length)return `<section class="card setting-card" style="margin-top:21px"><h2>上游限额</h2><p class="small muted" style="margin-top:10px">还没有上游在响应头里声明过限额。有真实调用之后，这里会列出各家声明的剩余量与重置时间。</p></section>`;
   return `<section class="card setting-card" style="margin-top:21px"><h2>上游限额</h2><p class="small muted" style="margin-top:10px">最近一次调用时上游声明的限额，不是账户余额。剩余归零且给出重置时间时，该模型会自动冷却到重置时刻。</p><div class="table-scroll" style="margin-top:16px"><table><thead><tr><th>模型</th><th>响应头</th><th>值</th><th>采集时间</th></tr></thead><tbody>${models.flatMap(([id,v])=>Object.entries(v.limits).map(([k,val],i)=>`<tr>${i===0?`<td rowspan="${Object.keys(v.limits).length}" class="cell-title">${E(modelName(id))}${Number(v.cooldown_until)>Date.now()?badge('冷却中'):''}</td>`:''}<td class="mono tiny">${E(k)}</td><td class="mono">${E(val)}</td>${i===0?`<td rowspan="${Object.keys(v.limits).length}" class="mono tiny">${E(dateTimeSec(v.limits_at))}</td>`:''}</tr>`)).join('')}</tbody></table></div></section>`;
-
 }
 
 export function settings(){
@@ -473,8 +469,16 @@ function attentionCard(){
     :`<div class="attention-calm">${icon('check')}<div><strong>一切正常</strong><p class="small muted">供应商额度充足，模型未冷却，路由候选充分。</p></div></div>`;
   return `<section class="card"><div class="card-head"><div><h2>需要关注</h2><p class="card-sub">额度、冷却与路由候选的实时检查</p></div>${icon('shield')}</div><div class="card-body">${body}</div><div class="card-foot between"><span>${items.length?`${items.length} 项待处理`:'常规巡检'}</span><a class="action-link" href="#routes">管理路由 ${icon('arrow')}</a></div></section>`;
 }
-
 export const pageActions={
+  'delete-provider':async(el,id)=>{
+    const provider=getProvider(id);
+    if(!provider){toast('供应商已不存在，请刷新后重试',true);return;}
+    const models=new Set(state.config.models.filter(m=>m.provider_id===id).map(m=>m.id));
+    const aliases=state.config.aliases.filter(a=>models.has(a.target)).length;
+    const routes=state.config.routes.filter(r=>r.groups.some(g=>g.candidates.some(c=>models.has(c.model_id)))).length;
+    const description=`将一并删除 ${models.size} 个模型和 ${aliases} 个模型别名，从 ${routes} 条路由中移除相关候选。空路由会自动停用，路由定义与历史请求、用量保留。此操作无法直接撤销。`;
+    if(await confirm(`删除供应商「${provider.name||id}」？`,description,'关联删除'))await save('provider.delete',{id});
+  },
   'toggle-usage-all':()=>{
     state.usageShowAll=!state.usageShowAll;
     renderPage(false);
@@ -488,11 +492,9 @@ export const pageActions={
     await loadPage(false);
   }
 };
-
 export function bindPages(){
   $('#session-model')?.addEventListener('change',ev=>{state.sessionModel=ev.target.value;renderPage(false);});
 }
-
 function protocolURLFields(p){
  return `<details><summary>按协议设置独立地址（可选）</summary><p class="small muted">留空使用 API Base URL。填写包含协议前缀的地址，不包含 messages、responses 等操作名。</p>${['chat','messages','responses','systemone'].map(k=>field(k+' Base URL','base_'+k,p.protocol_urls?.[k]||'','url')).join('')}</details>`;
 }
