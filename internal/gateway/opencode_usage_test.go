@@ -30,13 +30,18 @@ func providerUsageItem(t *testing.T, h *harness, id string) (*httptest.ResponseR
 
 func usageField(t *testing.T, usage Object, label string) string {
 	t.Helper()
+	return str(usageFieldObject(t, usage, label), "value")
+}
+
+func usageFieldObject(t *testing.T, usage Object, label string) Object {
+	t.Helper()
 	for _, item := range arr(usage["fields"]) {
 		if field := obj(item); str(field, "label") == label {
-			return str(field, "value")
+			return field
 		}
 	}
 	t.Fatalf("缺少字段 %s: %v", label, usage)
-	return ""
+	return nil
 }
 
 func TestOpenCodeUsageHandlerParsesWindows(t *testing.T) {
@@ -55,20 +60,61 @@ func TestOpenCodeUsageHandlerParsesWindows(t *testing.T) {
 	if got["supported"] != true || str(got, "headline") != "5 小时已用 0%" || len(arr(got["fields"])) != 4 {
 		t.Fatalf("OpenCode 三窗口解析错误: %v", got)
 	}
-	if value := usageField(t, got, "5 小时"); !strings.Contains(value, "已用 0%") || !strings.Contains(value, "后重置") {
-		t.Fatalf("滚动窗口重置格式错误: %q", value)
+	rolling := usageFieldObject(t, got, "5 小时")
+	if value := str(rolling, "value"); value != "已用 0% · 滚动重置时间待确认" || rolling["reset_at"] != nil {
+		t.Fatalf("零用量滚动窗口不应相信滑动重置时间: %v", rolling)
 	}
-	if value := usageField(t, got, "每周"); !strings.Contains(value, "已用 100%") || !strings.Contains(value, "已达限额") || !strings.Contains(value, "等待上游刷新") {
-		t.Fatalf("每周限额格式错误: %q", value)
+	weekly := usageFieldObject(t, got, "每周")
+	if value := str(weekly, "value"); !strings.Contains(value, "已用 100%") || !strings.Contains(value, "已达限额") || !strings.Contains(value, "等待上游刷新") || weekly["reset_at"] != nil {
+		t.Fatalf("每周限额格式错误: %v", weekly)
 	}
-	if value := usageField(t, got, "每月"); value != "已用 17% · 重置时间待确认" {
-		t.Fatalf("缺少重置时间时格式错误: %q", value)
+	monthly := usageFieldObject(t, got, "每月")
+	if value := str(monthly, "value"); value != "已用 17% · 重置时间待确认" || monthly["reset_at"] != nil {
+		t.Fatalf("缺少重置时间时格式错误: %v", monthly)
 	}
 	if value := usageField(t, got, "现金余额"); value != "接口未提供" {
 		t.Fatalf("现金余额文案错误: %q", value)
 	}
 	if strings.Contains(w.Body.String(), "infer-key") || strings.Contains(w.Body.String(), "admin-unused") {
 		t.Fatal("provider.usage 回显了供应商密钥")
+	}
+}
+
+func TestOpenCodeRollingZeroIgnoresSlidingReset(t *testing.T) {
+	for _, drift := range []time.Duration{0, 25 * time.Second} {
+		reset := time.Now().Add(5*time.Hour + drift).UTC().Format(time.RFC3339Nano)
+		_, fields := parseOpenCodeUsage(Object{"usage": Object{"rolling": Object{"status": "ok", "percent": float64(0), "resetsAt": reset}}})
+		field := usageFieldObject(t, Object{"fields": fields}, "5 小时")
+		if str(field, "value") != "已用 0% · 滚动重置时间待确认" || field["reset_at"] != nil || strings.Contains(str(field, "value"), "后重置") {
+			t.Fatalf("滑动的 now+5h 不应成为可信重置锚点: %v", field)
+		}
+	}
+}
+
+func TestOpenCodeUsageResetMetadata(t *testing.T) {
+	base := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	usage := Object{"rolling": Object{"status": "ok", "percent": float64(42), "resetsAt": base.Format(time.RFC3339)},
+		"weekly":  Object{"status": "ok", "percent": float64(0), "resetsAt": base.Add(time.Hour).Format(time.RFC3339)},
+		"monthly": Object{"status": "rate-limited", "percent": float64(100), "resetsAt": base.Add(2 * time.Hour).Format(time.RFC3339)}}
+	_, fields := parseOpenCodeUsage(Object{"usage": usage})
+	for _, tc := range []struct {
+		label, value string
+		at           time.Time
+	}{{"5 小时", "已用 42%", base}, {"每周", "已用 0%", base.Add(time.Hour)}, {"每月", "已用 100% · 已达限额", base.Add(2 * time.Hour)}} {
+		field := usageFieldObject(t, Object{"fields": fields}, tc.label)
+		if int64(num(field, "reset_at")) != tc.at.UnixMilli() || str(field, "value") != tc.value {
+			t.Fatalf("可信重置时间应只放入 reset_at: %v", field)
+		}
+	}
+	unknown := Object{"usage": Object{
+		"rolling": Object{"status": "ok", "percent": "42", "resetsAt": base.Format(time.RFC3339)},
+		"weekly":  Object{"status": "paused", "percent": float64(17), "resetsAt": base.Format(time.RFC3339)},
+	}}
+	_, fields = parseOpenCodeUsage(unknown)
+	for _, label := range []string{"5 小时", "每周"} {
+		if field := usageFieldObject(t, Object{"fields": fields}, label); field["reset_at"] != nil {
+			t.Fatalf("未知用量不得输出 reset_at: %v", field)
+		}
 	}
 }
 
@@ -99,6 +145,13 @@ func TestOpenCodeUsageUnknownAndErrors(t *testing.T) {
 			}
 			if tc.name == "部分有效" && (!strings.Contains(usageField(t, got, "5 小时"), "待确认") || !strings.Contains(usageField(t, got, "每月"), "待确认") || !strings.Contains(usageField(t, got, "每周"), "重置时间待确认")) {
 				t.Fatalf("部分有效响应应保留未知状态: %v", got)
+			}
+			if tc.name == "部分有效" {
+				for _, label := range []string{"5 小时", "每周", "每月"} {
+					if field := usageFieldObject(t, got, label); field["reset_at"] != nil {
+						t.Fatalf("未知或非法窗口不得输出 reset_at: %v", field)
+					}
+				}
 			}
 			if tc.name == "全部未知" {
 				for _, label := range []string{"5 小时", "每周", "每月"} {

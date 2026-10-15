@@ -123,7 +123,9 @@ curl http://127.0.0.1:8080/api.json \
 
 `batch.read` 只接受实现中列出的只读 action，1–10 项，不保证多个查询处于同一个数据库读快照，不接收任何写操作。同步模型任务网络调用在 SQLite 事务外完成；提交时版本冲突会失败，不自动覆盖同时发生的编辑。
 
-OpenCode Go 的用量来自 `GET <Go Base URL>/usage`，使用该供应商的推理 Key。解析 `usage.rolling`、`weekly`、`monthly` 的已用百分比与上游 `resetsAt`；数字 0 是已确认零用量，缺失或非法字段为待确认。该接口不返回现金余额、token 总数或逐模型明细，不新增路由冷却行为。
+OpenCode Go 的用量来自 `GET <Go Base URL>/usage`，使用该供应商的推理 Key。解析 `usage.rolling`、`weekly`、`monthly` 的已用百分比和限额状态；0% 是上游的显示值，[公开实现向下取整](https://github.com/anomalyco/opencode/blob/5caf1f9f6f5f30e13fc50a788ad953d97ae3748f/packages/console/core/src/subscription.ts#L53-L152)，可能包含不足 1% 的消费，不能断言没有消费。缺失或非法字段为待确认。
+
+滚动窗口为 0% 时，`resetsAt` 可能在每次查询时重新生成约五小时后的参考值，无法确认窗口起点，因此只显示百分比及“滚动重置时间待确认”，不输出确认的重置时间。有效非零滚动窗口及有效周/月窗口的未来重置时间通过 `fields[].reset_at` 返回 Unix 毫秒，界面显示本地具体时刻，避免 60 秒缓存里的相对倒计时静止不变。缺失、非法或已过期时间保留待确认/等待上游刷新提示。该接口不返回现金余额、token 总数或逐模型明细，不新增路由冷却行为；当前服务端已迁移到非公开实现，不把旧源码当作当前内部实现保证。
 
 该端点是上游保留的兼容接口，尚未列入正式 API 文档；当前[官方代理源码](https://github.com/anomalyco/opencode/blob/d099d2cb2a0869d07d2f533c66348e4868325a78/packages/console/app/src/lib/inference-proxy.ts)仍转发此路径，[Go 产品说明](https://opencode.ai/v2/docs/console/go/)定义三段套餐限制。结构变化时返回明确错误，不把未知用量显示为零。
 

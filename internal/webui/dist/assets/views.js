@@ -138,7 +138,10 @@ function providerUsageBlock(p){
   const fallback=limits?`<div class="provider-usage-fields">${limits}</div>`:'';
   if(!u.supported)return wrap(`<span class="tiny muted ellipsis" title="${E(u.note)}">${E(u.note)}</span>`,fallback);
   if(u.error)return wrap(`<span class="tiny negative ellipsis" title="${E(u.error)}">${E(u.error)}</span>`,fallback);
-  const fields=(u.fields||[]).map(f=>usageRow(f.label,f.value)).join('');
+  const fields=(u.fields||[]).map(f=>{
+    const reset=typeof f.reset_at==='number'&&Number.isFinite(f.reset_at)&&f.reset_at>0&&Number.isFinite(new Date(f.reset_at).getTime())?` · ${dateTime(f.reset_at)}重置`:'';
+    return usageRow(f.label,f.value+reset);
+  }).join('');
   // 等宽字体只给纯数值用，中文混进去字距会被撑开
   const h=u.headline||'—',mono=/^[\d$¥%.,\s/+-]+$/.test(h)?' class="mono"':'';
   return wrap(`<strong${mono}>${E(h)}</strong>`,fields?`<div class="provider-usage-fields">${fields}</div>`:'');
