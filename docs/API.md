@@ -123,11 +123,13 @@ curl http://127.0.0.1:8080/api.json \
 
 `batch.read` 只接受实现中列出的只读 action，1–10 项，不保证多个查询处于同一个数据库读快照，不接收任何写操作。同步模型任务网络调用在 SQLite 事务外完成；提交时版本冲突会失败，不自动覆盖同时发生的编辑。
 
-OpenCode Go 的用量来自 `GET <Go Base URL>/usage`，使用该供应商的推理 Key。解析 `usage.rolling`、`weekly`、`monthly` 的已用百分比和限额状态；0% 是上游的显示值，[公开实现向下取整](https://github.com/anomalyco/opencode/blob/5caf1f9f6f5f30e13fc50a788ad953d97ae3748f/packages/console/core/src/subscription.ts#L53-L152)，可能包含不足 1% 的消费，不能断言没有消费。缺失或非法字段为待确认。
+OpenCode Go 使用供应商现有推理 Key 查询同源 `GET /console/api/go/status`，适用于 `/zen/go/v1` 与 `/inference/go/v1` 地址。读取 `access.meters.fiveHour/week/month` 的 `usedMicroCents`、`limitMicroCents`，严格解析非负十进制整数字符串；1 美元为 100,000,000 微美分。卡片显示已用金额 / 窗口上限及两位小数百分比，极小非零比例显示 `<0.01%`，未满但四舍五入接近100%显示 `>99.99%`。缺失、非法或零上限不猜测为零用量。
 
-滚动窗口为 0% 时，`resetsAt` 可能在每次查询时重新生成约五小时后的参考值，无法确认窗口起点，因此只显示百分比及“滚动重置时间待确认”，不输出确认的重置时间。有效非零滚动窗口及有效周/月窗口的未来重置时间通过 `fields[].reset_at` 返回 Unix 毫秒，界面显示本地具体时刻，避免 60 秒缓存里的相对倒计时静止不变。缺失、非法或已过期时间保留待确认/等待上游刷新提示。该接口不返回现金余额、token 总数或逐模型明细，不新增路由冷却行为；当前服务端已迁移到非公开实现，不把旧源码当作当前内部实现保证。
+五小时窗口有真实用量或合法 `startsAt` 时，保留未来 `resetsAt`；零用量且没有已开始的窗口起点时不展示滑动的五小时参考值。周/月窗口保留有效重置时间。`fields[].reset_at` 为 Unix 毫秒，前端显示本地绝对时刻。接口不提供现金余额、token 总数或逐模型消费明细，不新增路由冷却行为。
 
-该端点是上游保留的兼容接口，尚未列入正式 API 文档；当前[官方代理源码](https://github.com/anomalyco/opencode/blob/d099d2cb2a0869d07d2f533c66348e4868325a78/packages/console/app/src/lib/inference-proxy.ts)仍转发此路径，[Go 产品说明](https://opencode.ai/v2/docs/console/go/)定义三段套餐限制。结构变化时返回明确错误，不把未知用量显示为零。
+该接口是当前 Console 内部接口，2026-10-15 已用现有 Go Key 在生产主机实测成功，但尚未列入正式 API 文档。鉴权失败或结构变化明确报错，不降级为旧 `/usage` 接口的粗粒度整数百分比。响应仅投影套餐额度字段，不返回订阅用户、支付方式或其他账户资料。
+
+供应商页自动刷新，额度结果仍缓存60秒、本地统计缓存30秒；显示 `fetched_at` 查询时间和 `note` 数据口径。额度 RPC 失败清除旧额度并提示失败，旧异步响应不能覆盖较新的结果。
 
 ## 模型与路由结构
 

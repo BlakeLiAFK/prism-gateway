@@ -126,6 +126,13 @@ function usageRow(label,value,title=''){
   return `<div class="usage-row"${title?` title="${E(title)}"`:''}><span>${E(label)}</span><b>${E(main)}${rest.length?`<small>${E(rest.join(' · '))}</small>`:''}</b></div>`;
 }
 
+function providerUsageMeta(u,includeNote=true){
+  const rows=[];
+  if(typeof u.fetched_at==='number'&&Number.isFinite(u.fetched_at)&&u.fetched_at>0&&Number.isFinite(new Date(u.fetched_at).getTime()))rows.push(usageRow('更新时间',dateTime(u.fetched_at)));
+  if(includeNote&&u.note)rows.push(usageRow('说明',u.note));
+  return rows.join('');
+}
+
 // 上游额度：只有少数供应商提供按 Key 可查的接口，不支持的直接写明原因，
 // 避免和总览里的本地估算预算混为一谈。
 function providerUsageBlock(p){
@@ -136,15 +143,17 @@ function providerUsageBlock(p){
   // 额度接口查不到时，用上游最近一次在响应头里声明的限额兜底
   const limits=(u.limits||[]).flatMap(x=>Object.entries(x.limits).map(([k,v])=>usageRow(k,v,modelName(x.model)))).slice(0,4).join('');
   const fallback=limits?`<div class="provider-usage-fields">${limits}</div>`:'';
-  if(!u.supported)return wrap(`<span class="tiny muted ellipsis" title="${E(u.note)}">${E(u.note)}</span>`,fallback);
-  if(u.error)return wrap(`<span class="tiny negative ellipsis" title="${E(u.error)}">${E(u.error)}</span>`,fallback);
+  const meta=includeNote=>{const rows=providerUsageMeta(u,includeNote);return rows?`<div class="provider-usage-fields">${rows}</div>`:'';};
+  if(!u.supported)return wrap(`<span class="tiny muted ellipsis" title="${E(u.note)}">${E(u.note)}</span>`,fallback+meta(false));
+  if(u.error)return wrap(`<span class="tiny negative ellipsis" title="${E(u.error)}">${E(u.error)}</span>`,fallback+meta(true));
   const fields=(u.fields||[]).map(f=>{
     const reset=typeof f.reset_at==='number'&&Number.isFinite(f.reset_at)&&f.reset_at>0&&Number.isFinite(new Date(f.reset_at).getTime())?` · ${dateTime(f.reset_at)}重置`:'';
     return usageRow(f.label,f.value+reset);
   }).join('');
   // 等宽字体只给纯数值用，中文混进去字距会被撑开
   const h=u.headline||'—',mono=/^[\d$¥%.,\s/+-]+$/.test(h)?' class="mono"':'';
-  return wrap(`<strong${mono}>${E(h)}</strong>`,fields?`<div class="provider-usage-fields">${fields}</div>`:'');
+  const details=fields+providerUsageMeta(u);
+  return wrap(`<strong${mono}>${E(h)}</strong>`,details?`<div class="provider-usage-fields">${details}</div>`:'');
 }
 
 export function providers(){

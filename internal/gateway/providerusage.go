@@ -39,10 +39,13 @@ func providerUsageURL(p Provider) (addr string, ok bool, note string) {
 	case isOpenRouter(p):
 		return "https://openrouter.ai/api/v1/credits", true, ""
 	case p.Kind == "opencode":
-		if strings.HasSuffix(base, "/zen/v1") {
-			return "", false, "OpenCode Zen 未提供按推理 Key 查询余额或用量的接口"
+		if !strings.HasSuffix(base, "/zen/go/v1") && !strings.HasSuffix(base, "/inference/go/v1") {
+			return "", false, "OpenCode Zen / Console 未提供按推理 Key 查询余额的接口；Go 套餐请使用 Go 地址"
 		}
-		return base + "/usage", true, ""
+		if root := originOf(base); root != "" {
+			return root + "/console/api/go/status", true, "来源：Console Go 套餐状态；金额为已用 / 窗口上限，不是现金余额"
+		}
+		return "", false, "供应商地址无法解析出套餐接口"
 	case p.Kind == "commandcode":
 		// Provider API 那四个端点里没有额度接口，但 CLI 的 /usage 走的是同一个域名下的
 		// /alpha/billing/credits，鉴权同样是 Bearer + 同一把 Key（官方文档写明

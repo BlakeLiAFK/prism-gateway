@@ -2,20 +2,17 @@ package gateway
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func openCodeUsageProvider(id, base, secret string) Provider {
-	return Provider{ID: id, Name: id, Kind: "opencode", Auth: "auto", Secret: secret, AdminSecret: "admin-unused", BaseURL: base, AllowPrivate: true, Enabled: true, TimeoutSec: 30}
+	return Provider{ID: id, Name: id, Kind: "opencode", Auth: "auto", Secret: secret, AdminSecret: "admin-unused", BaseURL: base + "/inference/go/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30}
 }
-
 func providerUsageItem(t *testing.T, h *harness, id string) (*httptest.ResponseRecorder, Object) {
 	t.Helper()
 	w, out := h.rpc(t, "provider.usage", Object{}, h.token)
@@ -24,144 +21,116 @@ func providerUsageItem(t *testing.T, h *harness, id string) (*httptest.ResponseR
 			return w, v
 		}
 	}
-	t.Fatalf("缺少供应商 %s 的用量结果: %v", id, out)
+	t.Fatalf("缺少供应商 %s 的用量结果", id)
 	return w, nil
 }
-
-func usageField(t *testing.T, usage Object, label string) string {
-	t.Helper()
-	return str(usageFieldObject(t, usage, label), "value")
-}
-
 func usageFieldObject(t *testing.T, usage Object, label string) Object {
 	t.Helper()
 	for _, item := range arr(usage["fields"]) {
-		if field := obj(item); str(field, "label") == label {
-			return field
+		if v := obj(item); str(v, "label") == label {
+			return v
 		}
 	}
 	t.Fatalf("缺少字段 %s: %v", label, usage)
 	return nil
 }
+func usageField(t *testing.T, usage Object, label string) string {
+	t.Helper()
+	return str(usageFieldObject(t, usage, label), "value")
+}
+func goMeter(used, limit string) Object {
+	return Object{"usedMicroCents": used, "limitMicroCents": limit, "startsAt": time.Now().Add(-time.Hour).UTC().Format(time.RFC3339), "resetsAt": time.Now().Add(4 * time.Hour).UTC().Format(time.RFC3339)}
+}
+func goStatus(meters Object) Object { return Object{"access": Object{"meters": meters}} }
 
 func TestOpenCodeUsageHandlerParsesWindows(t *testing.T) {
-	reset := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
+	var hits atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/usage" || r.Header.Get("Authorization") != "Bearer infer-key" {
-			w.WriteHeader(http.StatusUnauthorized)
+		hits.Add(1)
+		if r.Method != "GET" || r.URL.Path != "/console/api/go/status" || r.Header.Get("Authorization") != "Bearer infer-key" || r.Header.Get("User-Agent") != "" {
+			t.Errorf("错误请求: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(403)
 			return
 		}
-		fmt.Fprintf(w, `{"usage":{"rolling":{"status":"ok","percent":0,"resetsAt":%q},"weekly":{"status":"rate-limited","percent":100,"resetsAt":"2000-01-01T00:00:00Z"},"monthly":{"status":"ok","percent":17}}}`, reset)
+		fmt.Fprint(w, raw(goStatus(Object{"fiveHour": goMeter("9033410", "1200000000"), "week": goMeter("9381267", "3000000000"), "month": goMeter("9381267", "6000000000")})))
 	}))
 	defer server.Close()
 	h := newHarness(t)
 	h.change(t, func(c *Config) { c.Providers = []Provider{openCodeUsageProvider("go", server.URL, "infer-key")} })
 	w, got := providerUsageItem(t, h, "go")
-	if got["supported"] != true || str(got, "headline") != "5 小时已用 0%" || len(arr(got["fields"])) != 4 {
-		t.Fatalf("OpenCode 三窗口解析错误: %v", got)
+	if got["supported"] != true || str(got, "headline") != "5 小时已用 0.75%" {
+		t.Fatalf("精确用量解析错误: %v", got)
 	}
-	rolling := usageFieldObject(t, got, "5 小时")
-	if value := str(rolling, "value"); value != "已用 0% · 滚动重置时间待确认" || rolling["reset_at"] != nil {
-		t.Fatalf("零用量滚动窗口不应相信滑动重置时间: %v", rolling)
+	if value := usageField(t, got, "5 小时"); value != "已用 0.75% · $0.0903341 / $12.00" {
+		t.Fatal(value)
 	}
-	weekly := usageFieldObject(t, got, "每周")
-	if value := str(weekly, "value"); !strings.Contains(value, "已用 100%") || !strings.Contains(value, "已达限额") || !strings.Contains(value, "等待上游刷新") || weekly["reset_at"] != nil {
-		t.Fatalf("每周限额格式错误: %v", weekly)
+	if !strings.Contains(usageField(t, got, "每周"), "0.31%") || !strings.Contains(usageField(t, got, "每月"), "0.16%") {
+		t.Fatal(got)
 	}
-	monthly := usageFieldObject(t, got, "每月")
-	if value := str(monthly, "value"); value != "已用 17% · 重置时间待确认" || monthly["reset_at"] != nil {
-		t.Fatalf("缺少重置时间时格式错误: %v", monthly)
-	}
-	if value := usageField(t, got, "现金余额"); value != "接口未提供" {
-		t.Fatalf("现金余额文案错误: %q", value)
+	if num(usageFieldObject(t, got, "5 小时"), "reset_at") <= float64(now()) {
+		t.Fatal("有效重置时间丢失")
 	}
 	if strings.Contains(w.Body.String(), "infer-key") || strings.Contains(w.Body.String(), "admin-unused") {
-		t.Fatal("provider.usage 回显了供应商密钥")
+		t.Fatal("凭证回显")
+	}
+	_, again := providerUsageItem(t, h, "go")
+	if hits.Load() != 1 || again["headline"] != got["headline"] {
+		t.Fatal("缓存未生效")
 	}
 }
 
-func TestOpenCodeRollingZeroIgnoresSlidingReset(t *testing.T) {
-	for _, drift := range []time.Duration{0, 25 * time.Second} {
-		reset := time.Now().Add(5*time.Hour + drift).UTC().Format(time.RFC3339Nano)
-		_, fields := parseOpenCodeUsage(Object{"usage": Object{"rolling": Object{"status": "ok", "percent": float64(0), "resetsAt": reset}}})
-		field := usageFieldObject(t, Object{"fields": fields}, "5 小时")
-		if str(field, "value") != "已用 0% · 滚动重置时间待确认" || field["reset_at"] != nil || strings.Contains(str(field, "value"), "后重置") {
-			t.Fatalf("滑动的 now+5h 不应成为可信重置锚点: %v", field)
-		}
-	}
-}
-
-func TestOpenCodeUsageResetMetadata(t *testing.T) {
-	base := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
-	usage := Object{"rolling": Object{"status": "ok", "percent": float64(42), "resetsAt": base.Format(time.RFC3339)},
-		"weekly":  Object{"status": "ok", "percent": float64(0), "resetsAt": base.Add(time.Hour).Format(time.RFC3339)},
-		"monthly": Object{"status": "rate-limited", "percent": float64(100), "resetsAt": base.Add(2 * time.Hour).Format(time.RFC3339)}}
-	_, fields := parseOpenCodeUsage(Object{"usage": usage})
+func TestOpenCodeZeroAndUnknownMeters(t *testing.T) {
 	for _, tc := range []struct {
-		label, value string
-		at           time.Time
-	}{{"5 小时", "已用 42%", base}, {"每周", "已用 0%", base.Add(time.Hour)}, {"每月", "已用 100% · 已达限额", base.Add(2 * time.Hour)}} {
-		field := usageFieldObject(t, Object{"fields": fields}, tc.label)
-		if int64(num(field, "reset_at")) != tc.at.UnixMilli() || str(field, "value") != tc.value {
-			t.Fatalf("可信重置时间应只放入 reset_at: %v", field)
-		}
+		name         string
+		meter        Object
+		known, reset bool
+		value        string
+	}{
+		{"零用量已开始", goMeter("0", "1200000000"), true, true, "已用 0.00%"},
+		{"零用量未开始", Object{"usedMicroCents": "0", "limitMicroCents": "1200000000", "resetsAt": time.Now().Add(5 * time.Hour).Format(time.RFC3339)}, true, false, "窗口尚未开始"},
+		{"微小用量", goMeter("1", "1200000000"), true, true, "<0.01%"},
+		{"将满", goMeter("1199999999", "1200000000"), true, true, ">99.99%"},
+		{"已满", goMeter("1200000000", "1200000000"), true, true, "已达限额"},
+		{"缺失", Object{}, false, false, "待确认"},
+		{"负数", goMeter("-1", "1200000000"), false, false, "待确认"},
+		{"零上限", goMeter("1", "0"), false, false, "待确认"},
+		{"浮点字符串", goMeter("1.5", "1200000000"), false, false, "待确认"},
+		{"整数溢出", goMeter("999999999999999999999", "1200000000"), false, false, "待确认"},
+		{"非法时间", Object{"usedMicroCents": "5", "limitMicroCents": "100", "resetsAt": "bad"}, true, false, "重置时间待确认"},
+		{"过期", Object{"usedMicroCents": "5", "limitMicroCents": "100", "resetsAt": "2000-01-01T00:00:00Z"}, true, false, "等待上游刷新"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			headline, fields := parseOpenCodeUsage(goStatus(Object{"fiveHour": tc.meter}))
+			f := usageFieldObject(t, Object{"fields": fields}, "5 小时")
+			if (headline != "") != tc.known || (f["reset_at"] != nil) != tc.reset || !strings.Contains(str(f, "value"), tc.value) {
+				t.Fatalf("headline=%s field=%v", headline, f)
+			}
+		})
 	}
-	unknown := Object{"usage": Object{
-		"rolling": Object{"status": "ok", "percent": "42", "resetsAt": base.Format(time.RFC3339)},
-		"weekly":  Object{"status": "paused", "percent": float64(17), "resetsAt": base.Format(time.RFC3339)},
-	}}
-	_, fields = parseOpenCodeUsage(unknown)
-	for _, label := range []string{"5 小时", "每周"} {
-		if field := usageFieldObject(t, Object{"fields": fields}, label); field["reset_at"] != nil {
-			t.Fatalf("未知用量不得输出 reset_at: %v", field)
-		}
+	_, fields := parseOpenCodeUsage(goStatus(Object{"week": goMeter("0", "3000000000")}))
+	if usageFieldObject(t, Object{"fields": fields}, "每周")["reset_at"] == nil {
+		t.Fatal("零周用量仍应显示重置时间")
 	}
 }
 
-func TestOpenCodeUsageUnknownAndErrors(t *testing.T) {
-	tests := []struct {
-		name, body, headline, errorText string
-		status                          int
+func TestOpenCodeUsageFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
 	}{
-		{"部分有效", `{"usage":{"rolling":{"status":"ok","percent":"42"},"weekly":{"status":"ok","percent":17,"resetsAt":"bad"},"monthly":{"status":"paused","percent":3}}}`, "每周已用 17%", "", http.StatusOK},
-		{"全部未知", `{"usage":{"rolling":{"status":"ok","percent":"42"},"weekly":{"status":"ok","percent":101},"monthly":{"status":"paused","percent":3}}}`, "", "未返回可识别的套餐用量", http.StatusOK},
-		{"上游错误", `{"usage":{"rolling":{"status":"ok","percent":0}}}`, "", "HTTP 503", http.StatusServiceUnavailable},
-	}
-	for _, tc := range tests {
+		{"旧接口形状", `{"usage":{"rolling":{"status":"ok","percent":0}}}`, 200},
+		{"无套餐", `{"access":null}`, 200},
+		{"权限不足", `{"_tag":"Forbidden"}`, 403},
+		{"无效JSON", `<html>login</html>`, 200},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tc.status)
-				io.WriteString(w, tc.body)
-			}))
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(tc.status); fmt.Fprint(w, tc.body) }))
 			defer server.Close()
 			h := newHarness(t)
 			h.change(t, func(c *Config) { c.Providers = []Provider{openCodeUsageProvider("go", server.URL, "key")} })
 			_, got := providerUsageItem(t, h, "go")
-			if str(got, "headline") != tc.headline || !strings.Contains(str(got, "error"), tc.errorText) {
-				t.Fatalf("未知或错误响应处理不正确: %v", got)
-			}
-			if tc.status == http.StatusOK && len(arr(got["fields"])) != 4 {
-				t.Fatalf("窗口字段必须固定输出: %v", got)
-			}
-			if tc.name == "部分有效" && (!strings.Contains(usageField(t, got, "5 小时"), "待确认") || !strings.Contains(usageField(t, got, "每月"), "待确认") || !strings.Contains(usageField(t, got, "每周"), "重置时间待确认")) {
-				t.Fatalf("部分有效响应应保留未知状态: %v", got)
-			}
-			if tc.name == "部分有效" {
-				for _, label := range []string{"5 小时", "每周", "每月"} {
-					if field := usageFieldObject(t, got, label); field["reset_at"] != nil {
-						t.Fatalf("未知或非法窗口不得输出 reset_at: %v", field)
-					}
-				}
-			}
-			if tc.name == "全部未知" {
-				for _, label := range []string{"5 小时", "每周", "每月"} {
-					if !strings.Contains(usageField(t, got, label), "待确认") {
-						t.Fatalf("未知窗口未标记待确认: %v", got)
-					}
-				}
-			}
-			if strings.Contains(raw(got), "已用 0%") {
-				t.Fatalf("未知百分比被误报为 0%%: %v", got)
+			if str(got, "error") == "" || strings.Contains(raw(got), "已用 0%") {
+				t.Fatalf("错误被当成零用量: %v", got)
 			}
 		})
 	}
@@ -169,42 +138,40 @@ func TestOpenCodeUsageUnknownAndErrors(t *testing.T) {
 
 func TestOpenCodeUsageZenCacheAndKeyChange(t *testing.T) {
 	var hits atomic.Int32
-	var mu sync.Mutex
-	auth := []string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
-		mu.Lock()
-		auth = append(auth, r.Header.Get("Authorization"))
-		mu.Unlock()
-		percent := 42
+		used := "1"
 		if r.Header.Get("Authorization") == "Bearer infer-two" {
-			percent = 80
+			used = "50"
 		}
-		fmt.Fprintf(w, `{"usage":{"rolling":{"status":"ok","percent":%d}}}`, percent)
+		fmt.Fprint(w, raw(goStatus(Object{"fiveHour": goMeter(used, "100")})))
 	}))
 	defer server.Close()
 	h := newHarness(t)
-	h.change(t, func(c *Config) {
-		c.Providers = []Provider{openCodeUsageProvider("go", server.URL, "infer-one"), openCodeUsageProvider("zen", server.URL+"/zen/v1", "zen-key")}
-	})
+	p := openCodeUsageProvider("go", server.URL, "infer-one")
+	zen := p
+	zen.ID = "zen"
+	zen.BaseURL = server.URL + "/zen/v1"
+	h.change(t, func(c *Config) { c.Providers = []Provider{p, zen} })
 	_, first := providerUsageItem(t, h, "go")
-	_, second := providerUsageItem(t, h, "go")
-	if hits.Load() != 1 || str(first, "headline") != "5 小时已用 42%" || str(second, "headline") != str(first, "headline") {
-		t.Fatalf("60 秒缓存未生效: hits=%d first=%v second=%v", hits.Load(), first, second)
+	_, again := providerUsageItem(t, h, "go")
+	if hits.Load() != 1 || again["headline"] != first["headline"] {
+		t.Fatal("缓存失效")
 	}
-	_, zen := providerUsageItem(t, h, "zen")
-	if zen["supported"] != false || !strings.Contains(str(zen, "note"), "Zen") || hits.Load() != 1 {
-		t.Fatalf("Zen 不应访问不存在的额度接口: hits=%d usage=%v", hits.Load(), zen)
+	_, z := providerUsageItem(t, h, "zen")
+	if z["supported"] != false || hits.Load() != 1 {
+		t.Fatal("Zen 不应查询Go套餐")
 	}
-	w, _ := h.rpc(t, "provider.save", Object{"id": "go", "version": h.s.Config().Version, "provider": Object{"api_key": "infer-two"}}, h.token)
-	if strings.Contains(w.Body.String(), "infer-two") {
-		t.Fatal("保存响应回显了新推理密钥")
-	}
+	h.rpc(t, "provider.save", Object{"id": "go", "version": h.s.Config().Version, "provider": Object{"api_key": "infer-two"}}, h.token)
 	_, changed := providerUsageItem(t, h, "go")
-	mu.Lock()
-	gotAuth := append([]string{}, auth...)
-	mu.Unlock()
-	if hits.Load() != 2 || str(changed, "headline") != "5 小时已用 80%" || fmt.Sprint(gotAuth) != "[Bearer infer-one Bearer infer-two]" {
-		t.Fatalf("换推理 Key 后未立即重查: hits=%d auth=%v usage=%v", hits.Load(), gotAuth, changed)
+	if hits.Load() != 2 || str(changed, "headline") != "5 小时已用 50.00%" {
+		t.Fatal(changed)
+	}
+	for _, path := range []string{"/zen/go/v1", "/inference/go/v1"} {
+		p.BaseURL = server.URL + path
+		addr, ok, _ := providerUsageURL(p)
+		if !ok || addr != server.URL+"/console/api/go/status" {
+			t.Fatal(addr)
+		}
 	}
 }

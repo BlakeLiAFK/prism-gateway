@@ -82,6 +82,9 @@ func TestUserAgentPreservedAcrossFallbackAndCountTokens(t *testing.T) {
 		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "first", Weight: 10}, {ModelID: "second", Weight: 10}}}}
 	})
 	requireStatus(t, h.generateWithUserAgent(t, "chat", requestFixture("chat", "auto"), agent, true), 200)
+	if len(seen) != 2 {
+		t.Fatalf("后台请求数量错误: %d", len(seen))
+	}
 	for range 2 {
 		if got := <-seen; !got.present || got.value != agent {
 			t.Fatalf("候选切换丢失 User-Agent: %+v", got)
@@ -112,8 +115,8 @@ func TestBackgroundRequestsSuppressUserAgent(t *testing.T) {
 	seen := make(chan agentObservation, 2)
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen <- observeAgent(r)
-		if r.URL.Path == "/usage" {
-			io.WriteString(w, `{"usage":{"rolling":{"status":"ok","percent":1}}}`)
+		if r.URL.Path == "/console/api/go/status" {
+			io.WriteString(w, `{"access":{"meters":{"fiveHour":{"usedMicroCents":"1","limitMicroCents":"100"}}}}`)
 			return
 		}
 		io.WriteString(w, `{"data":[{"id":"m"}]}`)
@@ -121,13 +124,16 @@ func TestBackgroundRequestsSuppressUserAgent(t *testing.T) {
 	defer up.Close()
 	h := newHarness(t)
 	h.change(t, func(c *Config) {
-		c.Providers = []Provider{{ID: "p", Name: "p", Kind: "opencode", Auth: "none", BaseURL: up.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30}}
+		c.Providers = []Provider{{ID: "p", Name: "p", Kind: "opencode", Auth: "none", BaseURL: up.URL + "/inference/go/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30}}
 	})
 	if w, _ := h.rpc(t, "provider.test", Object{"id": "p"}, h.token); w.Code != 200 {
 		t.Fatalf("provider.test 失败: %s", w.Body)
 	}
 	if w, out := h.rpc(t, "provider.usage", Object{}, h.token); w.Code != 200 || out["ok"] != true {
 		t.Fatalf("provider.usage 失败: %s", w.Body)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("后台请求数量错误: %d", len(seen))
 	}
 	for range 2 {
 		if got := <-seen; got.present || got.value != "" {

@@ -2877,8 +2877,8 @@ func TestProviderUsageQuery(t *testing.T) {
 				{"currency":"CNY","total_balance":"10.30","granted_balance":"0.00","topped_up_balance":"10.30"}]}`)
 		case "/zero/user/balance":
 			io.WriteString(w, `{"is_available":true,"balance_infos":[{"currency":"CNY","total_balance":"10.30","granted_balance":"0.00","topped_up_balance":"10.30"}]}`)
-		case "/usage":
-			io.WriteString(w, `{"usage":{"rolling":{"status":"ok","percent":42},"weekly":{"status":"ok","percent":17},"monthly":{"status":"ok","percent":3}}}`)
+		case "/console/api/go/status":
+			io.WriteString(w, `{"access":{"meters":{"fiveHour":{"usedMicroCents":"42","limitMicroCents":"100"},"week":{"usedMicroCents":"17","limitMicroCents":"100"},"month":{"usedMicroCents":"3","limitMicroCents":"100"}}}}`)
 		case "/alpha/billing/credits":
 			io.WriteString(w, `{"credits":{"planId":"individual-goat","monthlyCredits":41.5,"purchasedCredits":8,"freeCredits":0.5,
 				"windowLimits":{"limited":true,"fiveHour":{"used":3.2,"cap":14},"weekly":{"used":9.75,"cap":35}}}}`)
@@ -2896,7 +2896,7 @@ func TestProviderUsageQuery(t *testing.T) {
 	h.change(t, func(c *Config) {
 		c.Providers = append(c.Providers,
 			Provider{ID: "p_ds", Name: "DeepSeek", Kind: "deepseek", Auth: "none", BaseURL: upstream.URL + "/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
-			Provider{ID: "p_oc", Name: "OpenCode", Kind: "opencode", Auth: "none", BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30},
+			Provider{ID: "p_oc", Name: "OpenCode", Kind: "opencode", Auth: "none", BaseURL: upstream.URL + "/inference/go/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
 			Provider{ID: "p_cc2", Name: "Command Code", Kind: "commandcode", Auth: "none", BaseURL: upstream.URL + "/provider/v1", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
 			Provider{ID: "p_zai", Name: "Z.AI", Kind: "zai", Auth: "bearer", Secret: "zai-raw-token", HasKey: true, BaseURL: upstream.URL + "/api/coding/paas/v4", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
 			Provider{ID: "p_ds2", Name: "DeepSeek 双币", Kind: "deepseek", Auth: "none", BaseURL: upstream.URL + "/dual", AllowPrivate: true, Enabled: true, TimeoutSec: 30},
@@ -2915,7 +2915,7 @@ func TestProviderUsageQuery(t *testing.T) {
 		t.Fatalf("DeepSeek 应有赠送与充值两项明细: %v", ds)
 	}
 	oc := got["p_oc"]
-	if oc["supported"] != true || str(oc, "headline") != "5 小时已用 42%" || len(arr(oc["fields"])) != 4 {
+	if oc["supported"] != true || str(oc, "headline") != "5 小时已用 42.00%" || len(arr(oc["fields"])) != 4 {
 		t.Fatalf("OpenCode 套餐用量解析不正确: %v", oc)
 	}
 	// Command Code 的额度在 CLI 用的 /alpha/billing/credits 上，不在 Provider API 里

@@ -18,6 +18,13 @@ import {bindRequestFilters,captureRequestWindow,refreshRequestWindow,requestList
 
 // 各页面模块自带的动作；app.js 的 switch 未命中时按名字分发到这里
 const moduleActions={...modelActions,...routeActions,...pageActions,...usageActions,...alertActions,...watchActions,...scheduleActions,...backupActions,...auditActions};
+export const refreshPages=['overview','providers','usage','requests','jobs','sessions'];
+let providerUsageGeneration=0;
+export let providerUsagePending=false;
+
+export function shouldAutoRefreshPage(){
+  return refreshPages.includes(state.page)&&!(['overview','providers'].includes(state.page)&&providerUsagePending);
+}
 
 export function login(){
 
@@ -41,7 +48,7 @@ export async function enterApp(){
   shell();
   await loadPage();
   clearInterval(state.refreshTimer);
-  state.refreshTimer=setInterval(()=>{if(document.visibilityState==='visible'&&!state.paused&&!state.loading&&!$('dialog')&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)&&['overview','usage','requests','jobs','sessions'].includes(state.page))loadPage(false).catch(report);},10000);
+  state.refreshTimer=setInterval(()=>{if(document.visibilityState==='visible'&&!state.paused&&!state.loading&&!$('dialog')&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)&&shouldAutoRefreshPage())loadPage(false).catch(report);},10000);
 
 }
 
@@ -111,15 +118,23 @@ export async function loadPage(animated=true){
 
 }
 
-async function loadProviderUsage(){
+export async function loadProviderUsage(){
+  const gen=++providerUsageGeneration;
+  providerUsagePending=true;
   try{
     const list=await rpc('provider.usage');
+    if(gen!==providerUsageGeneration)return;
     state.providerUsage=Object.fromEntries(list.map(u=>[u.id,u]));
     if(state.page==='providers'||state.page==='overview')renderPage(false);
 
   }
   catch{
-    // 额度查不到不影响供应商页面其余部分
+    if(gen!==providerUsageGeneration)return;
+    state.providerUsage=Object.fromEntries((state.config?.providers||[]).filter(p=>p.kind!=='mock').map(p=>[p.id,{id:p.id,supported:true,error:'额度查询失败，请稍后重试'}]));
+    if(state.page==='providers'||state.page==='overview')renderPage(false);
+  }
+  finally{
+    if(gen===providerUsageGeneration)providerUsagePending=false;
   }
 }
 
