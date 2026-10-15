@@ -155,7 +155,8 @@ func bearer(r *http.Request) string {
 func requestHeaders(dst *http.Request, src *http.Request, p Provider, protocol, session string) {
 	dst.Header.Set("Content-Type", "application/json")
 	dst.Header.Set("Accept", "application/json, text/event-stream")
-	dst.Header.Set("User-Agent", "Prism-Gateway/"+Version)
+	// 空值抑制 Go 默认 UA；有值时直接使用原请求，避免审计字段的长度截断。
+	dst.Header.Set("User-Agent", src.Header.Get("User-Agent"))
 	if p.Kind == "commandcode" && src.Header.Get("x-cmd-zdr") == "1" {
 		dst.Header.Set("x-cmd-zdr", "1")
 	}

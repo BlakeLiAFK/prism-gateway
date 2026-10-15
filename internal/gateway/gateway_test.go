@@ -234,7 +234,7 @@ func TestAllProtocolPairsNonStream(t *testing.T) {
 				m.OutputPrice = 2
 				m.CachePrice = .1
 				h.configure(t, up.URL, m)
-				w := h.generate(t, from, requestFixture(from, "m"))
+				w := h.generateWithUserAgent(t, from, requestFixture(from, "m"), "matrix-agent/1", true)
 				requireStatus(t, w, 200)
 				if str(got, "model") != "upstream-m" {
 					t.Fatal("model not rewritten")
@@ -242,8 +242,8 @@ func TestAllProtocolPairsNonStream(t *testing.T) {
 				if header.Get("X-Opencode-Session") != "test-conversation" {
 					t.Fatal("session header not forwarded")
 				}
-				if !strings.HasPrefix(header.Get("User-Agent"), "Prism-Gateway/") {
-					t.Fatal("missing own user-agent")
+				if header.Get("User-Agent") != "matrix-agent/1" {
+					t.Fatalf("User-Agent 未透传: %q", header.Get("User-Agent"))
 				}
 				if to == "messages" {
 					if header.Get("X-Api-Key") != "upstream-secret" {
@@ -301,7 +301,9 @@ func TestAllProtocolPairsStreaming(t *testing.T) {
 			t.Run(from+"_to_"+to, func(t *testing.T) {
 				h := newHarness(t)
 				fixture := fixtureSSE(t, to)
+				agent := make(chan string, 1)
 				up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					agent <- r.Header.Get("User-Agent")
 					w.Header().Set("Content-Type", "text/event-stream")
 					io.WriteString(w, fixture)
 				}))
@@ -309,8 +311,11 @@ func TestAllProtocolPairsStreaming(t *testing.T) {
 				h.configure(t, up.URL, modelFixture("m", to))
 				body := requestFixture(from, "m")
 				body["stream"] = true
-				w := h.generate(t, from, body)
+				w := h.generateWithUserAgent(t, from, body, "stream-agent/1", true)
 				requireStatus(t, w, 200)
+				if got := <-agent; got != "stream-agent/1" {
+					t.Fatalf("流式 User-Agent 未透传: %q", got)
+				}
 				u := Usage{}
 				err := nativeStream(httptest.NewRecorder(), strings.NewReader(w.Body.String()), from, &u)
 				if err != nil {

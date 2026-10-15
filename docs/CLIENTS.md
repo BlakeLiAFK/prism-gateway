@@ -59,7 +59,7 @@ export PRISM_API_KEY='替换为 prism_sk_...'
 
 自定义客户端可按每次真实对话传一个稳定 `X-Prism-Session`。同一对话内复用，不同对话分开；不要把所有项目共用一个固定“万能 session”。
 
-网关识别常用会话头，向 OpenCode Go 转发稳定的 `x-opencode-session` 并使用自己的 User-Agent。客户端没有 session 时会生成值并通过响应头返回。需要亲和性的自定义客户端应复用它；不复用时下一次被视为新会话。
+网关识别常用会话头，向 OpenCode Go 转发稳定的 `x-opencode-session` 并透传客户端原始 User-Agent。客户端没有 session 时会生成值并通过响应头返回。需要亲和性的自定义客户端应复用它；不复用时下一次被视为新会话。客户端未提供 User-Agent 或值为空时，向上游省略该头；后台模型同步、额度查询和连接检查也不添加网关或 Go 默认标识。
 
 ## 参考
 
