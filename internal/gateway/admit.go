@@ -183,7 +183,7 @@ func (e *Engine) finish(s selection, id, session, keyID string, u Usage, status 
 	e.global = max(0, e.global-1)
 	h.LastStatus = status
 	h.LatencyMS = t - start
-	e.trackFailure(h, s.Model, r.state, r.code)
+	e.trackFailure(h, s, id, r.state, r.code)
 	keep := writeSession && e.keepPin(s)
 	e.mu.Unlock()
 

@@ -36,12 +36,18 @@ func (a *App) taskSpendAnomaly(c scheduleConfig) (string, error) {
 	if a.warned(key) {
 		return "", nil
 	}
-	text := fmt.Sprintf("花费异常\n今日已记录花费 $%.2f，是前 7 个完整日均值 $%.2f 的 %.1f 倍（阈值 %.1f 倍）。",
-		dollars(todayCost), dollars(int64(average)), float64(todayCost)/average, c.SpendMultiple)
-	if todayUnpriced+pastUnpriced > 0 {
-		text += fmt.Sprintf("\n今日 %d 次、前 7 日 %d 次成功请求价格未确认。", todayUnpriced, pastUnpriced)
+	lines := []string{
+		fmt.Sprintf("统计日期：%s（%s）", today.Format("2006-01-02"), c.zone()),
+		fmt.Sprintf("今日已记录花费：$%.2f", dollars(todayCost)),
+		fmt.Sprintf("前 7 个完整自然日日均：$%.2f", dollars(int64(average))),
+		fmt.Sprintf("当前倍数：%.1f 倍", float64(todayCost)/average),
+		fmt.Sprintf("预警阈值：%.1f 倍，且今日不少于 $%.2f", c.SpendMultiple, c.SpendMinimum),
 	}
-	text += "\n已记录花费可能含本地估算与异常预留，不代表供应商实际账单。"
+	if todayUnpriced+pastUnpriced > 0 {
+		lines = append(lines, fmt.Sprintf("价格未确认：今日 %d 次，前 7 日 %d 次成功请求", todayUnpriced, pastUnpriced))
+	}
+	lines = append(lines, "统计口径：已结束请求；金额可能含本地估算与异常预留，不代表供应商账单")
+	text := notice("花费异常", strings.Join(lines, "\n"))
 	if err = a.notify(text); err != nil {
 		return "", err
 	}
@@ -54,10 +60,11 @@ func (a *App) taskSpendAnomaly(c scheduleConfig) (string, error) {
 // 不能算作上游失败，否则这些请求会绕过各自的告警规则、反过来推高失败率。
 func (a *App) taskFailureRate(c scheduleConfig) (string, error) {
 	end := now()
+	start := end - int64(c.FailureMinutes)*60000
 	rows, err := a.Store.DB.Query(`SELECT COUNT(*) total,
 		COALESCE(SUM(status='error'),0) errors, COALESCE(SUM(status='unknown'),0) unknown
 		FROM requests WHERE started_at>=? AND started_at<? AND status IN ('success','error','unknown') AND is_demo=0 AND usage_mode!='incompatible'`,
-		end-int64(c.FailureMinutes)*60000, end)
+		start, end)
 	if err != nil {
 		return "", err
 	}
@@ -70,8 +77,38 @@ func (a *App) taskFailureRate(c scheduleConfig) (string, error) {
 	if rate < c.FailurePercent || a.warned("failure-rate") {
 		return "", nil
 	}
-	text := fmt.Sprintf("失败率告警\n最近 %d 分钟 %d/%d 次失败（%.1f%%，阈值 %.1f%%）。\n错误 %d 次，状态未知 %d 次。",
-		c.FailureMinutes, failed, total, rate, c.FailurePercent, errors, unknown)
+	lines := []string{
+		fmt.Sprintf("统计窗口：最近 %d 分钟", c.FailureMinutes),
+		"开始时间：" + noticeTimeIn(start, c.zone()),
+		"结束时间：" + noticeTimeIn(end, c.zone()),
+		fmt.Sprintf("失败：%d / %d 次（%.1f%%）", failed, total, rate),
+		fmt.Sprintf("预警阈值：%.1f%%", c.FailurePercent),
+		fmt.Sprintf("失败构成：错误 %d 次，状态未知 %d 次", errors, unknown),
+		"统计口径：已结束的真实请求，不包含演示请求和未进入上游的兼容性拒绝",
+	}
+	breakdown, err := a.Store.DB.Query(`SELECT provider_id p, model_id m, COUNT(*) n
+		FROM requests WHERE started_at>=? AND started_at<? AND status IN ('error','unknown') AND is_demo=0 AND usage_mode!='incompatible'
+		GROUP BY provider_id,model_id ORDER BY n DESC LIMIT 3`, start, end)
+	if err != nil {
+		return "", err
+	}
+	blocks := []string{strings.Join(lines, "\n")}
+	if len(breakdown) > 0 {
+		cfg := a.Store.Config()
+		items := []string{"主要失败来源"}
+		for _, row := range breakdown {
+			provider, model := row.String("p"), row.String("m")
+			if p, ok := cfg.provider(provider); ok {
+				provider = noticeName(p.Name, p.ID)
+			}
+			if m, ok := cfg.model(model); ok {
+				model = noticeName(m.Name, m.ID)
+			}
+			items = append(items, fmt.Sprintf("%s / %s：%d 次", noticeValue(provider), noticeValue(model), row.Int("n")))
+		}
+		blocks = append(blocks, strings.Join(items, "\n"))
+	}
+	text := notice("失败率告警", blocks...)
 	if err = a.notify(text); err != nil {
 		return "", err
 	}
@@ -86,7 +123,7 @@ func (a *App) taskKeyBudget(c scheduleConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	lines, keys := []string{}, []string{}
+	blocks, keys := []string{}, []string{}
 	for _, key := range rows {
 		id := key.String("id")
 		day, month, err := a.Engine.keySpend(id)
@@ -111,18 +148,24 @@ func (a *App) taskKeyBudget(c scheduleConfig) (string, error) {
 			if err != nil {
 				return "", err
 			}
-			line := fmt.Sprintf("「%s」%s $%.2f / $%.2f（%.1f%%）", key.String("name"), window.label, window.spend, window.limit, percent)
-			if unpriced > 0 {
-				line += fmt.Sprintf("；另有 %d 次成功请求价格未确认", unpriced)
+			lines := []string{
+				"网关 Key：" + noticeName(key.String("name"), id),
+				"统计窗口：" + window.label,
+				fmt.Sprintf("已记录花费：$%.2f", window.spend),
+				fmt.Sprintf("预算上限：$%.2f", window.limit),
+				fmt.Sprintf("使用比例：%.1f%%（预警阈值 %d%%）", percent, c.KeyBudgetPercent),
 			}
-			line += "；汇总金额可能含本地估算与异常预留，明细仅覆盖保留期"
-			lines, keys = append(lines, line), append(keys, warnKey)
+			if unpriced > 0 {
+				lines = append(lines, fmt.Sprintf("价格未确认：%d 次成功请求", unpriced))
+			}
+			lines = append(lines, "统计口径：滚动窗口；金额可能含本地估算与异常预留，明细仅覆盖保留期")
+			blocks, keys = append(blocks, strings.Join(lines, "\n")), append(keys, warnKey)
 		}
 	}
-	if len(lines) == 0 {
+	if len(blocks) == 0 {
 		return "", nil
 	}
-	text := "Key 预算预警\n" + strings.Join(lines, "\n")
+	text := notice("Key 预算预警", blocks...)
 	if err = a.notify(text); err != nil {
 		return "", err
 	}

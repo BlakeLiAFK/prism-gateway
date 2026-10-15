@@ -31,17 +31,18 @@ func (p Principal) allows(model string) bool {
 }
 
 type health struct {
-	Active     int
-	Recent     []int64
-	Cooldown   int64
-	CoolWhy    string // 这次冷却的原因，准入被拒时写进给客户端的错误信息
-	LastStatus int
-	LatencyMS  int64
-	TTFB       float64 // 上游 2xx 响应头耗时的滑动平均，latency 策略的依据
-	Limits     Object  // 上游最近一次声明的限额，原样留存
-	LimitsAt   int64
-	Rejects    []reject // 近 5 分钟的准入拒绝
-	Fails      int      // 连续失败次数，成功即清零
+	Active         int
+	Recent         []int64
+	Cooldown       int64
+	CoolWhy        string // 这次冷却的原因，准入被拒时写进给客户端的错误信息
+	LastStatus     int
+	LatencyMS      int64
+	TTFB           float64 // 上游 2xx 响应头耗时的滑动平均，latency 策略的依据
+	Limits         Object  // 上游最近一次声明的限额，原样留存
+	LimitsAt       int64
+	Rejects        []reject // 近 5 分钟的准入拒绝
+	Fails          int      // 连续失败次数，成功即清零
+	FailureSamples []failureSample
 }
 type Engine struct {
 	store    *Store

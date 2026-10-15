@@ -64,7 +64,7 @@ func TestAlertDelivery(t *testing.T) {
 	h.a.Engine.state("m").Active = m.Concurrency
 	h.a.Engine.mu.Unlock()
 	requireStatus(t, h.generate(t, "chat", requestFixture("chat", "auto")), 429)
-	if msgs := wait(2); len(msgs) != 2 || !strings.Contains(msgs[1], "路由 auto 的全部候选都不可用") {
+	if msgs := wait(2); len(msgs) != 2 || !strings.Contains(msgs[1], "路由 auto 的全部候选都不可用") || !strings.Contains(msgs[1], "候选供应商 / 模型") || !strings.Contains(msgs[1], "Test upstream") {
 		t.Fatalf("路由无可用候选应推送: %v", msgs)
 	}
 }

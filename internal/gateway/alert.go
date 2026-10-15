@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -45,7 +46,7 @@ func init() {
 		if c.Secret == "" {
 			return nil, fail("INVALID_PARAMS", "请先填写并保存推送目标", 400)
 		}
-		if err = a.deliver(a.Context, c, "Prism Gateway 测试消息：告警推送已连通。"); err != nil {
+		if err = a.deliver(a.Context, c, noticeEnvelope(notice("推送连接测试", "结果：告警推送已连通。", "来源：管理员手动测试；这不是故障告警。"))); err != nil {
 			return nil, fail("ALERT_FAILED", "推送失败："+err.Error(), 502)
 		}
 		return Object{"sent": true}, nil
@@ -131,7 +132,7 @@ func (a *App) alert(event, key, text string) {
 	a.workers.Add(1)
 	go func() {
 		defer a.workers.Done()
-		if err := a.deliver(a.Context, c, "【Prism Gateway】\n"+text); err != nil {
+		if err := a.deliver(a.Context, c, noticeEnvelope(text)); err != nil {
 			slog.Error("alert delivery failed", "kind", c.Kind, "event", event, "err", err)
 		}
 	}()
@@ -147,10 +148,26 @@ func (a *App) notify(text string) error {
 	if !c.Enabled || c.Secret == "" {
 		return fail("ALERT_DISABLED", "推送通道未启用：请先在「告警推送」里配置并启用", 400)
 	}
-	return a.deliver(a.Context, c, "【Prism Gateway】\n"+text)
+	return a.deliver(a.Context, c, noticeEnvelope(text))
 }
 
 func (a *App) deliver(ctx context.Context, c alertConfig, text string) error {
+	parts := []string{text}
+	if c.Kind == "telegram" && strings.TrimSpace(text) == "" {
+		return fmt.Errorf("推送内容不能为空")
+	}
+	if c.Kind == "telegram" {
+		parts = noticeChunks(text)
+	}
+	for _, part := range parts {
+		if err := a.deliverPart(ctx, c, part); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) deliverPart(ctx context.Context, c alertConfig, text string) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	addr, body, ctype := c.Secret, raw(Object{"event": "prism.alert", "text": text, "at": now()}), "application/json"
@@ -163,7 +180,7 @@ func (a *App) deliver(ctx context.Context, c alertConfig, text string) error {
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", addr, bytes.NewBufferString(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("推送目标配置无效")
 	}
 	req.Header.Set("Content-Type", ctype)
 	res, err := http.DefaultClient.Do(req)
@@ -174,6 +191,14 @@ func (a *App) deliver(ctx context.Context, c alertConfig, text string) error {
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
 		return fmt.Errorf("推送目标返回 HTTP %d", res.StatusCode)
+	}
+	if c.Kind == "telegram" {
+		var result struct {
+			OK bool `json:"ok"`
+		}
+		if err := json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&result); err != nil || !result.OK {
+			return fmt.Errorf("Telegram 未确认消息发送成功，请检查推送配置和机器人权限")
+		}
 	}
 	return nil
 }

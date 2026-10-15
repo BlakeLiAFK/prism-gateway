@@ -82,7 +82,7 @@ func TestFreeModelsAutoMaintain(t *testing.T) {
 		}
 	}
 	res := str(r, "result")
-	for _, want := range []string{"加入并启用：lite-new-b、lite-new-a、lib-model", "重新启用：lite-back", "停用（上游已下架）：lite-old", "推送未发出"} {
+	for _, want := range []string{"供应商：OpenRouter (p_or)", "路由：lite", "加入并启用\nlite-new-b\nlite-new-a\nlib-model", "重新启用\nlite-back", "停用（上游已下架）\nlite-old", "推送未发出"} {
 		if !strings.Contains(res, want) {
 			t.Errorf("结果缺少「%s」: %s", want, res)
 		}
@@ -116,7 +116,7 @@ func TestFreeModelsDropReasoningOptIn(t *testing.T) {
 	if m, _ := h.s.Config().model("paid-model"); m.DropReasoning {
 		t.Error("收费模型不应被改动")
 	}
-	if !strings.Contains(str(r, "result"), "开启丢弃推理内容：") {
+	if !strings.Contains(str(r, "result"), "开启丢弃推理内容\n") {
 		t.Errorf("结果应列出补上选项的模型: %v", r)
 	}
 }

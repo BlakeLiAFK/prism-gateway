@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -226,14 +225,6 @@ func (c Config) resolveRoute(requested string) (route Route, alias string, ok bo
 	return route, alias, ok
 }
 
-// viaAlias 是告警正文里交代别名的片段；直接用路由 ID 调用时为空
-func viaAlias(alias string) string {
-	if alias == "" {
-		return ""
-	}
-	return "使用别名 " + alias + " 调用，"
-}
-
 // recordIncompatible 在请求没有任何候选可用时补一条请求记录并按需告警：客户端收到了 400，后台却没有任何痕迹，
 // 管理员只能等自己撞上。它没有到达任何模型，所以 model_id 为空、不计入用量汇总。
 // code 为 NO_COMPATIBLE_MODEL 表示候选本身都被淘汰了；其他值（如 ZDR_UNSUPPORTED）是请求自带的约束筛光了候选，
@@ -248,30 +239,22 @@ func (e *Engine) recordIncompatible(c Config, key Principal, reqID, requested, p
 		slog.Error("incompatible request record failed", "request_id", reqID, "err", er)
 	}
 	// 直接按模型 ID 调用是请求自己的问题；全部原因都是暂停或停用是管理员自己的操作，都不必告警
-	route, alias, isRoute := c.resolveRoute(requested)
+	route, _, isRoute := c.resolveRoute(requested)
 	actionable := slices.ContainsFunc(whys, func(v any) bool {
 		r := str(obj(v), "reason")
 		return r != "" && r != "candidate_paused" && r != "disabled"
 	})
 	if code == "NO_COMPATIBLE_MODEL" && isRoute && actionable && e.OnAlert != nil {
 		// 限频键用解析后的路由 ID：同一路由的多个别名共享一次限频，不会各自刷屏
-		go e.OnAlert("route", "route-incompatible:"+route.ID, fmt.Sprintf("路由 %s 没有候选能处理一次 %s 请求，客户端%s收到 HTTP 400。原因：%s", route.ID, p, viaAlias(alias), detail))
+		ids := make([]string, 0, len(whys))
+		for _, why := range whys {
+			if id := str(obj(why), "model_id"); id != "" {
+				ids = append(ids, id)
+			}
+		}
+		go e.requestAlert("route-incompatible:"+route.ID, "路由无兼容候选", fmt.Sprintf("路由：%s\n协议：%s\n结果：HTTP 400\n原因：%s\n\n%s", noticeName(route.Name, route.ID), noticeValue(p), noticeValue(detail), noticeModels(c, ids)), key.ID, requested, reqID, from)
 	}
 }
 
 // failAlertAfter：同一模型连续失败这么多次就告警一次（客户端主动取消不算）
 const failAlertAfter = 5
-
-// trackFailure 维护连续失败计数，达到阈值时告警。调用方持有 e.mu
-func (e *Engine) trackFailure(h *health, m Model, state, code string) {
-	if state == "success" {
-		h.Fails = 0
-		return
-	}
-	if code == "CLIENT_CANCELED" {
-		return
-	}
-	if h.Fails++; h.Fails == failAlertAfter && e.OnAlert != nil {
-		go e.OnAlert("failures", "fail:"+m.ID, fmt.Sprintf("%s 连续 %d 次请求失败，最近一次：%s。", cmp.Or(m.Name, m.ID), failAlertAfter, code))
-	}
-}

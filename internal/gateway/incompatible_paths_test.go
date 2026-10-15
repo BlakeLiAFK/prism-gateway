@@ -72,7 +72,7 @@ func TestIncompatibleAlertResolvesAlias(t *testing.T) {
 		if got.event != "route" || got.key != "route-incompatible:auto" {
 			t.Fatalf("别名 %s 的限频键应按解析后的路由归并: %+v", alias, got)
 		}
-		if !strings.Contains(got.text, "路由 auto ") || !strings.Contains(got.text, alias) || !strings.Contains(got.text, "内容类型 thinking") {
+		if !strings.Contains(got.text, "路由：auto") || !strings.Contains(got.text, "请求入口："+alias) || !strings.Contains(got.text, "内容类型 thinking") || !strings.Contains(got.text, "候选供应商 / 模型") || !strings.Contains(got.text, "Test upstream") {
 			t.Fatalf("告警应写明路由与别名: %s", got.text)
 		}
 	}
@@ -206,7 +206,7 @@ func TestFailureRateIgnoresIncompatibleRecords(t *testing.T) {
 		insertUsage(t, h, "m", "p", "error", "", at, 0, true, false)
 	}
 	runScheduled(t, h, "failure")
-	if got := msgs(); len(got) != 1 || !strings.Contains(got[0], "4/10 次失败") {
+	if got := msgs(); len(got) != 1 || !strings.Contains(got[0], "失败：4 / 10 次（40.0%）") {
 		t.Fatalf("真实失败应按 4/10 计入: %v", got)
 	}
 }

@@ -50,7 +50,7 @@ func pruneBackups(dir, prefix string, keep int) (int, error) {
 
 // taskQuota 查 Command Code / Z.AI 的窗口额度，用量达到阈值时推送；同一窗口同一重置周期只推一次
 func (a *App) taskQuota(c scheduleConfig) (string, error) {
-	lines, keys, resets := []string{}, []string{}, []int64{}
+	blocks, keys, resets := []string{}, []string{}, []int64{}
 	for _, p := range a.Store.Config().Providers {
 		if !p.Enabled || (p.Kind != "commandcode" && p.Kind != "zai") {
 			continue
@@ -66,24 +66,31 @@ func (a *App) taskQuota(c scheduleConfig) (string, error) {
 			if a.warned(key) {
 				continue
 			}
-			line := fmt.Sprintf("%s 的%s窗口已用 %.0f%%", p.Name, str(w, "label"), pct)
-			if reset > now() {
-				line += "，" + durationText(reset-now()) + "后重置"
+			lines := []string{
+				"供应商：" + noticeName(p.Name, p.ID),
+				"额度窗口：" + noticeValue(str(w, "label")),
+				fmt.Sprintf("已用：%.1f%%", pct),
+				fmt.Sprintf("预警阈值：%d%%", c.QuotaPercent),
+				"重置时间：" + noticeTimeIn(reset, c.zone()),
 			}
-			lines, keys, resets = append(lines, line), append(keys, key), append(resets, reset)
+			if reset > now() {
+				lines = append(lines, "距离重置："+durationText(reset-now()))
+			}
+			blocks, keys, resets = append(blocks, strings.Join(lines, "\n")), append(keys, key), append(resets, reset)
 		}
 	}
-	if len(lines) == 0 {
+	if len(blocks) == 0 {
 		return "", nil
 	}
-	if err := a.notify("额度预警\n" + strings.Join(lines, "\n")); err != nil {
+	text := notice("供应商额度预警", blocks...)
+	if err := a.notify(text); err != nil {
 		return "", err
 	}
 	for i, k := range keys {
 		// 拿不到重置时刻时，一周内不再重复提醒
 		a.markWarned(k, max(resets[i], now()+7*86400000))
 	}
-	return "已推送：" + strings.Join(lines, "；"), nil
+	return text, nil
 }
 
 // taskReport 汇总昨天（按设定时区）的用量推送出去
@@ -142,43 +149,57 @@ func (a *App) usageReport(c scheduleConfig, start, end time.Time, title, empty s
 		return "", err
 	}
 	s := sum[0]
-	lines := []string{title}
 	if num(s, "r") == 0 {
-		return strings.Join(append(lines, empty), "\n"), nil
+		return notice(title, empty), nil
 	}
-	lines = append(lines, fmt.Sprintf("请求 %.0f 次，成功率 %.1f%%，失败 %.0f 次", num(s, "r"), num(s, "s")/num(s, "r")*100, num(s, "e")),
-		fmt.Sprintf("Token %s，已记录花费（含估算/异常预留）$%.2f", compactCount(num(s, "t")), dollars(int64(num(s, "c")))))
+	summary := []string{
+		fmt.Sprintf("请求：%.0f 次", num(s, "r")),
+		fmt.Sprintf("成功：%.0f 次（%.1f%%）", num(s, "s"), num(s, "s")/num(s, "r")*100),
+		fmt.Sprintf("失败：%.0f 次", num(s, "e")),
+		fmt.Sprintf("Token：%s", compactCount(num(s, "t"))),
+		fmt.Sprintf("已记录花费：$%.2f", dollars(int64(num(s, "c")))),
+	}
 	if u := num(s, "u"); u > 0 {
-		lines[len(lines)-1] += fmt.Sprintf("（另有 %.0f 次成功请求价格未确认）", u)
+		summary = append(summary, fmt.Sprintf("价格未确认：%.0f 次成功请求", u))
 	}
+	summary = append(summary, "花费口径：包含本地估算与异常预留，不代表供应商账单")
 	sections := []struct {
-		title, sql, format string
-		model              bool
+		title, sql string
+		model      bool
 	}{
-		{"常用模型", `SELECT model_id n, SUM(requests) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY model_id ORDER BY v DESC LIMIT 3`, "%s %.0f 次", true},
-		{"花费最多的 Key", `SELECT COALESCE(k.name, u.key_id) n, SUM(u.cost_nano)/1e9 v FROM usage_hourly u LEFT JOIN api_keys k ON k.id=u.key_id
-			WHERE u.hour>=? AND u.hour<? GROUP BY u.key_id HAVING v>0 ORDER BY v DESC LIMIT 3`, "%s $%.2f", false},
-		{"失败最多", `SELECT model_id n, SUM(errors) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY model_id HAVING v>0 ORDER BY v DESC LIMIT 3`, "%s %.0f 次", true},
+		{"常用模型", `SELECT model_id n, provider_id p, SUM(requests) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY provider_id,model_id ORDER BY v DESC LIMIT 3`, true},
+		{"花费最多的 Key", `SELECT COALESCE(k.name, u.key_id) n, u.key_id p, SUM(u.cost_nano)/1e9 v FROM usage_hourly u LEFT JOIN api_keys k ON k.id=u.key_id
+			WHERE u.hour>=? AND u.hour<? GROUP BY u.key_id HAVING v>0 ORDER BY v DESC LIMIT 3`, false},
+		{"失败最多", `SELECT model_id n, provider_id p, SUM(errors) v FROM usage_hourly WHERE hour>=? AND hour<? AND model_id!='' GROUP BY provider_id,model_id HAVING v>0 ORDER BY v DESC LIMIT 3`, true},
 	}
 	cfg := a.Store.Config()
+	blocks := []string{strings.Join(summary, "\n")}
 	for _, sec := range sections {
 		rows, err := q(sec.sql)
 		if err != nil {
 			return "", err
 		}
-		items := []string{}
+		items := []string{sec.title}
 		for _, r := range rows {
 			name := str(r, "n")
 			if m, ok := cfg.model(name); sec.model && ok && m.Name != "" {
 				name = m.Name
 			}
-			items = append(items, fmt.Sprintf(sec.format, name, num(r, "v")))
+			if sec.model {
+				provider := str(r, "p")
+				if p, ok := cfg.provider(provider); ok {
+					provider = noticeName(p.Name, p.ID)
+				}
+				items = append(items, fmt.Sprintf("%s / %s：%.0f 次", noticeValue(name), noticeValue(provider), num(r, "v")))
+			} else {
+				items = append(items, fmt.Sprintf("%s：$%.2f", noticeName(name, str(r, "p")), num(r, "v")))
+			}
 		}
-		if len(items) > 0 {
-			lines = append(lines, sec.title+"："+strings.Join(items, " · "))
+		if len(items) > 1 {
+			blocks = append(blocks, strings.Join(items, "\n"))
 		}
 	}
-	return strings.Join(lines, "\n"), nil
+	return notice(title, blocks...), nil
 }
 
 // compactCount 把 12345678 写成 12.3M
@@ -201,27 +222,31 @@ func (a *App) taskExpiry(c scheduleConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	lines, keys, untils := []string{}, []string{}, []int64{}
+	blocks, keys, untils := []string{}, []string{}, []int64{}
 	for _, r := range rows {
 		at := r.Int("expires_at")
 		key := fmt.Sprintf("expiry:%s:%d", r.String("id"), at)
 		if a.warned(key) {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("「%s」将于 %s 到期（还剩 %s）", r.String("name"),
-			time.UnixMilli(at).In(c.zone()).Format("01-02 15:04"), durationText(at-now())))
+		blocks = append(blocks, strings.Join([]string{
+			"网关 Key：" + noticeName(r.String("name"), r.String("id")),
+			"到期时间：" + noticeTimeIn(at, c.zone()),
+			"剩余时间：" + durationText(at-now()),
+		}, "\n"))
 		keys, untils = append(keys, key), append(untils, at)
 	}
-	if len(lines) == 0 {
+	if len(blocks) == 0 {
 		return "", nil
 	}
-	if err = a.notify("网关 Key 即将到期\n" + strings.Join(lines, "\n")); err != nil {
+	text := notice("网关 Key 即将到期", blocks...)
+	if err = a.notify(text); err != nil {
 		return "", err
 	}
 	for i, k := range keys {
 		a.markWarned(k, untils[i])
 	}
-	return "已提醒：" + strings.Join(lines, "；"), nil
+	return text, nil
 }
 
 // taskMaintain 更新查询规划统计，并把 WAL 合并回主库后截断
@@ -252,12 +277,13 @@ func (a *App) taskUpstream(scheduleConfig) (string, error) {
 	if len(lines) == 0 {
 		return "", nil
 	}
-	if err := a.notify("上游模型变动\n" + strings.Join(lines, "\n")); err != nil {
+	text := notice("上游模型变动", lines...)
+	if err := a.notify(text); err != nil {
 		// 清单已刷新，只是没推出去；界面上照样能看到
 		return "", fmt.Errorf("发现 %d 项变动，推送失败：%w", len(lines), err)
 	}
 	for _, k := range keys {
 		a.markWarned(k, now()+30*86400000)
 	}
-	return "已推送：" + strings.Join(lines, "；"), nil
+	return text, nil
 }

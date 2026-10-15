@@ -32,7 +32,7 @@ func TestKeyBudgetScheduleHandler(t *testing.T) {
 		t.Fatalf("Key 预算任务运行结果不对: first=%v second=%v", first, second)
 	}
 	got := msgs()
-	if len(got) != 1 || !strings.Contains(got[0], "共享 Key") || !strings.Contains(got[0], "近 24 小时 $8.50 / $10.00") || !strings.Contains(got[0], "近 30 天 $8.50 / $10.00") || !strings.Contains(got[0], "另有 1 次成功请求价格未确认") || !strings.Contains(got[0], "汇总金额可能含本地估算与异常预留，明细仅覆盖保留期") {
+	if len(got) != 1 || !strings.Contains(got[0], "网关 Key：共享 Key") || !strings.Contains(got[0], "统计窗口：近 24 小时") || !strings.Contains(got[0], "统计窗口：近 30 天") || !strings.Contains(got[0], "已记录花费：$8.50") || !strings.Contains(got[0], "预算上限：$10.00") || !strings.Contains(got[0], "价格未确认：1 次成功请求") || !strings.Contains(got[0], "金额可能含本地估算与异常预留，明细仅覆盖保留期") {
 		t.Fatalf("Key 预算预警通知不对: %v", got)
 	}
 	state, err := h.a.readScheduleState()

@@ -18,14 +18,14 @@ func TestDailyReportModelNames(t *testing.T) {
 	c := defaultSchedule
 	nowAt := time.Date(2026, 9, 26, 9, 0, 0, 0, c.zone())
 	yesterday := nowAt.AddDate(0, 0, -1).UnixMilli()
-	insertUsage(t, h, "model-a", "p", "success", "", yesterday, 0, true, false)
-	insertUsage(t, h, "removed-model", "p", "error", "", yesterday, 0, true, false)
+	insertUsage(t, h, "model-a", "p_test", "success", "", yesterday, 0, true, false)
+	insertUsage(t, h, "removed-model", "p_test", "error", "", yesterday, 0, true, false)
 
 	text, err := h.a.dailyReport(c, nowAt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"模型甲 1 次", "removed-model 1 次", "失败最多：removed-model 1 次"} {
+	for _, want := range []string{"常用模型\n模型甲 / 测试上游 (p_test)：1 次\nremoved-model / 测试上游 (p_test)：1 次", "失败最多\nremoved-model / 测试上游 (p_test)：1 次"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("日报缺少「%s」:\n%s", want, text)
 		}
@@ -69,7 +69,7 @@ func TestWeeklyDueAndReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"周报 2026-09-14 至 2026-09-20（UTC+8）", "请求 2 次", "已记录花费（含估算/异常预留）$1.00"} {
+	for _, want := range []string{"周报 2026-09-14 至 2026-09-20（UTC+8）", "请求：2 次", "已记录花费：$1.00"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("周报缺少「%s」:\n%s", want, text)
 		}

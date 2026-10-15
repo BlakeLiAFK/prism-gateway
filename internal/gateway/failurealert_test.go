@@ -20,7 +20,7 @@ func TestFailureRateScheduleHandler(t *testing.T) {
 	insertUsage(t, h, "m", "p", "error", "", at, 0, true, true)
 	insertUsage(t, h, "m", "p", "running", "", at, 0, false, false)
 
-	w, out := h.rpc(t, "schedule.save", Object{"failure_enabled": true, "failure_minutes": 15, "failure_min_samples": 10, "failure_percent": 30, "failure_cooldown_minutes": 45}, h.token)
+	w, out := h.rpc(t, "schedule.save", Object{"utc_offset": 8, "failure_enabled": true, "failure_minutes": 15, "failure_min_samples": 10, "failure_percent": 30, "failure_cooldown_minutes": 45}, h.token)
 	requireStatus(t, w, 200)
 	config := obj(obj(out["data"])["config"])
 	if config["failure_enabled"] != true || num(config, "failure_min_samples") != 10 || num(config, "failure_cooldown_minutes") != 45 {
@@ -36,8 +36,11 @@ func TestFailureRateScheduleHandler(t *testing.T) {
 		t.Fatalf("失败率任务运行结果不对: first=%v second=%v", first, second)
 	}
 	got := msgs()
-	if len(got) != 1 || !strings.Contains(got[0], "最近 15 分钟 4/10 次失败") || !strings.Contains(got[0], "错误 3 次，状态未知 1 次") {
+	if len(got) != 1 || !strings.Contains(got[0], "统计窗口：最近 15 分钟") || !strings.Contains(got[0], "失败：4 / 10 次（40.0%）") || !strings.Contains(got[0], "失败构成：错误 3 次，状态未知 1 次") || !strings.Contains(got[0], "p / m：4 次") {
 		t.Fatalf("失败率通知不对: %v", got)
+	}
+	if strings.Count(got[0], "+08:00 (UTC+8)") != 2 {
+		t.Fatalf("统计起止时间应使用配置时区: %s", got[0])
 	}
 	state, err := h.a.readScheduleState()
 	if err != nil || state.Warned["failure-rate"] < now()+44*60000 {

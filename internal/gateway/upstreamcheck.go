@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"time"
 )
@@ -81,7 +82,11 @@ func (a *App) checkUpstreamModels(ctx context.Context) []finding {
 			item, ok := listed[m.Upstream]
 			if !ok {
 				next[m.ID] = cmp.Or(prev[m.ID], now())
-				found = append(found, finding{"missing:" + m.ID, fmt.Sprintf("%s（%s）在上游模型列表中找不到，可能已下架", m.ID, p.Name)})
+				found = append(found, finding{"missing:" + m.ID, strings.Join([]string{
+					"供应商：" + noticeName(p.Name, p.ID),
+					"模型：" + noticeName(m.Name, m.ID),
+					"变动：上游模型列表中找不到，可能已下架",
+				}, "\n")})
 				continue
 			}
 			in, out, ok := upstreamPrice(item)
@@ -90,8 +95,13 @@ func (a *App) checkUpstreamModels(ctx context.Context) []finding {
 			}
 			d := Object{"id": m.ID, "provider_id": p.ID, "input": m.InputPrice, "output": m.OutputPrice, "upstream_input": in, "upstream_output": out}
 			drift[m.ID] = d
-			found = append(found, finding{fmt.Sprintf("drift:%s:%g:%g", m.ID, in, out),
-				fmt.Sprintf("%s 的上游价格为 $%g / $%g 每百万 Token，本地为 $%g / $%g", m.ID, in, out, m.InputPrice, m.OutputPrice)})
+			found = append(found, finding{fmt.Sprintf("drift:%s:%g:%g", m.ID, in, out), strings.Join([]string{
+				"供应商：" + noticeName(p.Name, p.ID),
+				"模型：" + noticeName(m.Name, m.ID),
+				"变动：价格与上游声明不一致",
+				fmt.Sprintf("上游价格：输入 $%g / 输出 $%g（每百万 Token）", in, out),
+				fmt.Sprintf("本地价格：输入 $%g / 输出 $%g（每百万 Token）", m.InputPrice, m.OutputPrice),
+			}, "\n")})
 		}
 	}
 	a.missing.mu.Lock()

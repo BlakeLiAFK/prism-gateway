@@ -131,7 +131,7 @@ func TestScheduleQuotaWarning(t *testing.T) {
 	runScheduled(t, h, "quota")
 	got := msgs()
 	// 本周 35/35 超过 80%，5 小时 2/14 未超过
-	if len(got) != 1 || !strings.Contains(got[0], "本周窗口已用 100%") || strings.Contains(got[0], "5 小时") {
+	if len(got) != 1 || !strings.Contains(got[0], "供应商：CC (p_cc)") || !strings.Contains(got[0], "额度窗口：本周") || !strings.Contains(got[0], "已用：100.0%") || !strings.Contains(got[0], "重置时间：") || strings.Contains(got[0], "5 小时") {
 		t.Fatalf("应只推送一次本周窗口预警: %v", got)
 	}
 	_, out := h.rpc(t, "schedule.get", Object{}, h.token)
@@ -154,7 +154,7 @@ func TestDailyReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"日报 2026-09-25（UTC+8）", "请求 3 次，成功率 66.7%，失败 1 次", "已记录花费（含估算/异常预留）$3.00", "常用模型：a 2 次 · b 1 次", "花费最多的 Key：k $3.00", "失败最多：b 1 次"} {
+	for _, want := range []string{"日报 2026-09-25（UTC+8）", "请求：3 次", "成功：2 次（66.7%）", "失败：1 次", "已记录花费：$3.00", "常用模型\na / p：2 次\nb / p：1 次", "花费最多的 Key\nk：$3.00", "失败最多\nb / p：1 次"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("日报缺少「%s」:\n%s", want, text)
 		}
@@ -177,7 +177,7 @@ func TestScheduleKeyExpiry(t *testing.T) {
 	runScheduled(t, h, "expiry")
 	runScheduled(t, h, "expiry")
 	got := msgs()
-	if len(got) != 1 || !strings.Contains(got[0], "「soon」") || strings.Contains(got[0], "later") || strings.Contains(got[0], "gone") {
+	if len(got) != 1 || !strings.Contains(got[0], "网关 Key：soon (") || !strings.Contains(got[0], "到期时间：") || strings.Contains(got[0], "later") || strings.Contains(got[0], "gone") {
 		t.Fatalf("应只提醒一次 soon: %v", got)
 	}
 }
@@ -200,7 +200,7 @@ func TestSchedulePriceDrift(t *testing.T) {
 	msgs := webhookSink(t, h)
 	runScheduled(t, h, "upstream")
 	runScheduled(t, h, "upstream")
-	if got := msgs(); len(got) != 1 || !strings.Contains(got[0], "a 的上游价格为 $2 / $8") || strings.Contains(got[0], "b 的") {
+	if got := msgs(); len(got) != 1 || !strings.Contains(got[0], "供应商：Test upstream (p_test)") || !strings.Contains(got[0], "模型：a") || !strings.Contains(got[0], "上游价格：输入 $2 / 输出 $8") || strings.Contains(got[0], "模型：b") {
 		t.Fatalf("应只推送一次 a 的价格变动（b 是动态价格不比较）: %v", got)
 	}
 	_, out := h.rpc(t, "model.stats", Object{}, h.token)
@@ -237,7 +237,7 @@ func TestWebhookPlainText(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := <-ch
-	if g.ctype != "text/plain; charset=utf-8" || g.body != "【Prism Gateway】\n额度预警\n第一行\n第二行" {
+	if g.ctype != "text/plain; charset=utf-8" || !strings.HasPrefix(g.body, "Prism Gateway\n\n额度预警\n第一行\n第二行\n\n发送时间：") || !strings.HasSuffix(g.body, " UTC") {
 		t.Fatalf("纯文本推送不对: %q %q", g.ctype, g.body)
 	}
 }

@@ -381,7 +381,10 @@ func (a *App) runTask(task scheduledTask, c scheduleConfig) taskRun {
 		run.Status, run.Result = "failed", err.Error()
 		slog.Warn("scheduled task failed", "task", task.id, "err", err)
 		if task.id != "report" && task.id != "weekly" && task.id != "quota" && task.id != "spend" && task.id != "failure" && task.id != "key-budget" && task.id != "expiry" {
-			if e := a.notify(task.name + "失败：" + err.Error()); e != nil {
+			text := notice("定时任务失败",
+				"任务："+noticeName(task.name, task.id),
+				"原因：执行失败，请在管理后台的任务记录中查看详情")
+			if e := a.notify(text); e != nil {
 				slog.Debug("schedule failure notice not sent", "err", e)
 			}
 		}

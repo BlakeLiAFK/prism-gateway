@@ -3,7 +3,6 @@ package gateway
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -173,7 +172,7 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 				// 只在前面的组确实被试过时才告警：前面的组被管理员暂停或停用、为空，或本来就接不了这类请求
 				// （如 auto 权限模式的分类器请求）时，候选根本没进入 selections，落到后面的组是预期行为，不是故障
 				if s.Group > selections[0].Group && s.RouteID != "" && r.state == "success" && e.OnAlert != nil {
-					go e.OnAlert("route", "route-group:"+s.RouteID, fmt.Sprintf("路由 %s 已落到第 %d 组「%s」（模型 %s）：前面的组全部不可用，或都接不了这次请求。", s.RouteID, s.Group+1, s.GroupName, cmp.Or(s.Model.Name, s.Model.ID)))
+					go e.requestAlert("route-group:"+s.RouteID, "路由已切换备用组", fmt.Sprintf("路由：%s\n当前分组：第 %d 组 %s\n供应商：%s\n模型：%s\n结果：备用组请求成功；前面的组未能处理本次请求。", noticeValue(s.RouteID), s.Group+1, noticeValue(s.GroupName), noticeName(s.Provider.Name, s.Provider.ID), noticeName(s.Model.Name, s.Model.ID)), key.ID, requested, id, from)
 				}
 			}()
 			w.Header().Set("X-Prism-Model", s.Model.ID)
@@ -439,8 +438,12 @@ func (e *Engine) Handle(w http.ResponseWriter, r *http.Request, p string, key Pr
 	status, code, msg := errorParts(lastErr)
 	// 路由的全部候选都因容量或上游问题失败时告警；空回答这类请求本身的问题不算。
 	// 客户端多半经别名访问，要按别名解析后的路由判断，限频键也用路由 ID
-	if route, alias, isRoute := c.resolveRoute(requested); isRoute && e.OnAlert != nil && !strings.HasPrefix(code, "EMPTY_OUTPUT") {
-		go e.OnAlert("route", "route:"+route.ID, fmt.Sprintf("路由 %s 的全部候选都不可用（%s），客户端%s收到 HTTP %d。", route.ID, code, viaAlias(alias), status))
+	if route, _, isRoute := c.resolveRoute(requested); isRoute && e.OnAlert != nil && !strings.HasPrefix(code, "EMPTY_OUTPUT") {
+		ids := make([]string, 0, len(selections))
+		for _, candidate := range selections {
+			ids = append(ids, candidate.Model.ID)
+		}
+		go e.requestAlert("route:"+route.ID, "路由无可用候选", fmt.Sprintf("路由 %s 的全部候选都不可用\n结果：HTTP %d\n原因：%s\n\n%s", noticeName(route.Name, route.ID), status, noticeError(code), noticeModels(c, ids)), key.ID, requested, id, from)
 	}
 	protocolError(w, p, status, code, msg, id)
 }

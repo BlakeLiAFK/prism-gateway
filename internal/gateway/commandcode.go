@@ -150,7 +150,7 @@ func (a *App) checkWindows(p Provider) {
 			a.Engine.coolUntil(m.ID, until)
 		}
 	}
-	a.alert("quota", "quota:"+p.ID, fmt.Sprintf("%s 的额度窗口已用完，旗下模型冷却中，约 %s后恢复。", p.Name, durationText(until-now())))
+	a.alert("quota", "quota:"+p.ID, notice("供应商额度耗尽", "供应商："+noticeName(p.Name, p.ID)+"\n来源：后台额度查询（由上游限流触发）", "影响：旗下模型进入冷却\n上游重置时间："+noticeTime(until), "本通知为供应商级额度事件，不归因于某个客户端。"))
 }
 
 // coolUntil 冷却到指定时刻。与响应头声明的耗尽冷却一样封顶 24 小时：

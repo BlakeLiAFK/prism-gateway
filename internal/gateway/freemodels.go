@@ -78,7 +78,7 @@ func (a *App) taskFreeModels(c scheduleConfig) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	text := freeSummary(c.FreeRoute, ch)
+	text := freeSummary(p, c.FreeRoute, ch)
 	// 改动已经生效，推送失败只影响通知
 	if e := a.notify(text); e != nil {
 		text += "\n（推送未发出：" + e.Error() + "）"
@@ -187,15 +187,22 @@ func freeModelID(nc *Config, route, providerID, up string) string {
 	return "model_" + digest(providerID + up)[:20]
 }
 
-func freeSummary(route string, ch freeChanges) string {
-	lines := []string{"免费模型自动维护 · 路由 " + route}
+func freeSummary(provider Provider, route string, ch freeChanges) string {
+	blocks := []string{
+		"供应商：" + noticeName(provider.Name, provider.ID),
+		"路由：" + noticeValue(route),
+	}
 	for _, x := range []struct {
 		label string
 		ids   []string
 	}{{"加入并启用", ch.added}, {"重新启用", ch.enabled}, {"停用（上游已下架）", ch.disabled}, {"开启丢弃推理内容", ch.dropped}} {
 		if len(x.ids) > 0 {
-			lines = append(lines, x.label+"："+strings.Join(x.ids, "、"))
+			lines := []string{x.label}
+			for _, id := range x.ids {
+				lines = append(lines, noticeValue(id))
+			}
+			blocks = append(blocks, strings.Join(lines, "\n"))
 		}
 	}
-	return strings.Join(lines, "\n")
+	return notice("免费模型自动维护", blocks...)
 }
