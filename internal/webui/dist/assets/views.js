@@ -195,7 +195,7 @@ export function jobs(){
 
 export function keys(){
   const d=state.data;
-  return head('ACCESS KEYS','访问有边界，密钥有归属。','客户端使用网关 Key；上游 Key 不会下发给客户端。完整网关 Key 仅在创建时显示一次。',rangeSwitch()+btn('创建 API Key','new-key','plus','','primary'))+`<section class="card">${d.length?`<div class="table-scroll"><table><thead><tr><th>名称 / 前缀</th><th>权限范围</th><th>状态</th>${keyUsageHead()}<th>最近使用</th><th>创建时间</th><th></th></tr></thead><tbody>${d.map(k=>{let allowed=[];try{allowed=JSON.parse(k.allowed)}catch{};return `<tr><td><div class="cell-title">${E(k.name)}</div><div class="cell-sub mono">${E(k.prefix)}…</div></td><td>${allowed.length?allowed.slice(0,3).map(badge).join(' ')+(allowed.length>3?' …':''):tag('全部模型 / 路由','neutral')}${keyPolicyText(k)}</td><td>${!k.enabled?tag('已撤销','neutral'):k.expires_at&&k.expires_at<Date.now()?tag('已过期','warning'):tag('有效')}</td><td>${keyUsageCell(k)}</td><td class="mono tiny">${dateTime(k.last_used)}</td><td class="mono tiny">${dateTime(k.created_at)}</td><td><div class="table-actions">${k.enabled?btn('编辑','edit-key','edit',`data-id="${E(k.id)}"`,'small'):''}${btn('用量','key-usage','usage',`data-id="${E(k.id)}" data-name="${E(k.name)}"`,'small')}${k.enabled?btn('撤销','revoke-key','',`data-id="${E(k.id)}"`,'danger small'):''}</div></td></tr>`;}).join('')}</tbody></table></div>`:empty('创建第一个客户端密钥','建议按客户端或项目分别创建 Key，方便追踪、控制与单独撤销。','new-key','创建 API Key','key')}</section>${connectionGuide()}`;
+  return head('ACCESS KEYS','访问有边界，密钥有归属。','客户端使用网关 Key；上游 Key 不会下发给客户端。完整网关 Key 仅在创建时显示一次。',rangeSwitch()+btn('创建 API Key','new-key','plus','','primary'))+`<section class="card">${d.length?`<div class="table-scroll"><table><thead><tr><th>名称 / 前缀</th><th>权限范围</th><th>状态</th>${keyUsageHead()}<th>最近使用</th><th>创建时间</th><th></th></tr></thead><tbody>${d.map(k=>{let allowed=[];try{allowed=JSON.parse(k.allowed)}catch{};return `<tr><td><div class="cell-title">${E(k.name)}</div><div class="cell-sub mono">${E(k.prefix)}…</div></td><td>${allowed.length?allowed.slice(0,3).map(x=>badge(scopeName(x))).join(' ')+(allowed.length>3?' …':''):tag('全部模型 / 路由','neutral')}${keyPolicyText(k)}</td><td>${!k.enabled?tag('已撤销','neutral'):k.expires_at&&k.expires_at<Date.now()?tag('已过期','warning'):tag('有效')}</td><td>${keyUsageCell(k)}</td><td class="mono tiny">${dateTime(k.last_used)}</td><td class="mono tiny">${dateTime(k.created_at)}</td><td><div class="table-actions">${k.enabled?btn('编辑','edit-key','edit',`data-id="${E(k.id)}"`,'small'):''}${btn('用量','key-usage','usage',`data-id="${E(k.id)}" data-name="${E(k.name)}"`,'small')}${k.enabled?btn('撤销','revoke-key','',`data-id="${E(k.id)}"`,'danger small'):''}</div></td></tr>`;}).join('')}</tbody></table></div>`:empty('创建第一个客户端密钥','建议按客户端或项目分别创建 Key，方便追踪、控制与单独撤销。','new-key','创建 API Key','key')}</section>${connectionGuide()}`;
 
 }
 
@@ -381,16 +381,29 @@ export function providerEditor(id=''){
 export function keyEditor(id=''){
   const k=id?(state.data||[]).find(x=>x.id===id):null;
   let picked=[];try{picked=k?JSON.parse(k.allowed):[]}catch{}
-  const opts=[...state.config.routes.map(x=>[x.id,x.name||x.id]),...state.config.models.map(x=>[x.id,x.name||x.id]),...state.config.aliases.map(x=>[x.id,x.id])];
+  // 选项副标题只放可读来源：模型显示上游模型名，避免把 p_ / m_ 开头的内部 ID 摆到界面上。
+  const opts=[...state.config.routes.map(x=>[x.id,x.name||x.id,'路由']),...state.config.models.map(x=>[x.id,x.name||x.upstream||'未命名模型',x.upstream||'模型']),...state.config.aliases.map(x=>[x.id,x.id,'别名'])];
   const local=ms=>ms?new Date(ms-new Date().getTimezoneOffset()*60000).toISOString().slice(0,16):'';
   const policy=`<div class="form-section"><h3>到期与限额</h3><p class="small muted" style="margin:10px 0">留空或填 0 表示不限。花费按已结束请求的估算价值统计，可能略超上限；适合给共享出去的 Key 设护栏。</p><div class="form-grid">${field('到期时间','expires_at',local(k?.expires_at),'datetime-local','到期后请求返回 401。')}${field('每分钟请求数上限','rpm',k?.rpm||'','number','','min="0" max="100000"')}${field('近 24 小时花费上限 · USD','limit_day',k?.limit_day||'','number','','min="0" step="any"')}${field('近 30 天花费上限 · USD','limit_month',k?.limit_month||'','number','','min="0" step="any"')}</div></div>`;
-  showDialog(k?'编辑 API Key':'创建客户端 API Key',k?'修改名称、授权范围与限额；密钥本身不变。':'按项目或客户端独立创建，可随时撤销。',`${field('密钥名称','name',k?.name||'','text','','required placeholder="例如：我的 Claude Code"')}${policy}<div class="form-section"><h3>可请求模型 / 路由</h3><p class="small muted" style="margin:10px 0">不选表示允许全部。范围限制针对客户端请求的模型、路由或别名 ID。</p>${opts.map(([v,l])=>`<label class="checkline"><input type="checkbox" name="allowed" value="${E(v)}" ${picked.includes(v)?'checked':''}><span>${E(l)}<small class="mono">${E(v)}</small></span></label>`).join('')}</div>`,async f=>{
+  showDialog(k?'编辑 API Key':'创建客户端 API Key',k?'修改名称、授权范围与限额；密钥本身不变。':'按项目或客户端独立创建，可随时撤销。',`${field('密钥名称','name',k?.name||'','text','','required placeholder="例如：我的 Claude Code"')}${policy}<div class="form-section"><h3>可请求模型 / 路由</h3><p class="small muted" style="margin:10px 0">不选表示允许全部。范围限制针对客户端请求的模型、路由或别名 ID。</p>${opts.map(([v,l,h])=>`<label class="checkline"><input type="checkbox" name="allowed" value="${E(v)}" ${picked.includes(v)?'checked':''}><span>${E(l)}<small class="mono">${E(h)}</small></span></label>`).join('')}</div>`,async f=>{
     const exp=val(f,'expires_at');
     const params={name:val(f,'name'),allowed:$$('[name=allowed]:checked',f).map(x=>x.value),expires_at:exp?new Date(exp).getTime():0,limit_day:Number(val(f,'limit_day'))||0,limit_month:Number(val(f,'limit_month'))||0,rpm:Number(val(f,'rpm'))||0};
     const refresh=async()=>{state.data=await rpc('apikey.list',{days:state.usageDays});if(state.page==='keys')renderPage(false);};
     if(k){await rpc('apikey.update',{id,...params});closeDialog();toast('已保存');await refresh();return;}
     const created=await rpc('apikey.create',params);closeDialog();showDialog('密钥已创建','这是唯一一次显示完整密钥。关闭前请安全保存。',`<div class="banner">请不要将此 Key 放进公开仓库、截图或前端源代码。</div><pre class="secret-box">${E(created.key)}</pre>${btn('复制完整密钥','copy-secret','copy','','primary')}${connectionGuide()}`);state.secretValue=created.key;await refresh();
   },k?'保存':'创建密钥');
+}
+
+// 授权范围徽标只显示可读名称：模型优先用后台名称（同步模型即上游名称），路由用名称。
+// 目标被删除时也只保留上游模型名，不回显 p_ / m_ 开头的内部 ID。
+function scopeName(id){
+  const m=getModel(id);
+  if(m)return m.name||m.upstream||'未命名模型';
+  const r=(state.config.routes||[]).find(x=>x.id===id);
+  if(r)return r.name||r.id;
+  if((state.config.aliases||[]).some(a=>a.id===id))return id;
+  const up=id.includes('/')?id.slice(id.lastIndexOf('/')+1):'';
+  return up?up+'（已移除）':'已移除的授权目标';
 }
 
 // Key 的到期与限额摘要：「到期 09/30 · 24 小时 $0.60 / $5 · RPM 60」
