@@ -61,7 +61,15 @@ http://127.0.0.1:8080
 GOPROXY=off CGO_ENABLED=1 go build -o prism-gateway ./cmd/gateway
 ```
 
-Linux 构建静态链接 SQLite；运行机器不需要单独安装 SQLite 数据库进程。Linux 二进制仍依赖 libc/libm，请在目标系统编译，或使用兼容的发行版。不要把它当作跨发行版、跨 CPU 通用的纯静态程序。
+Linux 构建静态链接 SQLite；运行机器不需要单独安装 SQLite 数据库进程。原生 Linux 构建仍依赖目标机的 libc/libm，请在目标系统编译，或使用兼容的发行版。
+
+需要从 macOS 直接产出 Linux 产物，或要跨发行版分发时，用交叉编译：
+
+```bash
+make release-linux     # 等价于 ./scripts/build-linux.sh
+```
+
+它使用 musl 交叉工具链（macOS：`brew install filosottile/musl-cross/musl-cross`，或用 `CC` / `AR` 指定其他工具链）与固定版本的 SQLite 源码，产出**完全静态**的 `dist/prism-gateway-linux-amd64`：不依赖目标机 libc，不经过 Docker，也不需要登录构建机。脚本会校验 SQLite 源码的 SHA256、复用缓存，并在产物不是静态链接时直接失败；换架构用 `TARGET_ARCH=arm64`。因为 Linux 侧是 CGo 加静态 `libsqlite3.a`，只设 `GOOS=linux` 的纯 Go 交叉编译不成立。
 
 ### 不填真实 API Key，先验证界面与协议
 
@@ -197,6 +205,7 @@ make cover                    # 覆盖率门禁
 make lint                     # staticcheck（未安装则跳过）
 make hooks                    # 安装 pre-commit 与 pre-push 钩子
 make release                  # 可复现构建 + SHA256 校验和
+make release-linux            # 交叉编译 Linux 静态产物（见 §1）
 make hooks                    # 安装 pre-push 质量门（推送前自动跑 make check）
 python3 scripts/smoke.py --binary ./bin/prism-gateway     # 实际进程冒烟；先 make build
 python3 scripts/loadtest.py --binary ./bin/prism-gateway # 并发与长稳压测

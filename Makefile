@@ -1,6 +1,6 @@
 GO ?= go
 BINARY := bin/prism-gateway
-.PHONY: build test race vet cover lint ui ui-unit format deploy-test check hooks release run clean
+.PHONY: build test race vet cover lint ui ui-unit format deploy-test check hooks release release-linux run clean
 build:
 	mkdir -p bin
 	CGO_ENABLED=1 $(GO) build -trimpath -o $(BINARY) ./cmd/gateway
@@ -41,6 +41,8 @@ release: check
 	CGO_ENABLED=1 $(GO) build -trimpath -ldflags='-s -w' -o dist/prism-gateway-$(shell go env GOOS)-$(shell go env GOARCH) ./cmd/gateway
 	cd dist && shasum -a 256 prism-gateway-* > SHA256SUMS
 	@echo "产物与校验和已写入 dist/"
+release-linux: check
+	./scripts/build-linux.sh
 run: build
 	./$(BINARY)
 clean:
