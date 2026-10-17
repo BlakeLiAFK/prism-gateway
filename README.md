@@ -6,7 +6,7 @@
 
 这是可运行的源码交付，不是只有界面的原型。前端资源已随源码提供，Go 编译时通过 `embed.FS` 打包，不需要 npm、Node、CDN 或单独的前端服务器。配置和记录存 SQLite，没有 YAML/TOML/JSON 运行配置文件。
 
-> **构建前提：Go 1.25+。** SQLite 走纯 Go 驱动（`modernc.org/sqlite`），不需要 C 编译器、SQLite 开发库或系统 SQLite；首次构建需要联网下载依赖模块，之后可离线构建。已在 Linux amd64 与 macOS arm64 实际构建、运行和测试；Windows 请使用 WSL2。
+> **构建前提：Go 1.25+**（当前用 Go 1.27.2 构建与测试）。SQLite 走纯 Go 驱动（`modernc.org/sqlite`），不需要 C 编译器、SQLite 开发库或系统 SQLite；首次构建需要联网下载依赖模块，之后可离线构建。已在 Linux amd64 与 macOS arm64 实际构建、运行和测试；Windows 请使用 WSL2。
 
 ## 界面预览
 
