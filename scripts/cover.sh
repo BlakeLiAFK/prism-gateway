@@ -3,12 +3,12 @@
 # 阈值留了几个点的余量，避免正常改动造成的抖动误报。
 set -e
 PROFILE="${TMPDIR:-/tmp}/prism-cover.out"
-CGO_ENABLED=1 go test -count=1 -coverprofile="$PROFILE" ./... >/dev/null
+CGO_ENABLED=0 go test -count=1 -coverprofile="$PROFILE" ./... >/dev/null
 
 fail=0
 check() {
     pkg="$1"; want="$2"
-    got=$(CGO_ENABLED=1 go test -count=1 -cover "$pkg" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="coverage:") printf "%.1f", substr($(i+1),1,length($(i+1))-1)}')
+    got=$(CGO_ENABLED=0 go test -count=1 -cover "$pkg" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="coverage:") printf "%.1f", substr($(i+1),1,length($(i+1))-1)}')
     [ -z "$got" ] && got=0
     if [ "$(echo "$got < $want" | bc -l)" = "1" ]; then
         echo "  FAIL  $pkg  $got% < $want%"

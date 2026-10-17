@@ -6,7 +6,7 @@
 
 这是可运行的源码交付，不是只有界面的原型。前端资源已随源码提供，Go 编译时通过 `embed.FS` 打包，不需要 npm、Node、CDN 或单独的前端服务器。配置和记录存 SQLite，没有 YAML/TOML/JSON 运行配置文件。
 
-> **构建前提：Go 1.23+、C 编译器、SQLite 开发库。** 本项目使用仓库内的薄 CGo SQLite 绑定，**不是纯 Go SQLite 驱动**。没有第三方 Go 模块，无需 `go mod download`。已在 Linux amd64 与 macOS arm64 实际构建、运行和测试；Windows 请使用 WSL2。
+> **构建前提：Go 1.25+。** SQLite 走纯 Go 驱动（`modernc.org/sqlite`），不需要 C 编译器、SQLite 开发库或系统 SQLite；首次构建需要联网下载依赖模块，之后可离线构建。已在 Linux amd64 与 macOS arm64 实际构建、运行和测试；Windows 请使用 WSL2。
 
 ## 界面预览
 
@@ -18,32 +18,23 @@
 
 ### macOS
 
-先安装 Go。尚未安装命令行开发工具时执行一次：
-
-```bash
-xcode-select --install
-```
-
-安装完成后，在本项目目录执行：
+先安装 Go 1.25 或更新版本，然后在本项目目录执行：
 
 ```bash
 ./scripts/doctor.sh
-CGO_ENABLED=1 go build -o prism-gateway ./cmd/gateway
+go build -o prism-gateway ./cmd/gateway
 ./prism-gateway
 ```
 
-macOS 构建使用系统 SDK 的 SQLite。`sqlite3.h not found` 表示开发工具或 SDK 尚未安装完成；不是缺少 Go 模块。
+不需要 Xcode 命令行工具：没有 CGo，也没有 C 代码。
 
 ### Ubuntu / Debian / WSL2 Ubuntu
 
-先安装 Go 1.23 或更新版本，再安装 C 构建依赖：
+先安装 Go 1.25 或更新版本，然后：
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y build-essential libsqlite3-dev
-
 ./scripts/doctor.sh
-CGO_ENABLED=1 go build -o prism-gateway ./cmd/gateway
+go build -o prism-gateway ./cmd/gateway
 ./prism-gateway
 ```
 
@@ -55,21 +46,19 @@ http://127.0.0.1:8080
 
 终端首次显示一个 `prism_admin_...` 管理员令牌，复制到登录页。它仅在首次创建或显式轮换时显示。**管理员令牌不是模型调用 Key，也不是上游 API Key。**
 
-只要编译工具链已安装，构建可以完全关闭 Go 网络下载：
+依赖模块下载过一次之后，构建可以完全关闭 Go 网络下载：
 
 ```bash
-GOPROXY=off CGO_ENABLED=1 go build -o prism-gateway ./cmd/gateway
+GOPROXY=off go build -o prism-gateway ./cmd/gateway
 ```
 
-Linux 构建静态链接 SQLite；运行机器不需要单独安装 SQLite 数据库进程。原生 Linux 构建仍依赖目标机的 libc/libm，请在目标系统编译，或使用兼容的发行版。
-
-需要从 macOS 直接产出 Linux 产物，或要跨发行版分发时，用交叉编译：
+纯 Go 构建产出的是静态链接的二进制，运行机器不需要 SQLite 进程或 SQLite 库；从 macOS 交叉编译到 Linux 也不需要目标平台的 C 工具链：
 
 ```bash
 make release-linux     # 等价于 ./scripts/build-linux.sh
 ```
 
-它使用 musl 交叉工具链（macOS：`brew install filosottile/musl-cross/musl-cross`，或用 `CC` / `AR` 指定其他工具链）与固定版本的 SQLite 源码，产出**完全静态**的 `dist/prism-gateway-linux-amd64`：不依赖目标机 libc，不经过 Docker，也不需要登录构建机。脚本会校验 SQLite 源码的 SHA256、复用缓存，并在产物不是静态链接时直接失败；换架构用 `TARGET_ARCH=arm64`。因为 Linux 侧是 CGo 加静态 `libsqlite3.a`，只设 `GOOS=linux` 的纯 Go 交叉编译不成立。
+产出 `dist/prism-gateway-<版本>-linux-amd64` 与同名 `.sha256`，不经过 Docker，也不需要登录构建机；脚本会在产物不是静态链接时直接失败，换架构用 `TARGET_ARCH=arm64`。
 
 ### 不填真实 API Key，先验证界面与协议
 

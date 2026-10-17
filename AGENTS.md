@@ -35,4 +35,7 @@ This is a Go + SQLite + embedded WebUI gateway. Preserve these invariants:
 17. A request that no candidate can serve must leave a request record. A 400 the admin cannot see
     in the console is how a session breaks without anyone knowing why.
 
-No third-party Go modules are currently required. Target Go >=1.23. Native Windows is not supported; use WSL2. Tests must not require real provider API keys or the Internet.
+SQLite is reached through the pure Go driver modernc.org/sqlite, so builds are CGo-free and
+cross-compile with plain GOOS/GOARCH. Keep the dependency set minimal: the driver and its
+transitive requirements only. Target Go >=1.25 (modernc.org/sqlite >= v1.46.2 requires it).
+Native Windows is not supported; use WSL2. Tests must not require real provider API keys or the Internet.

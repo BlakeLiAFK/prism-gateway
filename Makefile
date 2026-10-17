@@ -3,13 +3,13 @@ BINARY := bin/prism-gateway
 .PHONY: build test race vet cover lint ui ui-unit format deploy-test check hooks release release-linux run clean
 build:
 	mkdir -p bin
-	CGO_ENABLED=1 $(GO) build -trimpath -o $(BINARY) ./cmd/gateway
+	CGO_ENABLED=0 $(GO) build -trimpath -o $(BINARY) ./cmd/gateway
 test:
-	CGO_ENABLED=1 $(GO) test -count=1 -timeout 60s ./...
+	CGO_ENABLED=0 $(GO) test -count=1 -timeout 60s ./...
 race:
-	CGO_ENABLED=1 $(GO) test -race -count=1 -timeout 90s ./...
+	CGO_ENABLED=0 $(GO) test -race -count=1 -timeout 90s ./...
 vet:
-	CGO_ENABLED=1 $(GO) vet ./...
+	CGO_ENABLED=0 $(GO) vet ./...
 cover:
 	./scripts/cover.sh
 lint:
@@ -38,7 +38,7 @@ hooks:
 	chmod +x .git/hooks/pre-push .git/hooks/pre-commit
 release: check
 	mkdir -p dist
-	CGO_ENABLED=1 $(GO) build -trimpath -ldflags='-s -w' -o dist/prism-gateway-$(shell go env GOOS)-$(shell go env GOARCH) ./cmd/gateway
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags='-s -w' -o dist/prism-gateway-$(shell go env GOOS)-$(shell go env GOARCH) ./cmd/gateway
 	cd dist && shasum -a 256 prism-gateway-* > SHA256SUMS
 	@echo "产物与校验和已写入 dist/"
 release-linux: check

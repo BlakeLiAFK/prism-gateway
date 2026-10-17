@@ -1,79 +1,109 @@
 package sqlite
 
-// 在线备份与还原：都基于 sqlite3_backup，在一个读事务 / 写事务内完成，不需要停库，也不经过临时文件。
+// 在线备份与还原，都走驱动暴露的 SQLite 在线备份接口（sqlite3_backup），
+// 在一个读事务 / 写事务内完成，不需要停库，也不经过临时文件。
 //   - Snapshot：线上库 → 内存库 → 序列化字节（远程备份直接压缩上传，本机磁盘零额外占用）
 //   - Load：序列化字节 → 内存库（还原前在内存里校验）
 //   - RestoreFrom：内存库 → 线上库（整体替换内容，其他连接随后看到新内容，WAL 模式不变）
 
-/*
-#include <sqlite3.h>
-#include <stdlib.h>
-#include <string.h>
-*/
-import "C"
-
 import (
+	"context"
 	"errors"
-	"unsafe"
+
+	modernc "modernc.org/sqlite"
 )
 
-var mainName = C.CString("main")
-
-func openMemory() (*DB, error) {
-	p := C.CString(":memory:")
-	defer C.free(unsafe.Pointer(p))
-	d := &DB{}
-	if rc := C.sqlite3_open_v2(p, &d.conn, C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_CREATE|C.SQLITE_OPEN_FULLMUTEX, nil); rc != C.SQLITE_OK {
-		err := d.err(rc)
-		if d.conn != nil {
-			C.sqlite3_close_v2(d.conn)
-		}
-		return nil, err
-	}
-	return d, nil
+// 驱动把底层连接交给 sql.Conn.Raw，这几个接口靠方法集断言取用；
+// 纯 Go 驱动没有导出连接类型，只能用接口名匹配。
+type backuper interface {
+	NewBackup(dstURI string) (*modernc.Backup, error)
 }
 
-// copyDB 把 src 的 main 库整体复制到 dst；一次 step 完成，期间两边都持有连接锁
-func copyDB(dst, src *DB) error {
-	dst.mu.Lock()
-	defer dst.mu.Unlock()
-	src.mu.Lock()
-	defer src.mu.Unlock()
-	if dst.conn == nil || src.conn == nil {
-		return errors.New("sqlite: closed")
-	}
-	b := C.sqlite3_backup_init(dst.conn, mainName, src.conn, mainName)
-	if b == nil {
-		return dst.err(C.sqlite3_errcode(dst.conn))
-	}
-	rc := C.sqlite3_backup_step(b, -1)
-	if frc := C.sqlite3_backup_finish(b); rc == C.SQLITE_DONE && frc != C.SQLITE_OK {
-		return dst.err(frc)
-	}
-	if rc != C.SQLITE_DONE {
-		return dst.err(rc)
-	}
-	return nil
+type serializer interface {
+	Serialize() ([]byte, error)
 }
 
-// Snapshot 生成当前库的一致性快照并交给 fn。字节直接指向 SQLite 分配的内存，
-// fn 返回后即释放，fn 不得保留引用。峰值内存约为数据库大小。
-func (d *DB) Snapshot(fn func([]byte) error) error {
-	mem, err := openMemory()
+type deserializer interface {
+	Deserialize([]byte) error
+}
+
+// raw 独占底层驱动连接交给 fn。调用期间 d 上不能再执行语句，fn 内也不要回头调用 d。
+func (d *DB) raw(fn func(any) error) error {
+	conn, err := d.db.Conn(context.Background())
 	if err != nil {
-		return err
+		return wrap(err)
 	}
-	defer mem.Close()
-	if err = copyDB(mem, d); err != nil {
-		return err
+	defer conn.Close()
+	return conn.Raw(fn)
+}
+
+// copyInto 把 src 的内容整体复制到 dstURI 指向的库。n=-1 一次复制全部页面，
+// 返回值 true 表示还有剩余页面，正常情况下一次即可完成。
+func copyInto(src any, dstURI string) error {
+	b, ok := src.(backuper)
+	if !ok {
+		return errors.New("sqlite: 驱动不支持在线备份")
 	}
-	var size C.sqlite3_int64
-	p := C.sqlite3_serialize(mem.conn, mainName, &size, 0)
-	if p == nil {
-		return errors.New("sqlite: serialize failed")
+	bk, err := b.NewBackup(dstURI)
+	if err != nil {
+		return wrap(err)
 	}
-	defer C.sqlite3_free(unsafe.Pointer(p))
-	return fn(unsafe.Slice((*byte)(unsafe.Pointer(p)), int(size)))
+	for {
+		done, err := bk.Step(-1)
+		if err != nil {
+			bk.Finish()
+			return wrap(err)
+		}
+		if !done {
+			return wrap(bk.Finish())
+		}
+	}
+}
+
+// Snapshot 生成当前库的一致性快照并交给 fn。字节是一份独立的 Go 切片，
+// fn 返回后依然有效；峰值内存约为数据库大小。
+func (d *DB) Snapshot(fn func([]byte) error) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return errClosed
+	}
+	return d.raw(func(dc any) error {
+		b, ok := dc.(backuper)
+		if !ok {
+			return errors.New("sqlite: 驱动不支持在线备份")
+		}
+		// 先备份到内存库再序列化：WAL 模式下的库直接序列化拿不到已提交内容。
+		bk, err := b.NewBackup(":memory:")
+		if err != nil {
+			return wrap(err)
+		}
+		for {
+			done, err := bk.Step(-1)
+			if err != nil {
+				bk.Finish()
+				return wrap(err)
+			}
+			if !done {
+				break
+			}
+		}
+		// Commit 交出内存库的连接（Finish 会直接关掉它，那样就没法再序列化）
+		dst, err := bk.Commit()
+		if err != nil {
+			return wrap(err)
+		}
+		defer dst.Close()
+		ser, ok := dst.(serializer)
+		if !ok {
+			return errors.New("sqlite: 驱动不支持序列化")
+		}
+		buf, err := ser.Serialize()
+		if err != nil {
+			return wrap(err)
+		}
+		return fn(buf)
+	})
 }
 
 // Load 把序列化的库载入一个新的内存库。调用方负责 Close。
@@ -85,19 +115,18 @@ func Load(b []byte) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	buf := C.sqlite3_malloc64(C.sqlite3_uint64(len(b)))
-	if buf == nil {
-		mem.Close()
-		return nil, errors.New("sqlite: out of memory")
-	}
-	dst := unsafe.Slice((*byte)(buf), len(b))
-	copy(dst, b)
-	// 文件头第 18、19 字节标记 WAL 模式；内存库不支持 WAL，改回传统日志格式才能读
-	dst[18], dst[19] = 1, 1
-	rc := C.sqlite3_deserialize(mem.conn, mainName, (*C.uchar)(buf), C.sqlite3_int64(len(b)), C.sqlite3_int64(len(b)),
-		C.SQLITE_DESERIALIZE_FREEONCLOSE|C.SQLITE_DESERIALIZE_RESIZEABLE)
-	if rc != C.SQLITE_OK {
-		err = mem.err(rc)
+	// 文件头第 18、19 字节标记 WAL 模式；内存库不支持 WAL，改回传统日志格式才能读。
+	// 驱动会自己复制一份缓冲区，这里仍然复制，避免改动调用方传进来的切片。
+	buf := make([]byte, len(b))
+	copy(buf, b)
+	buf[18], buf[19] = 1, 1
+	if err = mem.raw(func(dc any) error {
+		des, ok := dc.(deserializer)
+		if !ok {
+			return errors.New("sqlite: 驱动不支持反序列化")
+		}
+		return wrap(des.Deserialize(buf))
+	}); err != nil {
 		mem.Close()
 		return nil, err
 	}
@@ -105,4 +134,17 @@ func Load(b []byte) (*DB, error) {
 }
 
 // RestoreFrom 用 src 的全部内容替换当前库，在单个写事务内完成
-func (d *DB) RestoreFrom(src *DB) error { return copyDB(d, src) }
+func (d *DB) RestoreFrom(src *DB) error {
+	if d.path == "" {
+		return errors.New("sqlite: 内存库不能作为还原目标")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if d.closed || src.closed {
+		return errClosed
+	}
+	// 目的端由驱动按路径另开一条连接写入，本进程里已打开的其他连接随后能看到新内容
+	return src.raw(func(dc any) error { return copyInto(dc, d.path) })
+}

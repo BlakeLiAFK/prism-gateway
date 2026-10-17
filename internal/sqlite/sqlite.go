@@ -1,29 +1,20 @@
-// Package sqlite is a small, serialized SQLite C API binding. No external Go
-// modules, downloaded drivers, or database processes are needed.
+// Package sqlite is a small, serialized SQLite binding over the pure Go driver
+// modernc.org/sqlite. It needs no CGo, no C compiler and no system SQLite
+// library: the same source builds and cross-compiles anywhere Go runs.
+// 占位符一律用 ?：驱动不按位置绑定 :name / @name / $name 这类具名占位符。
 package sqlite
 
-/*
-#cgo linux LDFLAGS: -l:libsqlite3.a -lm -ldl -lpthread
-#cgo darwin LDFLAGS: -lsqlite3
-#cgo windows LDFLAGS: -lsqlite3
-#include <sqlite3.h>
-#include <stdlib.h>
-static int bind_text_copy(sqlite3_stmt *s, int i, const char *v, int n) {
-    return sqlite3_bind_text(s, i, v, n, SQLITE_TRANSIENT);
-}
-static int bind_blob_copy(sqlite3_stmt *s, int i, const void *v, int n) {
-    return sqlite3_bind_blob(s, i, v, n, SQLITE_TRANSIENT);
-}
-*/
-import "C"
-
 import (
+	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"strings"
 	"sync"
-	"unsafe"
+
+	_ "modernc.org/sqlite" // 注册驱动名 "sqlite"
 )
 
 type Row map[string]any
@@ -37,173 +28,411 @@ func (r Row) Float(k string) float64 {
 	return float64(r.Int(k))
 }
 
-type DB struct {
-	mu   sync.Mutex
-	conn *C.sqlite3
-}
-type Tx struct{ db *DB }
+// errClosed 与旧实现的报错保持一致，调用方只关心「关闭后拒绝服务」这一点。
+var errClosed = errors.New("sqlite: closed")
 
-func Version() string { return C.GoString(C.sqlite3_libversion()) }
+// DB 串行使用一条连接：database/sql 只开一条，语句由 mu 排队。
+// 事务、会话亲和、PRAGMA 都因此与旧版 C 绑定表现一致。
+type DB struct {
+	mu     sync.Mutex
+	db     *sql.DB
+	path   string // 备份与还原需要按路径重新打开同一个库；内存库为空
+	closed bool
+}
+
+type Tx struct{ tx *sql.Tx }
+
+// dsn 生成文件库的连接串。PRAGMA 写在连接串里，每条新建连接都会自动执行，
+// 不会出现池里换了连接就丢掉 foreign_keys 的情况。
+func dsn(path string) string {
+	v := url.Values{}
+	for _, p := range []string{
+		"journal_mode(WAL)",
+		"synchronous(FULL)",
+		"foreign_keys(ON)",
+		"trusted_schema(OFF)",
+		"busy_timeout(5000)",
+	} {
+		v.Add("_pragma", p)
+	}
+	// 事务一律 BEGIN IMMEDIATE，与旧实现的写事务语义相同
+	v.Set("_txlock", "immediate")
+	return "file:" + path + "?" + v.Encode()
+}
+
 func Open(path string) (*DB, error) {
-	p := C.CString(path)
-	defer C.free(unsafe.Pointer(p))
-	d := &DB{}
-	if rc := C.sqlite3_open_v2(p, &d.conn, C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_CREATE|C.SQLITE_OPEN_FULLMUTEX, nil); rc != C.SQLITE_OK {
-		err := d.err(rc)
-		if d.conn != nil {
-			C.sqlite3_close_v2(d.conn)
-		}
+	d, err := open(dsn(path))
+	if err != nil {
 		return nil, err
 	}
-	C.sqlite3_busy_timeout(d.conn, 5000)
-	for _, q := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA foreign_keys=ON", "PRAGMA trusted_schema=OFF"} {
-		if _, err := d.Query(q); err != nil {
-			d.Close()
-			return nil, err
-		}
-	}
+	d.path = path
 	return d, nil
 }
+
+// openMemory 打开一个内存库：没有 PRAGMA，也没有可重开路径，只用于承载快照。
+func openMemory() (*DB, error) { return open(":memory:") }
+
+func open(name string) (*DB, error) {
+	conn, err := sql.Open("sqlite", name)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	// 单连接：串行语义与旧实现一致，也让 Raw 取底层连接时不会和别的语句抢池子
+	conn.SetMaxOpenConns(1)
+	d := &DB{db: conn}
+	// 立刻建一条连接：路径不可写、PRAGMA 被拒都在 Open 阶段暴露，不拖到第一条语句
+	c, err := conn.Conn(context.Background())
+	if err != nil {
+		conn.Close()
+		return nil, wrap(err)
+	}
+	c.Close()
+	return d, nil
+}
+
 func (d *DB) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.conn == nil {
+	if d.closed {
 		return nil
 	}
-	rc := C.sqlite3_close_v2(d.conn)
-	if rc != C.SQLITE_OK {
-		return d.err(rc)
+	d.closed = true
+	if err := d.db.Close(); err != nil {
+		return wrap(err)
 	}
-	d.conn = nil
 	return nil
 }
-func (d *DB) err(rc C.int) error {
-	if d.conn == nil {
-		return errors.New("sqlite: closed")
+
+// wrap 统一带上来源前缀；调用方与测试都靠这个前缀区分「数据库报错」。
+func wrap(err error) error {
+	if err == nil {
+		return nil
 	}
-	return fmt.Errorf("sqlite (%d): %s", int(rc), C.GoString(C.sqlite3_errmsg(d.conn)))
+	return fmt.Errorf("sqlite: %w", err)
 }
-func (d *DB) Query(sql string, args ...any) ([]Row, error) {
+
+func (d *DB) Query(sqlText string, args ...any) ([]Row, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.query(sql, args...)
+	return d.query(sqlText, args...)
 }
-func (d *DB) Exec(sql string, args ...any) error           { _, err := d.Query(sql, args...); return err }
-func (t *Tx) Query(sql string, args ...any) ([]Row, error) { return t.db.query(sql, args...) }
-func (t *Tx) Exec(sql string, args ...any) error           { _, err := t.Query(sql, args...); return err }
+
+func (d *DB) Exec(sqlText string, args ...any) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.closed {
+		return errClosed
+	}
+	if err := checkArgs(sqlText, len(args)); err != nil {
+		return err
+	}
+	bound, err := bindArgs(args)
+	if err != nil {
+		return err
+	}
+	if _, err = d.db.ExecContext(context.Background(), sqlText, bound...); err != nil {
+		return wrap(err)
+	}
+	return nil
+}
+
+func (t *Tx) Query(sqlText string, args ...any) ([]Row, error) {
+	return queryTx(t.tx, sqlText, args...)
+}
+
+func (t *Tx) Exec(sqlText string, args ...any) error {
+	_, err := queryTx(t.tx, sqlText, args...)
+	return err
+}
+
 func (d *DB) Transaction(fn func(*Tx) error) (err error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, err = d.query("BEGIN IMMEDIATE"); err != nil {
-		return err
+	if d.closed {
+		return errClosed
+	}
+	tx, err := d.db.BeginTx(context.Background(), nil)
+	if err != nil {
+		return wrap(err)
 	}
 	defer func() {
 		if v := recover(); v != nil {
-			d.query("ROLLBACK")
+			tx.Rollback()
 			panic(v)
 		}
 		if err != nil {
-			d.query("ROLLBACK")
+			tx.Rollback()
 		}
 	}()
-	if err = fn(&Tx{d}); err != nil {
+	if err = fn(&Tx{tx: tx}); err != nil {
 		return err
 	}
-	_, err = d.query("COMMIT")
-	return err
+	if err = tx.Commit(); err != nil {
+		return wrap(err)
+	}
+	return nil
 }
-func (d *DB) query(query string, args ...any) ([]Row, error) {
-	if d.conn == nil {
-		return nil, errors.New("sqlite: closed")
+
+func (d *DB) query(sqlText string, args ...any) ([]Row, error) {
+	if d.closed {
+		return nil, errClosed
 	}
-	qs := C.CString(query)
-	defer C.free(unsafe.Pointer(qs))
-	var st *C.sqlite3_stmt
-	var tail *C.char
-	if rc := C.sqlite3_prepare_v2(d.conn, qs, -1, &st, &tail); rc != C.SQLITE_OK {
-		return nil, d.err(rc)
+	if err := checkArgs(sqlText, len(args)); err != nil {
+		return nil, err
 	}
-	// 一次只执行一条语句；剩余尾巴说明调用方拼接了多条 SQL，直接拒绝而不是静默丢弃
-	if strings.TrimSpace(C.GoString(tail)) != "" {
-		if st != nil {
-			C.sqlite3_finalize(st)
+	bound, err := bindArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	return scanRows(d.db.QueryContext(context.Background(), sqlText, bound...))
+}
+
+// queryTx 供事务内使用：语句走事务自己的连接，不会串到池子里的另一条连接上。
+func queryTx(tx *sql.Tx, sqlText string, args ...any) ([]Row, error) {
+	if tx == nil {
+		return nil, errClosed
+	}
+	if err := checkArgs(sqlText, len(args)); err != nil {
+		return nil, err
+	}
+	bound, err := bindArgs(args)
+	if err != nil {
+		return nil, err
+	}
+	return scanRows(tx.QueryContext(context.Background(), sqlText, bound...))
+}
+
+// scanRows 把结果按列名收成 Row。列值沿用 SQLite 的存储类别：
+// INTEGER→int64、REAL→float64、TEXT→string、BLOB→[]byte、NULL→nil。
+// 本仓库的表只用 INTEGER / TEXT / REAL，不涉及驱动对 DATE / DATETIME 声明列的时间转换。
+func scanRows(rows *sql.Rows, err error) ([]Row, error) {
+	if err != nil {
+		return nil, wrap(err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, wrap(err)
+	}
+	out := []Row{}
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
 		}
-		return nil, errors.New("sqlite: 每次只允许一条语句")
+		if err = rows.Scan(ptrs...); err != nil {
+			return nil, wrap(err)
+		}
+		row := Row{}
+		for i, c := range cols {
+			row[c] = vals[i]
+		}
+		out = append(out, row)
 	}
-	if st == nil {
-		return []Row{}, nil
+	if err = rows.Err(); err != nil {
+		return nil, wrap(err)
 	}
-	defer C.sqlite3_finalize(st)
-	if int(C.sqlite3_bind_parameter_count(st)) != len(args) {
-		return nil, fmt.Errorf("sqlite: argument count mismatch")
-	}
+	return out, nil
+}
+
+// bindArgs 只接受 SQLite 能准确表达的类型；其余一律拒绝，避免把值悄悄写坏。
+// 旧实现同样拒绝非有限浮点与未知类型，这里保持同样的边界。
+func bindArgs(args []any) ([]any, error) {
+	out := make([]any, len(args))
 	for i, a := range args {
-		var rc C.int
-		idx := C.int(i + 1)
 		switch v := a.(type) {
-		case nil:
-			rc = C.sqlite3_bind_null(st, idx)
-		case string:
-			b := C.CString(v)
-			rc = C.bind_text_copy(st, idx, b, C.int(len(v)))
-			C.free(unsafe.Pointer(b))
-		case []byte:
-			if len(v) == 0 {
-				rc = C.sqlite3_bind_zeroblob(st, idx, 0)
-			} else {
-				p := C.CBytes(v)
-				rc = C.bind_blob_copy(st, idx, p, C.int(len(v)))
-				C.free(p)
-			}
+		case nil, string, []byte, int64, float64:
+			out[i] = v
 		case int:
-			rc = C.sqlite3_bind_int64(st, idx, C.sqlite3_int64(v))
-		case int64:
-			rc = C.sqlite3_bind_int64(st, idx, C.sqlite3_int64(v))
+			out[i] = int64(v)
 		case bool:
-			n := 0
+			n := int64(0)
 			if v {
 				n = 1
 			}
-			rc = C.sqlite3_bind_int(st, idx, C.int(n))
-		case float64:
-			if math.IsNaN(v) || math.IsInf(v, 0) {
-				return nil, errors.New("sqlite: nonfinite number")
-			}
-			rc = C.sqlite3_bind_double(st, idx, C.double(v))
+			out[i] = n
+		case float32:
+			out[i] = float64(v)
 		default:
 			return nil, fmt.Errorf("sqlite: unsupported argument %T", a)
 		}
-		if rc != C.SQLITE_OK {
-			return nil, d.err(rc)
+		if f, ok := out[i].(float64); ok && (math.IsNaN(f) || math.IsInf(f, 0)) {
+			return nil, errors.New("sqlite: nonfinite number")
 		}
 	}
-	rows := []Row{}
-	for {
-		rc := C.sqlite3_step(st)
-		if rc == C.SQLITE_DONE {
-			return rows, nil
-		}
-		if rc != C.SQLITE_ROW {
-			return nil, d.err(rc)
-		}
-		row := Row{}
-		n := int(C.sqlite3_column_count(st))
-		for i := 0; i < n; i++ {
-			ci := C.int(i)
-			name := C.GoString(C.sqlite3_column_name(st, ci))
-			switch C.sqlite3_column_type(st, ci) {
-			case C.SQLITE_INTEGER:
-				row[name] = int64(C.sqlite3_column_int64(st, ci))
-			case C.SQLITE_FLOAT:
-				row[name] = float64(C.sqlite3_column_double(st, ci))
-			case C.SQLITE_TEXT:
-				row[name] = C.GoStringN((*C.char)(unsafe.Pointer(C.sqlite3_column_text(st, ci))), C.sqlite3_column_bytes(st, ci))
-			case C.SQLITE_BLOB:
-				row[name] = C.GoBytes(C.sqlite3_column_blob(st, ci), C.sqlite3_column_bytes(st, ci))
-			default:
-				row[name] = nil
+	return out, nil
+}
+
+// checkArgs 在把语句交给驱动之前做两项把关，旧绑定这两项都由 SQLite 帮我们把关：
+//   - 一次只允许一条语句。驱动会顺序执行多条，否则 "DELETE FROM x; DROP TABLE x"
+//     会先执行前半句再报错，等于静默做了一半。
+//   - 参数个数必须和占位符个数一致。驱动对多余的参数直接忽略，缺的参数按 NULL 绑定，
+//     SQL 拼错时会静默按错的方式执行。
+func checkArgs(q string, n int) error {
+	params, err := scanSQL(q)
+	if err != nil {
+		return err
+	}
+	if params >= 0 && params != n {
+		return fmt.Errorf("sqlite: 参数个数与占位符不符（%d 个参数，%d 个占位符）", n, params)
+	}
+	return nil
+}
+
+// scanSQL 词法扫一遍语句：数出占位符个数，并确认只有一条语句。
+// 返回 -1 表示占位符个数没法靠文本可靠统计（?NNN 序号或具名占位符），此时不校验个数。
+func scanSQL(q string) (int, error) {
+	params, known := 0, true
+	seen, depth := 0, 0 // seen：已经扫过的词数；depth：BEGIN / CASE 的嵌套层数
+	for i := 0; i < len(q); {
+		c := q[i]
+		switch {
+		case c == '\'' || c == '"' || c == '`':
+			j, ok := skipQuoted(q, i, c)
+			if !ok {
+				return 0, nil // 引号没闭合，交给 SQLite 报语法错误
 			}
+			i, seen = j+1, seen+1
+		case c == '[':
+			j := strings.IndexByte(q[i:], ']')
+			if j < 0 {
+				return 0, nil
+			}
+			i, seen = i+j+1, seen+1
+		case c == '-' && strings.HasPrefix(q[i:], "--"):
+			j := strings.IndexByte(q[i:], '\n')
+			if j < 0 {
+				return 0, nil
+			}
+			i += j
+		case c == '/' && strings.HasPrefix(q[i:], "/*"):
+			j := strings.Index(q[i+2:], "*/")
+			if j < 0 {
+				return 0, nil
+			}
+			i += j + 4
+		case isNameByte(c):
+			j := i
+			for j < len(q) && isNameByte(q[j]) {
+				j++
+			}
+			// CASE ... END 与触发器体（... BEGIN ... END）内部的分号不是语句分隔符；
+			// 开头的 BEGIN 是事务语句，不是块的开始。
+			switch strings.ToUpper(q[i:j]) {
+			case "CASE":
+				depth++
+			case "BEGIN":
+				if seen > 0 {
+					depth++
+				}
+			case "END":
+				if depth > 0 {
+					depth--
+				}
+			}
+			i, seen = j, seen+1
+		case c == '?':
+			i++
+			if i < len(q) && q[i] >= '0' && q[i] <= '9' { // ?NNN 显式序号
+				known = false
+				for i < len(q) && q[i] >= '0' && q[i] <= '9' {
+					i++
+				}
+				continue
+			}
+			params++
+		case c == ':' || c == '@' || c == '$':
+			i++
+			if i < len(q) && isNameByte(q[i]) {
+				known = false
+				for i < len(q) && isNameByte(q[i]) {
+					i++
+				}
+			}
+		case c == ';':
+			if depth == 0 && hasMore(q[i+1:]) {
+				return 0, errors.New("sqlite: 每次只允许一条语句")
+			}
+			i++
+		default:
+			i++
 		}
-		rows = append(rows, row)
 	}
+	if !known {
+		return -1, nil
+	}
+	return params, nil
+}
+
+// isNameByte 判断是否标识符字符（SQLite 的标识符与具名占位符都用这几个字符）。
+func isNameByte(c byte) bool {
+	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// skipQuoted 返回闭合引号的下标；SQL 里成对的引号是转义，不结束字面量。
+func skipQuoted(q string, i int, quote byte) (int, bool) {
+	for j := i + 1; j < len(q); j++ {
+		if q[j] != quote {
+			continue
+		}
+		if j+1 < len(q) && q[j+1] == quote {
+			j++
+			continue
+		}
+		return j, true
+	}
+	return 0, false
+}
+
+// hasMore 判断分号之后是否还有语句：空白与注释不算。
+func hasMore(q string) bool {
+	for i := 0; i < len(q); i++ {
+		switch c := q[i]; c {
+		case ' ', '\t', '\r', '\n':
+		case '-':
+			if i+1 < len(q) && q[i+1] == '-' {
+				j := strings.IndexByte(q[i:], '\n')
+				if j < 0 {
+					return false
+				}
+				i += j
+				continue
+			}
+			return true
+		case '/':
+			if i+1 < len(q) && q[i+1] == '*' {
+				j := strings.Index(q[i+2:], "*/")
+				if j < 0 {
+					return false
+				}
+				i += j + 3
+				continue
+			}
+			return true
+		default:
+			return true
+		}
+	}
+	return false
+}
+
+var (
+	versionOnce sync.Once
+	versionText string
+)
+
+// Version 返回底层 SQLite 版本。纯 Go 实现不提供版本常量，问一次库再缓存。
+func Version() string {
+	versionOnce.Do(func() {
+		db, err := sql.Open("sqlite", ":memory:")
+		if err != nil {
+			return
+		}
+		defer db.Close()
+		if err = db.QueryRow("SELECT sqlite_version()").Scan(&versionText); err != nil {
+			versionText = ""
+		}
+	})
+	return versionText
 }

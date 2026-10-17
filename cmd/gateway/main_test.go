@@ -121,7 +121,7 @@ func TestResetAdminExitsInsteadOfServing(t *testing.T) {
 	db := filepath.Join(dir, "gateway.db")
 	bin := filepath.Join(dir, "prism-gateway")
 	build := exec.Command("go", "build", "-o", bin, "prism-gateway/cmd/gateway")
-	build.Env = append(os.Environ(), "CGO_ENABLED=1")
+	build.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Skipf("构建失败，跳过: %v %s", err, out)
 	}
