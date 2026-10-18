@@ -79,7 +79,7 @@ func (h *harness) createKey(t *testing.T) string {
 	return k
 }
 func modelFixture(id, proto string) Model {
-	return Model{ID: id, ProviderID: "p_test", Upstream: "upstream-" + id, Name: id, Protocol: proto, Enabled: true, Tools: true, Vision: true, Context: 128000, MaxOutput: 4096, Concurrency: 8}
+	return Model{ID: id, ProviderID: "p_test", Upstream: "upstream-" + id, Name: id, Protocol: proto, Enabled: true, Tools: true, Vision: true, Context: 128000, MaxOutput: 4096}
 }
 func requestFixture(p, model string) Object {
 	if p == "responses" {
@@ -176,7 +176,7 @@ func TestConfigVersionEncryptionAndPersistence(t *testing.T) {
 	}
 	w, _ = h.rpc(t, "settings.update", Object{"version": v, "settings": Object{"app_name": "stale"}}, h.token)
 	requireStatus(t, w, 409)
-	w, _ = h.rpc(t, "settings.update", Object{"version": h.s.Config().Version, "settings": Object{"global_concurrency": 0}}, h.token)
+	w, _ = h.rpc(t, "settings.update", Object{"version": h.s.Config().Version, "settings": Object{"max_body_mb": 0}}, h.token)
 	requireStatus(t, w, 400)
 }
 func TestAPIKeysScopeRevokeAndRedaction(t *testing.T) {
@@ -385,11 +385,10 @@ func TestNativeOpaqueAndCrossStrict(t *testing.T) {
 		t.Fatal("unsupported conversion reached upstream")
 	}
 }
-func TestQuotaRPMConcurrencyAndReservations(t *testing.T) {
+func TestQuotaRPMAndReservations(t *testing.T) {
 	h := newHarness(t)
 	h.configure(t, "http://127.0.0.1:12345", modelFixture("m", "chat"))
 	h.change(t, func(c *Config) {
-		c.Models[0].Concurrency = 1
 		c.Models[0].RPM = 1
 		c.Models[0].PricingSet = true
 		c.Models[0].InputPrice = 1
@@ -486,12 +485,10 @@ func TestFallback429AndNoMidStreamFallback(t *testing.T) {
 func TestAdmitBudgetIsAtomicUnderConcurrency(t *testing.T) {
 	h := newHarness(t)
 	m := modelFixture("budgeted", "chat")
-	m.Concurrency = 64
 	m.PricingSet = true
 	m.OutputPrice = 1000 // 每 1000 输出 token 预留 1 美元
 	m.Limit30d = 2.5
 	h.configure(t, "http://127.0.0.1:1", m)
-	h.change(t, func(c *Config) { c.Settings.GlobalConcurrency = 64 })
 	// 预置大量零花费的历史记录，把汇总查询拖慢到毫秒级，放大「检查」与「写入」之间的竞争窗口；
 	// 没有预算锁时，多个并发请求会在任何一个写入前先读到同一份用量
 	err := h.s.DB.Transaction(func(tx *sqlite.Tx) error {
@@ -1493,7 +1490,7 @@ func TestProviderTestAndModelSync(t *testing.T) {
 	}
 	for _, m := range cfg.Models {
 		// 同步即可用：只给了 id 的上游也要能被 Claude Code 这类带工具、64K 输出的客户端路由到
-		if !m.Enabled || !m.ToolsUnknown || !m.VisionUnknown || m.Context != 128000 || m.MaxOutput != 64000 || m.Concurrency != 4 {
+		if !m.Enabled || !m.ToolsUnknown || !m.VisionUnknown || m.Context != 128000 || m.MaxOutput != 64000 {
 			t.Fatalf("同步的模型 %s 应默认可用: %+v", m.ID, m)
 		}
 		if m.PricingSet {
@@ -1609,7 +1606,9 @@ func TestSessionAffinityActuallyPersists(t *testing.T) {
 	}
 }
 
-func TestConcurrencyCeilingAndCounterRelease(t *testing.T) {
+// 并发不再有本地闸门：40 个并发请求应当全部打到上游，且计数器用完全部归零。
+// 归零这一条要一直留着——漏一次就会「假满」，路由打分与面板都跟着失真。
+func TestConcurrentRequestsReachUpstreamAndCountersRelease(t *testing.T) {
 	h := newHarness(t)
 	var inflight, peak int64
 	var mu sync.Mutex
@@ -1625,19 +1624,15 @@ func TestConcurrencyCeilingAndCounterRelease(t *testing.T) {
 		io.WriteString(w, `{"id":"x","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
 	}))
 	defer upstream.Close()
-	const limit = 4
 	h.change(t, func(c *Config) {
-		c.Settings.GlobalConcurrency = limit
 		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
 			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
-		m := modelFixture("m_conc", "chat")
-		m.Concurrency = 128
-		c.Models = append(c.Models, m)
+		c.Models = append(c.Models, modelFixture("m_conc", "chat"))
 	})
 	key := h.createKey(t)
 
 	const callers = 40
-	var ok, limited, other int64
+	var ok, other int64
 	var wg sync.WaitGroup
 	for i := 0; i < callers; i++ {
 		wg.Add(1)
@@ -1652,8 +1647,6 @@ func TestConcurrencyCeilingAndCounterRelease(t *testing.T) {
 			switch {
 			case w.Code == 200:
 				atomic.AddInt64(&ok, 1)
-			case w.Code == 429:
-				atomic.AddInt64(&limited, 1)
 			default:
 				atomic.AddInt64(&other, 1)
 			}
@@ -1664,17 +1657,15 @@ func TestConcurrencyCeilingAndCounterRelease(t *testing.T) {
 	if other != 0 {
 		t.Fatalf("并发下出现了非预期状态码，%d 次", other)
 	}
-	if ok+limited != callers {
-		t.Fatalf("请求总数对不上: %d + %d != %d", ok, limited, callers)
-	}
-	if ok == 0 {
-		t.Fatal("不应全部被限流")
+	if ok != callers {
+		t.Fatalf("并发请求应全部到达上游，成功 %d / %d", ok, callers)
 	}
 	mu.Lock()
 	gotPeak := peak
 	mu.Unlock()
-	if gotPeak > limit {
-		t.Fatalf("同时在飞的上游请求 %d 超过全局上限 %d", gotPeak, limit)
+	// 峰值小于 2 说明请求被串起来了，这条测试就失去了意义
+	if gotPeak < 2 {
+		t.Fatalf("并发请求应同时在飞，实测峰值 %d", gotPeak)
 	}
 	// 计数器必须完全释放，否则网关会逐渐「假满」直到重启
 	health := h.a.Engine.Health()
@@ -1697,11 +1688,10 @@ func TestRPMLimitUnderConcurrency(t *testing.T) {
 	defer upstream.Close()
 	const rpm = 5
 	h.change(t, func(c *Config) {
-		c.Settings.GlobalConcurrency = 64
 		c.Providers = append(c.Providers, Provider{ID: "p_test", Name: "T", Kind: "custom", Auth: "none",
 			BaseURL: upstream.URL, AllowPrivate: true, Enabled: true, TimeoutSec: 30})
 		m := modelFixture("m_rpm", "chat")
-		m.RPM, m.Concurrency = rpm, 64
+		m.RPM = rpm
 		c.Models = append(c.Models, m)
 	})
 	key := h.createKey(t)
@@ -1764,10 +1754,10 @@ func TestManagementMutationsAndDependencyGuards(t *testing.T) {
 	pid := h.s.Config().Providers[0].ID
 	call("model.save", Object{"model": Object{"id": "m_one", "provider_id": pid, "upstream": "up-one",
 		"name": "One", "protocol": "chat", "enabled": true, "context_window": 128000,
-		"max_output_tokens": 4096, "concurrency": 4}})
+		"max_output_tokens": 4096}})
 	call("model.save", Object{"model": Object{"id": "m_two", "provider_id": pid, "upstream": "up-two",
 		"name": "Two", "protocol": "chat", "enabled": true, "context_window": 128000,
-		"max_output_tokens": 4096, "concurrency": 4}})
+		"max_output_tokens": 4096}})
 	call("route.save", Object{"route": Object{"id": "r_auto", "name": "Auto", "strategy": "priority",
 		"enabled": true, "affinity": true, "candidates": []any{
 			Object{"model_id": "m_one", "weight": 10}, Object{"model_id": "m_two", "weight": 5}}}})
@@ -1787,7 +1777,7 @@ func TestManagementMutationsAndDependencyGuards(t *testing.T) {
 	reject("route.save", Object{"route": Object{"id": "r_bad", "name": "B", "strategy": "priority",
 		"enabled": true, "candidates": []any{Object{"model_id": "ghost", "weight": 1}}}}, "INVALID_CONFIG")
 	reject("model.save", Object{"model": Object{"id": "m_bad", "provider_id": "ghost", "upstream": "x",
-		"protocol": "chat", "context_window": 1000, "max_output_tokens": 100, "concurrency": 1}}, "INVALID_CONFIG")
+		"protocol": "chat", "context_window": 1000, "max_output_tokens": 100}}, "INVALID_CONFIG")
 
 	// 删除供应商会关联删除模型，并从路由移除对应候选
 	call("provider.delete", Object{"id": pid})

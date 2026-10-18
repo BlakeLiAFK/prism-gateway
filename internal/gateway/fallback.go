@@ -52,8 +52,6 @@ func (e *Engine) retryHints(h http.Header, selections []selection, lastErr error
 		if remaining > 60000 {
 			h.Set("x-should-retry", "false")
 		}
-	case "CONCURRENCY_LIMIT":
-		h.Set("Retry-After", "2")
 	case "RPM_LIMIT":
 		h.Set("Retry-After", "10")
 	case "LOCAL_QUOTA_LIMIT":

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const Version = "1.40.0"
+const Version = "1.41.0"
 
 type Object = map[string]any
 
@@ -57,7 +57,6 @@ type Model struct {
 	DropDocuments  bool        `json:"drop_documents"`
 	Context        int         `json:"context_window"`
 	MaxOutput      int         `json:"max_output_tokens"`
-	Concurrency    int         `json:"concurrency"`
 	RPM            int         `json:"rpm"`
 	InputPrice     float64     `json:"input_price"`
 	OutputPrice    float64     `json:"output_price"`
@@ -109,7 +108,6 @@ type Settings struct {
 	DefaultRoute            string `json:"default_route"`
 	RetentionDays           int    `json:"retention_days"`
 	MaxBodyMB               int    `json:"max_body_mb"`
-	GlobalConcurrency       int    `json:"global_concurrency"`
 	SessionTTLHours         int    `json:"session_ttl_hours"`
 	AllowEstimatedCount     bool   `json:"allow_estimated_count"`
 	Listen                  string `json:"listen"`
@@ -141,7 +139,7 @@ type Config struct {
 }
 
 func defaults() Config {
-	return Config{Version: 1, Providers: []Provider{}, Models: []Model{}, Routes: []Route{}, Aliases: []Alias{}, Settings: Settings{AppName: "Prism Gateway", DefaultRoute: "auto-coding", RetentionDays: 90, MaxBodyMB: 8, GlobalConcurrency: 8, SessionTTLHours: 24, AllowEstimatedCount: true, Listen: "127.0.0.1:8080", LogLevel: "info", LogFormat: "text"}}
+	return Config{Version: 1, Providers: []Provider{}, Models: []Model{}, Routes: []Route{}, Aliases: []Alias{}, Settings: Settings{AppName: "Prism Gateway", DefaultRoute: "auto-coding", RetentionDays: 90, MaxBodyMB: 8, SessionTTLHours: 24, AllowEstimatedCount: true, Listen: "127.0.0.1:8080", LogLevel: "info", LogFormat: "text"}}
 }
 func (c Config) provider(id string) (Provider, bool) {
 	for _, p := range c.Providers {
@@ -301,8 +299,8 @@ func (c Config) Validate() error {
 		if e := validateProtocols(m); e != nil {
 			return e
 		}
-		if m.Concurrency < 1 || m.Concurrency > 128 || m.RPM < 0 || m.RPM > 100000 {
-			return errors.New("模型并发数 / RPM 不合法")
+		if m.RPM < 0 || m.RPM > 100000 {
+			return errors.New("模型 RPM 不合法")
 		}
 		if m.MaxOutput < 1 || m.MaxOutput > 1000000 || m.Context < 1 || m.Context > 10000000 {
 			return errors.New("上下文或输出限制不合法")
@@ -343,8 +341,8 @@ func (c Config) Validate() error {
 	if s.RequestDiagnosticsUntil < 0 || s.RequestDiagnosticsUntil > time.Now().Unix()+900 {
 		return errors.New("请求结构诊断期限必须在未来 15 分钟以内，0 表示关闭")
 	}
-	if s.MaxBodyMB < 1 || s.MaxBodyMB > 32 || s.GlobalConcurrency < 1 || s.GlobalConcurrency > 512 || s.RetentionDays < 31 || s.RetentionDays > 3650 || s.SessionTTLHours < 1 || s.SessionTTLHours > 720 {
-		return errors.New("设置范围：body 1–32MB，并发 1–512，保留 31–3650 天，会话 1–720 小时")
+	if s.MaxBodyMB < 1 || s.MaxBodyMB > 32 || s.RetentionDays < 31 || s.RetentionDays > 3650 || s.SessionTTLHours < 1 || s.SessionTTLHours > 720 {
+		return errors.New("设置范围：body 1–32MB，保留 31–3650 天，会话 1–720 小时")
 	}
 	if s.ShutdownGraceSec < 0 || s.ShutdownGraceSec > 1800 || s.StreamIdleSec < 0 || (s.StreamIdleSec > 0 && s.StreamIdleSec < 10) || s.StreamIdleSec > 1800 {
 		return errors.New("设置范围：平滑停止等待 0–1800 秒，流式空闲超时 10–1800 秒（0 为默认）")
@@ -405,7 +403,7 @@ func newSyncedModel(id, providerID, upstream, name, protocol string, src Object)
 	// 同步即可用：默认启用，能力尽量取自上游声明，没声明的按主流对话模型取值
 	m := Model{
 		ID: id, ProviderID: providerID, Upstream: upstream, Name: name,
-		Protocol: protocol, Enabled: true, Concurrency: 4,
+		Protocol: protocol, Enabled: true,
 		Context: int(firstNum(src, "context_length", "context_window", "max_context_length", "max_model_len")),
 	}
 	if m.Context < 1 {

@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,44 +83,39 @@ func TestAdmitReleasesSlotWhenInsertFails(t *testing.T) {
 	}
 }
 
-// 非预算模型的并发上限：只占位不结算，恰好放行上限个，其余被拒，计数与放行数一致。
-func TestAdmitNeverExceedsModelConcurrency(t *testing.T) {
+// 并发没有本地上限：同时准入 32 个请求应当全部放行，计数如实反映在途数。
+// 上游接不接得住由上游自己回答，网关不再替它猜容量。
+func TestAdmitHasNoLocalConcurrencyCeiling(t *testing.T) {
 	h := newHarness(t)
-	m := modelFixture("m", "chat")
-	m.Concurrency = 3
-	h.configure(t, "http://127.0.0.1:1", m)
-	h.change(t, func(c *Config) { c.Settings.GlobalConcurrency = 64 })
+	h.configure(t, "http://127.0.0.1:1", modelFixture("m", "chat"))
 	c := h.s.Config()
 	mm, _ := c.model("m")
 	pr, _ := c.provider("p_test")
 	sel := selection{Model: mm, Provider: pr, Body: Object{"max_tokens": 16}}
 	e := h.a.Engine
 
-	var ok, full atomic.Int32
+	const n = 32
+	var ok atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < 32; i++ {
+	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := e.admit(sel, Principal{ID: "k"}, "req", "m", "chat", "", client{})
-			switch {
-			case err == nil:
-				ok.Add(1)
-			case strings.Contains(err.Error(), "并发已满"):
-				full.Add(1)
-			default:
-				t.Errorf("意外错误: %v", err)
+			if _, err := e.admit(sel, Principal{ID: "k"}, "req", "m", "chat", "", client{}); err != nil {
+				t.Errorf("不应再有本地并发上限: %v", err)
+				return
 			}
+			ok.Add(1)
 		}()
 	}
 	wg.Wait()
-	if ok.Load() != 3 || full.Load() != 29 {
-		t.Fatalf("应放行 3 个、拒绝 29 个，实得 ok=%d full=%d", ok.Load(), full.Load())
+	if ok.Load() != n {
+		t.Fatalf("应放行 %d 个，实得 %d", n, ok.Load())
 	}
 	e.mu.Lock()
 	active, global := e.state("m").Active, e.global
 	e.mu.Unlock()
-	if active != 3 || global != 3 {
-		t.Fatalf("计数应为 3，实得 active=%d global=%d", active, global)
+	if active != n || global != n {
+		t.Fatalf("计数应为 %d，实得 active=%d global=%d", n, active, global)
 	}
 }

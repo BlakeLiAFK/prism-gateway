@@ -12,9 +12,10 @@ import (
 	"prism-gateway/internal/sqlite"
 )
 
-// gate 检查冷却、并发与 RPM，被拒时记入拒绝统计。调用方持有 e.mu。
+// gate 检查冷却与 RPM，被拒时记入拒绝统计。调用方持有 e.mu。
+// 并发不再有本地上限：网关不替上游猜容量，撞到上游自己的限制时按上游的 429 处理。
 func (e *Engine) gate(h *health, s selection, t int64) (rerr error) {
-	// 准入被拒计入内存，路由实时面板据此回答「是不是被并发 / 冷却挡住了」
+	// 准入被拒计入内存，路由实时面板据此回答「是不是被冷却挡住了」
 	defer func() { h.reject(rerr, t) }()
 	if h.Cooldown > t {
 		why := h.CoolWhy
@@ -22,9 +23,6 @@ func (e *Engine) gate(h *health, s selection, t int64) (rerr error) {
 			why = "上游限流"
 		}
 		return fail("UPSTREAM_COOLDOWN", fmt.Sprintf("候选冷却中：%s，%d 秒后恢复", why, max(1, (h.Cooldown-t+999)/1000)), 429)
-	}
-	if e.global >= e.store.Config().Settings.GlobalConcurrency || h.Active >= s.Model.Concurrency {
-		return fail("CONCURRENCY_LIMIT", "并发已满，请稍后重试", 429)
 	}
 	recent := h.Recent[:0]
 	for _, ts := range h.Recent {

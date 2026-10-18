@@ -11,10 +11,6 @@
 .live-sub{opacity:.85}
 .live-tag{display:inline-flex;align-items:center;gap:5px;flex:none;font:9px var(--mono);color:var(--mint-text);background:var(--mint-soft);border-radius:20px;padding:4px 9px;white-space:nowrap}
 .cand-live{display:flex;align-items:center;gap:8px;margin-top:6px;min-width:0}
-.cand-live-bar{flex:1;min-width:24px;max-width:140px;height:3px;border-radius:2px;background:var(--line2);overflow:hidden}
-.cand-live-bar i{display:block;height:100%;background:var(--mint-text);border-radius:2px}
-.cand-live-bar.high i{background:var(--warn)}
-.cand-live-bar.full i{background:var(--error)}
 .cand-live small{font-size:9px;color:var(--muted);flex:1 1 auto;min-width:0;max-width:100%}
 .candidate.muted{opacity:.52}
 .candidate.muted:hover{opacity:.75}
@@ -71,7 +67,7 @@ dialog.drawer.route-editor-dialog{margin:auto;width:min(1600px,calc(100vw - 48px
 
 @media(max-width:700px){
   dialog.drawer.route-editor-dialog{margin:0;width:100vw;height:100dvh;max-height:100dvh;border:0;border-radius:0}
-  .cand-share-bar,.cand-live-bar{max-width:none}
+  .cand-share-bar{max-width:none}
   .candidate-flags{gap:4px}
   .route-live{padding:13px 17px}
   /* 窄屏上下堆叠：三列布局会把候选右侧的开关与排序按钮挤出卡片 */
@@ -91,6 +87,5 @@ dialog.drawer.route-editor-dialog{margin:auto;width:min(1600px,calc(100vw - 48px
   .live-tag{order:-1;flex-basis:100%}
   .live-label,.live-sub{overflow:visible;text-overflow:clip;white-space:normal}
   .cand-live{flex-wrap:wrap}
-  .cand-live-bar{max-width:none;width:100%;order:2}
   .cand-live small{overflow-wrap:anywhere}
 }

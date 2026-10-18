@@ -16,35 +16,35 @@ type dashCand struct {
 	Paused, Disabled bool
 	Cooling          time.Duration
 	Share            float64 // 本路由近 5 分钟请求中落在它身上的比例，0 到 1
-	Active, Conc     int64
+	Active           int64
 	RPM, Requests5m  int64
 	TokS             float64
 	TTFB             time.Duration
 }
 
 type dashRoute struct {
-	ID, Strategy          string
-	RPM, Active, Capacity int64
-	Cands                 []dashCand
+	ID, Strategy string
+	RPM, Active  int64
+	Cands        []dashCand
 }
 
 type dashView struct {
-	Version       string
-	Zone          *time.Location
-	Now           time.Time
-	Uptime        time.Duration
-	ConfigVer     int64
-	Active, Limit int64
-	RPM           int64
-	OKPct         float64 // 近 5 分钟成功率，没有样本时为负数
-	TokS          float64
-	Watchers      int
-	TokenLeft     time.Duration
-	Routes        []dashRoute
-	Req, Err      []int
-	Events        []watchEvent
-	W, H          int
-	Color         bool
+	Version   string
+	Zone      *time.Location
+	Now       time.Time
+	Uptime    time.Duration
+	ConfigVer int64
+	Active    int64
+	RPM       int64
+	OKPct     float64 // 近 5 分钟成功率，没有样本时为负数
+	TokS      float64
+	Watchers  int
+	TokenLeft time.Duration
+	Routes    []dashRoute
+	Req, Err  []int
+	Events    []watchEvent
+	W, H      int
+	Color     bool
 }
 
 // cellWidth 是一个字符在终端里占的格数：东亚全角与宽字符占两格
@@ -172,8 +172,8 @@ func candLine(i int, c dashCand, nameW, w int) string {
 	case c.Cooling > 0:
 		return head + "cooling " + fmtDur(c.Cooling.Milliseconds())
 	}
-	return fitText(head+fmt.Sprintf("%s %3d%%  %d/%d  rpm %d  %.1f tok/s  ttfb %s",
-		bar(c.Share, 10), int(math.Round(c.Share*100)), c.Active, c.Conc, c.RPM, c.TokS, fmtDur(c.TTFB.Milliseconds())), w)
+	return fitText(head+fmt.Sprintf("%s %3d%%  active %d  rpm %d  %.1f tok/s  ttfb %s",
+		bar(c.Share, 10), int(math.Round(c.Share*100)), c.Active, c.RPM, c.TokS, fmtDur(c.TTFB.Milliseconds())), w)
 }
 
 func busy(c dashCand) bool { return c.Active > 0 || c.RPM > 0 || c.Requests5m > 0 || c.Cooling > 0 }
@@ -186,7 +186,7 @@ func routeLines(routes []dashRoute, w int, color bool) []string {
 	nameW := clamp(w-64, 10, 30)
 	var out []string
 	for _, r := range routes {
-		out = append(out, paint(color, "1", fitText(fmt.Sprintf("ROUTE %s  %s  rpm %d  active %d/%d", r.ID, r.Strategy, r.RPM, r.Active, r.Capacity), w)))
+		out = append(out, paint(color, "1", fitText(fmt.Sprintf("ROUTE %s  %s  rpm %d  active %d", r.ID, r.Strategy, r.RPM, r.Active), w)))
 		hidden := 0
 		for i, c := range r.Cands {
 			if len(r.Cands) > 6 && !busy(c) {
@@ -231,7 +231,7 @@ func renderDashboard(v dashView) []string {
 		paint(v.Color, "1;36", fitText(fmt.Sprintf("PRISM GATEWAY %s   up %s   %s %s   cfg v%d   watchers %d",
 			v.Version, fmtUptime(v.Uptime), v.Now.In(zone).Format("15:04:05"), zone, v.ConfigVer, v.Watchers), w)),
 		strings.Repeat("-", w),
-		fitText(fmt.Sprintf("active %d/%d   rpm %d   ok(5m) %s   out %.1f tok/s%s", v.Active, v.Limit, v.RPM, ok, v.TokS, tokenNote(v.TokenLeft)), w),
+		fitText(fmt.Sprintf("active %d   rpm %d   ok(5m) %s   out %.1f tok/s%s", v.Active, v.RPM, ok, v.TokS, tokenNote(v.TokenLeft)), w),
 		"",
 	}
 	reqs, peak := spark(v.Req)

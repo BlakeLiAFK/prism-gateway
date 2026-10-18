@@ -149,7 +149,7 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 		m, _ := c.model(id)
 		st, g := states[id], byModel[id]
 		models[id] = Object{
-			"active": st.active, "concurrency": m.Concurrency, "rpm": st.rpm, "rpm_limit": m.RPM,
+			"active": st.active, "rpm": st.rpm, "rpm_limit": m.RPM,
 			"ttfb_ms": st.ttfb, "cooldown_until": st.cooldown, "limits": st.limits,
 			"sessions": sessions[id], "requests_5m": g.requests, "success_5m": g.success,
 			"tok_s": perSecond(g), "rejected_5m": st.rejects, "live_tok_s": math.Round(st.stream*10) / 10,
@@ -158,19 +158,17 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 
 	routes := Object{}
 	for _, rt := range c.Routes {
-		var active, capacity, sess int64
+		var active, sess int64
 		var weighted, weights, live float64
 		seen := map[string]bool{}
 		for _, cm := range rt.all() {
-			m, ok := c.model(cm.ModelID)
-			if !ok || cm.Disabled || seen[cm.ModelID] {
+			if _, ok := c.model(cm.ModelID); !ok || cm.Disabled || seen[cm.ModelID] {
 				continue
 			}
 			seen[cm.ModelID] = true
 			st, w := states[cm.ModelID], float64(byModel[cm.ModelID].requests)
 			active += int64(st.active)
 			live += st.stream
-			capacity += int64(m.Concurrency)
 			sess += sessions[cm.ModelID]
 			// 候选的响应头耗时按各自近 5 分钟的请求数加权
 			weighted += float64(st.ttfb) * w
@@ -187,14 +185,14 @@ func (a *App) computeRouteLive(t int64) (Object, error) {
 			tok = float64(g.tokens) / 60
 		}
 		routes[rt.ID] = Object{
-			"active": active, "capacity": capacity, "rpm": g.rpm, "tok_s": tok,
+			"active": active, "rpm": g.rpm, "tok_s": tok,
 			"requests_5m": g.requests, "success_5m": g.success,
 			"sessions": sess, "ttfb_ms": ttfb, "live_tok_s": math.Round(live*10) / 10,
 		}
 	}
 	return Object{
 		"now":    t,
-		"global": Object{"active": global, "limit": c.Settings.GlobalConcurrency},
+		"global": Object{"active": global},
 		"models": models, "routes": routes,
 	}, nil
 }

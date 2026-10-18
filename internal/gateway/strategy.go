@@ -27,8 +27,8 @@ const (
 // load 是某个模型此刻的运行时负载快照
 type load struct {
 	Cooling bool
-	Full    bool
-	Busy    float64 // 当前并发 / 并发上限
+	Full    bool    // RPM 已用尽；并发不再有本地上限，所以这里只剩 RPM
+	Active  int     // 此刻在途请求数，只用于 least_busy 排序
 	TTFB    float64 // 上游响应头耗时的滑动平均，0 表示还没有样本
 }
 
@@ -48,8 +48,8 @@ func (e *Engine) load(m Model) load {
 	}
 	return load{
 		Cooling: h.Cooldown > t,
-		Full:    h.Active >= m.Concurrency || (m.RPM > 0 && rpm >= m.RPM),
-		Busy:    float64(h.Active) / float64(max(m.Concurrency, 1)),
+		Full:    m.RPM > 0 && rpm >= m.RPM,
+		Active:  h.Active,
 		TTFB:    h.TTFB,
 	}
 }
@@ -89,7 +89,8 @@ func baseScore(strategy string, i int, cm Candidate, m Model, pressure float64, 
 		}
 		return 1000 - min(m.InputPrice+m.OutputPrice, 999) - tie
 	case "least_busy":
-		return 1000 - l.Busy*500 - tie
+		// 在途请求越少分越高。20 只是打分刻度，不是上限：它只决定候选顺序，不会拒绝任何请求
+		return 1000 - float64(min(l.Active, 20))*50 - tie
 	}
 	return 1000 - float64(i)*10
 }

@@ -27,11 +27,6 @@ func benchEngine(b *testing.B, upstream string, mutate func(*Config)) *Engine {
 	_, err = s.Change(s.Config().Version, "bench", "bench", func(c *Config) error {
 		c.Providers = []Provider{{ID: "p_test", Name: "bench", Kind: "custom", BaseURL: upstream, Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30}}
 		c.Models = []Model{modelFixture("a", "chat"), modelFixture("b", "chat"), modelFixture("c", "messages")}
-		// 并发上限放到最大，基准衡量的是锁与查询开销，不该被并发限流挡掉
-		for i := range c.Models {
-			c.Models[i].Concurrency = 128
-		}
-		c.Settings.GlobalConcurrency = 512
 		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority",
 			Candidates: []Candidate{{ModelID: "a", Weight: 10}, {ModelID: "b", Weight: 10}, {ModelID: "c", Weight: 10}}}}
 		if mutate != nil {

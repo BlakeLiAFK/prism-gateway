@@ -140,6 +140,9 @@ func (s *Store) migrate() error {
 			`CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, action TEXT NOT NULL, target TEXT NOT NULL, version INTEGER NOT NULL, created_at INTEGER NOT NULL)`,
 			`INSERT OR IGNORE INTO meta VALUES ('schema_version','1')`,
 			`INSERT OR IGNORE INTO meta VALUES ('config_version','1')`,
+			// 并发上限已取消。settings 表是键值对且只增不删，残留的 global_concurrency
+			// 会让 loadSettings 的严格解码以「未知字段」失败，等于老库启动不了，所以在这里清掉。
+			`DELETE FROM settings WHERE key='global_concurrency'`,
 			`UPDATE jobs SET status='interrupted', error='进程重启中断任务，请手动重试' WHERE status IN ('queued','running')`,
 			`UPDATE requests SET status='unknown', usage_mode='reserved_after_restart', error_code='PROCESS_INTERRUPTED' WHERE status='running'`,
 		}

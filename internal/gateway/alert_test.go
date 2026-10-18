@@ -56,12 +56,12 @@ func TestAlertDelivery(t *testing.T) {
 	if msgs := wait(1); len(msgs) != 1 || !strings.Contains(msgs[0], "连续 5 次请求失败") {
 		t.Fatalf("连续失败应只推送一次（30 分钟限频）: %v", msgs)
 	}
-	// 路由全部候选不可用：并发占满
+	// 路由全部候选不可用：候选在冷却中，准入处被拒
 	h.change(t, func(c *Config) {
 		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "m", Weight: 10}}}}
 	})
 	h.a.Engine.mu.Lock()
-	h.a.Engine.state("m").Active = m.Concurrency
+	h.a.Engine.state("m").Cooldown = now() + 60000
 	h.a.Engine.mu.Unlock()
 	requireStatus(t, h.generate(t, "chat", requestFixture("chat", "auto")), 429)
 	if msgs := wait(2); len(msgs) != 2 || !strings.Contains(msgs[1], "路由 auto 的全部候选都不可用") || !strings.Contains(msgs[1], "候选供应商 / 模型") || !strings.Contains(msgs[1], "Test upstream") {

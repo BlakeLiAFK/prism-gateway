@@ -322,7 +322,7 @@ func (a *App) EnableDemo(version int64) (Config, error) {
 		}
 		c.Providers = append(c.Providers, Provider{ID: "local-demo", Name: "Local Sandbox", Kind: "mock", Auth: "none", Enabled: true, TimeoutSec: 30, Description: "本地确定性演示，不是真实模型，不产生云端费用"})
 		for i, p := range []string{"chat", "messages", "responses"} {
-			c.Models = append(c.Models, Model{ID: "demo-" + p, Name: []string{"Demo / Chat", "Demo / Messages", "Demo / Responses"}[i], ProviderID: "local-demo", Upstream: "demo-" + p, Protocol: p, Enabled: true, Tools: true, Context: 128000, MaxOutput: 4096, Concurrency: 2, RPM: 60, PricingSet: true})
+			c.Models = append(c.Models, Model{ID: "demo-" + p, Name: []string{"Demo / Chat", "Demo / Messages", "Demo / Responses"}[i], ProviderID: "local-demo", Upstream: "demo-" + p, Protocol: p, Enabled: true, Tools: true, Context: 128000, MaxOutput: 4096, RPM: 60, PricingSet: true})
 		}
 		c.Routes = append(c.Routes, Route{ID: "demo-auto", Name: "Sandbox route", Enabled: true, Groups: []Group{{Name: "主", Strategy: "balanced", Affinity: boolPtr(true), Candidates: []Candidate{{ModelID: "demo-chat", Weight: 30}, {ModelID: "demo-messages", Weight: 20}, {ModelID: "demo-responses", Weight: 10}}}}, Description: "仅用于本地演示，不会混入真实生产路由"})
 		return nil

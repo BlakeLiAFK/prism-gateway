@@ -88,7 +88,7 @@ function nudgeCandidate(el,step){
 // 路由页的 state.data 来自 route.stats：
 //   {minutes, now, share:{路由ID:{模型ID:{attempts,success}}}, runtime:{active, models:{模型ID:{active,cooldown_until,last_status,latency_ms,ttfb_ms,limits,limits_at}}}}
 
-// 候选此刻的状态：{disabled, cooling(恢复时刻毫秒，0 为未冷却), active, concurrency, full}
+// 候选此刻的状态：{disabled, cooling(恢复时刻毫秒，0 为未冷却), active}
 export function candidateState(modelId,m=getModel(modelId)){
   const p=m?getProvider(m.provider_id):null;
   const disabled=!m?.enabled||!p?.enabled;
@@ -96,8 +96,7 @@ export function candidateState(modelId,m=getModel(modelId)){
   const serverNow=state.data?.now||Date.now();
   const cooling=rt?.cooldown_until>serverNow?rt.cooldown_until:0;
   const active=rt?.active||0;
-  const concurrency=m?.concurrency||0;
-  return {disabled,cooling,active,concurrency,full:concurrency>0&&active>=concurrency};
+  return {disabled,cooling,active};
 }
 
 // 候选在该路由最近窗口内的落点占比（0~1）与尝试次数：{share, attempts, success, affinity}；affinity 是会话亲和命中的次数
@@ -164,8 +163,8 @@ function shareBar(routeId,modelId,attempts){
 // ===== 路由画布实时数据 =====
 // 数据来自 route.live（与页面数据的 route.stats 不同源），放在 state.live，每 5 秒刷新一次：
 //   {now, global:{active,limit},
-//    models:{模型ID:{active,concurrency,rpm,rpm_limit,ttfb_ms,cooldown_until,limits,sessions,requests_5m,success_5m,tok_s}},
-//    routes:{路由ID:{active,capacity,rpm,tok_s,requests_5m,success_5m,sessions,ttfb_ms}}}
+//    models:{模型ID:{active,rpm,rpm_limit,ttfb_ms,cooldown_until,limits,sessions,requests_5m,success_5m,tok_s}},
+//    routes:{路由ID:{active,rpm,tok_s,requests_5m,success_5m,sessions,ttfb_ms}}}
 // 轮询每个页面模块各自持有，这里只存自己的 interval，避免重复启动。
 
 let liveTimer=null;
@@ -193,37 +192,27 @@ function liveItem(value,label,lead='',sub=''){
 export function routeLiveBar(routeId){
   const g=state.live?.global;
   const r=state.live?.routes?.[routeId];
-  const pct=r?.capacity?Math.round((r.active||0)/r.capacity*100):0;
-  const lead=r?.capacity&&pct>=80?(pct>=100?'error':'warn'):'';
-  const sub=`全局 ${g?number(g.active||0):'—'} / ${g?number(g.limit||0):'—'}`;
-  return `<div class="route-live"><div class="live-grid">${liveItem(`${lv(r?.active)} <span class="live-sep">/</span> ${lv(r?.capacity)}`,'并发',lead,sub)}${r?.live_tok_s>0?liveItem(`${tokRate(r.live_tok_s)} <span class="live-unit">tok/s</span>`,'输出速度 · 实时估算','',`已完成请求 ${lv(r.tok_s,tokRate)} tok/s`):liveItem(`${lv(r?.tok_s,tokRate)} <span class="live-unit">tok/s</span>`,'输出速度 · 近 60 秒')}${liveItem(lv(r?.rpm),'RPM')}${liveItem(rateText(r?.requests_5m,r?.success_5m),'成功率')}${liveItem(lv(r?.sessions),'会话')}${liveItem(lv(r?.ttfb_ms,v=>v>0?ms(v):'—'),'首字节')}</div><span class="live-tag" title="每 ${LIVE_INTERVAL/1000} 秒自动刷新路由与候选的实时数据"><i class="dot"></i>实时 · ${LIVE_INTERVAL/1000}s</span></div>`;
+  const sub=`全局 ${g?number(g.active||0):'—'}`;
+  return `<div class="route-live"><div class="live-grid">${liveItem(`${lv(r?.active)}`,'在途','',sub)}${r?.live_tok_s>0?liveItem(`${tokRate(r.live_tok_s)} <span class="live-unit">tok/s</span>`,'输出速度 · 实时估算','',`已完成请求 ${lv(r.tok_s,tokRate)} tok/s`):liveItem(`${lv(r?.tok_s,tokRate)} <span class="live-unit">tok/s</span>`,'输出速度 · 近 60 秒')}${liveItem(lv(r?.rpm),'RPM')}${liveItem(rateText(r?.requests_5m,r?.success_5m),'成功率')}${liveItem(lv(r?.sessions),'会话')}${liveItem(lv(r?.ttfb_ms,v=>v>0?ms(v):'—'),'首字节')}</div><span class="live-tag" title="每 ${LIVE_INTERVAL/1000} 秒自动刷新路由与候选的实时数据"><i class="dot"></i>实时 · ${LIVE_INTERVAL/1000}s</span></div>`;
 }
 
-// 候选卡片上的一行实时指标：并发条 + 并发 / RPM / 速度 / 首字节 / 会话。
+// 候选卡片上的一行实时指标：在途 / RPM / 速度 / 首字节 / 会话。
 // 冷却倒计时已由 candidateBadges 显示，这里不重复；没有数据的项直接省略。
-const REJECT_NAMES={CONCURRENCY_LIMIT:'并发满',UPSTREAM_COOLDOWN:'冷却',RPM_LIMIT:'RPM 满',LOCAL_QUOTA_LIMIT:'预算不足'};
+const REJECT_NAMES={UPSTREAM_COOLDOWN:'冷却',RPM_LIMIT:'RPM 满',LOCAL_QUOTA_LIMIT:'预算不足'};
 function candidateLive(modelId){
   const m=state.live?.models?.[modelId];
   if(!m)return '';
   const parts=[];
-  if(m.active!=null&&m.concurrency)parts.push(`并发 ${number(m.active)}/${number(m.concurrency)}`);
+  if(m.active)parts.push(`在途 ${number(m.active)}`);
   if(m.rpm!=null)parts.push(m.rpm_limit?`RPM ${number(m.rpm)} / ${number(m.rpm_limit)}`:`RPM ${number(m.rpm)}`);
   if(m.tok_s>0)parts.push(`${tokRate(m.tok_s)} tok/s`);
   if(m.ttfb_ms>0)parts.push(`TTFB ${ms(m.ttfb_ms)}`);
   if(m.sessions!=null)parts.push(`${number(m.sessions)} 会话`);
-  // 近 5 分钟准入被拒：并发满、冷却中、RPM 或本地预算
+  // 近 5 分钟准入被拒：冷却中、RPM 或本地预算
   const rj=Object.entries(m.rejected_5m||{});
   if(rj.length)parts.push('5 分钟内被拒 '+rj.map(([c,n])=>`${REJECT_NAMES[c]||c} ${number(n)}`).join('、'));
   if(!parts.length)return '';
-  const bar=m.concurrency?`<span class="cand-live-bar ${liveLevel(m.active,m.concurrency)}"><i style="width:${Math.min(100,Math.round(m.active/m.concurrency*100))}%"></i></span>`:'';
-  return `<div class="cand-live">${bar}<small>${E(parts.join(' · '))}</small></div>`;
-}
-
-// 并发占用达到 80% 提醒、满了标红
-function liveLevel(active,capacity){
-  if(!capacity)return '';
-  if(active>=capacity)return 'full';
-  return active/capacity>=.8?'high':'';
+  return `<div class="cand-live"><small>${E(parts.join(' · '))}</small></div>`;
 }
 
 export const routeActions={

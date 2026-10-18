@@ -75,7 +75,7 @@ func prepareModelPricing(m *Model, c Config, id string) {
 }
 
 func (a *App) saveModel(c Config, version int64, id string, input any) (any, error) {
-	v := Model{ID: id, Enabled: true, Protocol: "chat", ToolsUnknown: true, VisionUnknown: true, Context: 128000, MaxOutput: 4096, Concurrency: 2}
+	v := Model{ID: id, Enabled: true, Protocol: "chat", ToolsUnknown: true, VisionUnknown: true, Context: 128000, MaxOutput: 4096}
 	if old, ok := c.model(id); ok {
 		v = old
 		v.PriceTiers = clonePriceTiers(old.PriceTiers)

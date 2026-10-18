@@ -102,9 +102,9 @@ func TestExhaustedRouteAlertResolvesAlias(t *testing.T) {
 	alerts := captureAlerts(h)
 	m := modelFixture("m", "chat")
 	aliasRoute(t, h, "http://127.0.0.1:1", m)
-	// 并发占满：候选合格，但没有一个能通过准入
+	// 候选冷却中：候选合格，但没有一个能通过准入
 	h.a.Engine.mu.Lock()
-	h.a.Engine.state("m").Active = m.Concurrency
+	h.a.Engine.state("m").Cooldown = now() + 60000
 	h.a.Engine.mu.Unlock()
 	requireStatus(t, h.generate(t, "chat", requestFixture("chat", "claude-sonnet")), 429)
 	got := waitAlert(t, alerts)

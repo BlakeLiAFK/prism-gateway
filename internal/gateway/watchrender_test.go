@@ -74,10 +74,10 @@ func sampleView(w, h int, color bool) dashView {
 	zone := time.FixedZone("UTC+8", 8*3600)
 	return dashView{
 		Version: "1.34.6", Zone: zone, Now: time.Date(2026, 10, 4, 12, 40, 7, 0, zone), Uptime: 2*time.Hour + 13*time.Minute,
-		ConfigVer: 1472, Active: 3, Limit: 64, RPM: 42, OKPct: 98.2, TokS: 312.4, Watchers: 1,
-		Routes: []dashRoute{{ID: "auto", Strategy: "weighted", RPM: 12, Active: 2, Capacity: 30, Cands: []dashCand{
-			{Name: "Space Bunny Alpha", Share: 0.82, Active: 2, Conc: 10, RPM: 9, TokS: 38, TTFB: 7300 * time.Millisecond, Requests5m: 45},
-			{Name: "DeepSeek V4.1 Flash", Share: 0.18, Active: 1, Conc: 20, RPM: 3, TokS: 51, TTFB: 4100 * time.Millisecond, Requests5m: 10},
+		ConfigVer: 1472, Active: 3, RPM: 42, OKPct: 98.2, TokS: 312.4, Watchers: 1,
+		Routes: []dashRoute{{ID: "auto", Strategy: "weighted", RPM: 12, Active: 2, Cands: []dashCand{
+			{Name: "Space Bunny Alpha", Share: 0.82, Active: 2, RPM: 9, TokS: 38, TTFB: 7300 * time.Millisecond, Requests5m: 45},
+			{Name: "DeepSeek V4.1 Flash", Share: 0.18, Active: 1, RPM: 3, TokS: 51, TTFB: 4100 * time.Millisecond, Requests5m: 10},
 			{Name: "GLM 5.3 Flash", Paused: true},
 		}}},
 		Req: []int{0, 1, 3, 8, 2, 0, 5, 9, 1, 0}, Err: []int{0, 0, 1, 0, 0, 0, 0, 2, 0, 0},
@@ -107,8 +107,8 @@ func TestWatchDashboardContent(t *testing.T) {
 	text := stripANSI(strings.Join(renderDashboard(sampleView(100, 40, false)), "\n"))
 	for _, want := range []string{
 		"PRISM GATEWAY 1.34.6", "up 2h13m", "12:40:07", "UTC+8", "cfg v1472",
-		"active 3/64", "rpm 42", "98.2%", "312.4 tok/s",
-		"ROUTE auto", "weighted", "Space Bunny Alpha", "82%", "2/10", "ttfb 7.3s", "paused",
+		"active 3", "rpm 42", "98.2%", "312.4 tok/s",
+		"ROUTE auto", "weighted", "Space Bunny Alpha", "82%", "active 2", "ttfb 7.3s", "paused",
 		"[########..]", "EVENTS", "12:40:05", "OK", "REJ", "NO_COMPATIBLE_MODEL",
 	} {
 		if !strings.Contains(text, want) {

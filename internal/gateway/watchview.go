@@ -22,7 +22,7 @@ func (a *App) dashView(o watchOpts, zone *time.Location, expires int64) (dashVie
 	t := now()
 	v := dashView{
 		Version: Version, Zone: zone, Now: time.UnixMilli(t), Uptime: time.Duration(t-a.Started) * time.Millisecond,
-		ConfigVer: c.Version, Active: int64(num(obj(lv["global"]), "active")), Limit: int64(num(obj(lv["global"]), "limit")),
+		ConfigVer: c.Version, Active: int64(num(obj(lv["global"]), "active")),
 		OKPct: -1, Watchers: a.Engine.watch.watchers(), W: o.width, H: o.height, Color: o.color,
 		TokenLeft: time.Duration(expires-t) * time.Millisecond,
 	}
@@ -48,7 +48,7 @@ func (a *App) dashView(o watchOpts, zone *time.Location, expires int64) (dashVie
 }
 
 func dashRouteOf(c Config, rt Route, rv, models Object, t int64) dashRoute {
-	r := dashRoute{ID: rt.ID, Strategy: rt.primaryStrategy(), RPM: int64(num(rv, "rpm")), Active: int64(num(rv, "active")), Capacity: int64(num(rv, "capacity"))}
+	r := dashRoute{ID: rt.ID, Strategy: rt.primaryStrategy(), RPM: int64(num(rv, "rpm")), Active: int64(num(rv, "active"))}
 	var total float64
 	for _, cm := range rt.all() {
 		if !cm.Disabled {
@@ -59,7 +59,7 @@ func dashRouteOf(c Config, rt Route, rv, models Object, t int64) dashRoute {
 		m, ok := c.model(cm.ModelID)
 		mv := obj(models[cm.ModelID])
 		d := dashCand{Name: cm.ModelID, Paused: cm.Disabled, Disabled: !ok || !m.Enabled, Requests5m: int64(num(mv, "requests_5m")),
-			Active: int64(num(mv, "active")), Conc: int64(num(mv, "concurrency")), RPM: int64(num(mv, "rpm")),
+			Active: int64(num(mv, "active")), RPM: int64(num(mv, "rpm")),
 			TTFB: time.Duration(num(mv, "ttfb_ms")) * time.Millisecond, TokS: num(mv, "live_tok_s")}
 		if ok && m.Name != "" {
 			d.Name = m.Name

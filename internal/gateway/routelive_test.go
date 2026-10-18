@@ -4,13 +4,13 @@ import "testing"
 
 // route.live 验收：路由与候选的实时数据契约
 //
-//	{now, global:{active,limit},
-//	 models:{id:{active,concurrency,rpm,rpm_limit,ttfb_ms,cooldown_until,limits,sessions,requests_5m,success_5m,tok_s}},
-//	 routes:{id:{active,capacity,rpm,tok_s,requests_5m,success_5m,sessions,ttfb_ms}}}
+//	{now, global:{active},
+//	 models:{id:{active,rpm,rpm_limit,ttfb_ms,cooldown_until,limits,sessions,requests_5m,success_5m,tok_s}},
+//	 routes:{id:{active,rpm,tok_s,requests_5m,success_5m,sessions,ttfb_ms}}}
 func TestRouteLive(t *testing.T) {
 	h := newHarness(t)
 	a, b := modelFixture("a", "chat"), modelFixture("b", "chat")
-	a.Concurrency, b.Concurrency, a.RPM = 3, 5, 60
+	a.RPM = 60
 	h.configure(t, "http://127.0.0.1:1", a, b)
 	h.change(t, func(c *Config) {
 		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "weighted", Candidates: []Candidate{{ModelID: "a", Weight: 10}, {ModelID: "b", Weight: 10}}}}
@@ -42,11 +42,11 @@ func TestRouteLive(t *testing.T) {
 	w, out := h.rpc(t, "route.live", Object{}, h.token)
 	requireStatus(t, w, 200)
 	d := obj(out["data"])
-	if g := obj(d["global"]); num(g, "active") != 3 || num(g, "limit") != float64(h.s.Config().Settings.GlobalConcurrency) {
+	if g := obj(d["global"]); num(g, "active") != 3 {
 		t.Fatalf("global 不对: %v", g)
 	}
 	ma := obj(obj(d["models"])["a"])
-	want := map[string]float64{"active": 2, "concurrency": 3, "rpm": 2, "rpm_limit": 60, "ttfb_ms": 800, "sessions": 2, "requests_5m": 3, "success_5m": 3}
+	want := map[string]float64{"active": 2, "rpm": 2, "rpm_limit": 60, "ttfb_ms": 800, "sessions": 2, "requests_5m": 3, "success_5m": 3}
 	for k, v := range want {
 		if num(ma, k) != v {
 			t.Errorf("models.a.%s = %v，期望 %v（%v）", k, ma[k], v, ma)
@@ -57,7 +57,7 @@ func TestRouteLive(t *testing.T) {
 		t.Errorf("models.a.tok_s = %v，期望 50", ma["tok_s"])
 	}
 	r := obj(obj(d["routes"])["auto"])
-	wantR := map[string]float64{"active": 3, "capacity": 8, "rpm": 3, "requests_5m": 4, "success_5m": 3, "sessions": 3}
+	wantR := map[string]float64{"active": 3, "rpm": 3, "requests_5m": 4, "success_5m": 3, "sessions": 3}
 	for k, v := range wantR {
 		if num(r, k) != v {
 			t.Errorf("routes.auto.%s = %v，期望 %v（%v）", k, r[k], v, r)
@@ -73,36 +73,34 @@ func TestRouteLive(t *testing.T) {
 	if num(obj(obj(obj(out["data"])["models"])["a"]), "requests_5m") != 3 {
 		t.Error("5 秒内应返回缓存结果")
 	}
-	// 暂停 b 后路由容量只剩 a 的 3
+	// 暂停 b 后路由在途数只剩 a 的 2
 	h.change(t, func(c *Config) { c.Routes[0].Groups[0].Candidates[1].Disabled = true })
 	liveMu.Lock()
 	delete(liveCache, h.a)
 	liveMu.Unlock()
 	_, out = h.rpc(t, "route.live", Object{}, h.token)
-	if got := num(obj(obj(obj(out["data"])["routes"])["auto"]), "capacity"); got != 3 {
-		t.Errorf("暂停候选不应计入路由容量，capacity = %v，期望 3", got)
+	if got := num(obj(obj(obj(out["data"])["routes"])["auto"]), "active"); got != 2 {
+		t.Errorf("暂停候选不应计入路由在途数，active = %v，期望 2", got)
 	}
 }
 
-// 并发满导致所有候选准入被拒：客户端收到 429，请求日志留下 rejected 记录，实时面板计入拒绝次数
+// 候选冷却导致所有候选准入被拒：客户端收到 429，请求日志留下 rejected 记录，实时面板计入拒绝次数
 func TestAdmissionRejectRecorded(t *testing.T) {
 	h := newHarness(t)
-	m := modelFixture("a", "chat")
-	m.Concurrency = 1
-	h.configure(t, "http://127.0.0.1:1", m)
+	h.configure(t, "http://127.0.0.1:1", modelFixture("a", "chat"))
 	h.change(t, func(c *Config) {
 		c.Routes = []Route{{ID: "auto", Name: "auto", Enabled: true, Strategy: "priority", Candidates: []Candidate{{ModelID: "a", Weight: 10}}}}
 	})
 	h.a.Engine.mu.Lock()
-	h.a.Engine.state("a").Active = 1
+	h.a.Engine.state("a").Cooldown = now() + 60000
 	h.a.Engine.mu.Unlock()
 	requireStatus(t, h.generate(t, "chat", requestFixture("chat", "auto")), 429)
 	rows, _ := h.s.DB.Query("SELECT error_code, usage_mode, requested_model FROM requests")
-	if len(rows) != 1 || rows[0].String("error_code") != "CONCURRENCY_LIMIT" || rows[0].String("usage_mode") != "rejected" {
+	if len(rows) != 1 || rows[0].String("error_code") != "UPSTREAM_COOLDOWN" || rows[0].String("usage_mode") != "rejected" {
 		t.Fatalf("应记录一条准入被拒: %v", rows)
 	}
 	_, out := h.rpc(t, "route.live", Object{}, h.token)
-	if n := num(obj(obj(obj(obj(out["data"])["models"])["a"])["rejected_5m"]), "CONCURRENCY_LIMIT"); n != 1 {
-		t.Fatalf("实时面板应计入 1 次并发拒绝，实得 %v", n)
+	if n := num(obj(obj(obj(obj(out["data"])["models"])["a"])["rejected_5m"]), "UPSTREAM_COOLDOWN"); n != 1 {
+		t.Fatalf("实时面板应计入 1 次冷却拒绝，实得 %v", n)
 	}
 }

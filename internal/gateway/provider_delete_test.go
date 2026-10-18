@@ -14,10 +14,10 @@ func providerDeleteFixture(t *testing.T, h *harness) {
 			{ID: "p_keep", Name: "保留", Kind: "custom", BaseURL: "http://127.0.0.1:1", Auth: "none", Enabled: true, AllowPrivate: true, TimeoutSec: 30},
 		}
 		c.Models = []Model{
-			{ID: "drop_live", ProviderID: "p_drop", Upstream: "drop_live", Name: "删除启用", Protocol: "chat", Enabled: true, Context: 1000, MaxOutput: 100, Concurrency: 1},
-			{ID: "drop_disabled", ProviderID: "p_drop", Upstream: "drop_disabled", Name: "删除停用", Protocol: "chat", Context: 1000, MaxOutput: 100, Concurrency: 1},
-			{ID: "keep_live", ProviderID: "p_keep", Upstream: "keep_live", Name: "保留启用", Protocol: "chat", Enabled: true, Context: 1000, MaxOutput: 100, Concurrency: 1},
-			{ID: "keep_disabled", ProviderID: "p_keep", Upstream: "keep_disabled", Name: "保留停用", Protocol: "chat", Context: 1000, MaxOutput: 100, Concurrency: 1},
+			{ID: "drop_live", ProviderID: "p_drop", Upstream: "drop_live", Name: "删除启用", Protocol: "chat", Enabled: true, Context: 1000, MaxOutput: 100},
+			{ID: "drop_disabled", ProviderID: "p_drop", Upstream: "drop_disabled", Name: "删除停用", Protocol: "chat", Context: 1000, MaxOutput: 100},
+			{ID: "keep_live", ProviderID: "p_keep", Upstream: "keep_live", Name: "保留启用", Protocol: "chat", Enabled: true, Context: 1000, MaxOutput: 100},
+			{ID: "keep_disabled", ProviderID: "p_keep", Upstream: "keep_disabled", Name: "保留停用", Protocol: "chat", Context: 1000, MaxOutput: 100},
 		}
 		c.Routes = providerDeleteRoutes()
 		c.Aliases = []Alias{

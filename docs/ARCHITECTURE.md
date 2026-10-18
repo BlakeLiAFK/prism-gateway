@@ -69,7 +69,7 @@ examples/                    curl / CLI 示例
 
 配置表之间存在实体 ID / 外键关系。Provider、Model、Route 的类型化属性以每实体 JSON body 保存，不是单个巨大配置 blob。route_models 有显式关联，便于维护引用。未来改变实体结构须扩展 migration 与测试，不绕过 config_version。
 
-每个模型请求取得快照，候选配置在该请求内稳定；瞬时并发与预算仍在 admission 时重新检查。全局并发属于即时保护设置，不保证和在途旧配置一同冻结。
+每个模型请求取得快照，候选配置在该请求内稳定；瞬时负载与预算仍在 admission 时重新检查；并发不再有本地上限，准入只看冷却与 RPM。
 
 ## SQLite 与运行状态
 

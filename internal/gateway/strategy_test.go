@@ -40,24 +40,28 @@ func rankedIDs(t *testing.T, h *harness) string {
 func TestStrategyOrdering(t *testing.T) {
 	cases := []struct {
 		strategy string
-		setup    func(e *Engine)
+		setup    func(h *harness, e *Engine)
 		want     string
 	}{
 		{"priority", nil, "a,b,c"},
 		// 未确认计价的 c 排最后：价格未知不等于免费
 		{"cost", nil, "b,a,c"},
 		// 没有样本的 c 先试；其余按响应头耗时升序
-		{"latency", func(e *Engine) { e.state("a").TTFB = 900; e.state("b").TTFB = 200 }, "c,b,a"},
-		{"least_busy", func(e *Engine) { e.state("a").Active = 4; e.state("b").Active = 2 }, "c,b,a"},
-		// 冷却中与已满的候选沉底，其余保持优先级顺序
-		{"priority", func(e *Engine) { e.state("a").Cooldown = now() + 60000 }, "b,c,a"},
-		{"priority", func(e *Engine) { e.state("b").Active = 8 }, "a,c,b"},
+		{"latency", func(h *harness, e *Engine) { e.state("a").TTFB = 900; e.state("b").TTFB = 200 }, "c,b,a"},
+		{"least_busy", func(h *harness, e *Engine) { e.state("a").Active = 4; e.state("b").Active = 2 }, "c,b,a"},
+		// 冷却中的候选沉底，其余保持优先级顺序
+		{"priority", func(h *harness, e *Engine) { e.state("a").Cooldown = now() + 60000 }, "b,c,a"},
+		// RPM 用尽的候选同样沉底
+		{"priority", func(h *harness, e *Engine) {
+			h.change(t, func(c *Config) { c.Models[1].RPM = 2 })
+			e.state("b").Recent = []int64{now(), now()}
+		}, "a,c,b"},
 	}
 	for _, tc := range cases {
 		h := newHarness(t)
 		strategyFixture(t, h, tc.strategy)
 		if tc.setup != nil {
-			tc.setup(h.a.Engine)
+			tc.setup(h, h.a.Engine)
 		}
 		if got := rankedIDs(t, h); got != tc.want {
 			t.Errorf("%s: 排序 %s，期望 %s", tc.strategy, got, tc.want)

@@ -72,7 +72,7 @@ curl http://127.0.0.1:8080/api.json \
 | `provider.save` | `{version,id?,provider}` | 新 Config |
 | `provider.delete` | `{version,id}` | 新 Config；同一事务关联删除所属模型（含停用模型）、指向这些模型的别名和所有路由组中的对应候选；保留路由定义，因本次删除变空的路由自动停用；历史请求、用量、会话历史及客户端 Key 保留 |
 | `route.stats` | `{minutes?}` | 近 N 分钟（默认 60）各路由的实际落点 share（每个候选含 attempts、success、affinity 命中次数）与运行状态 runtime |
-| `route.live` | `{}` | 实时面板数据（缓存 5 秒）：全局并发；被路由引用的模型的并发、RPM、首字节、会话数、近 5 分钟请求与单请求 tok/s；各路由的并发 / 容量、近 60 秒 RPM 与输出 tok/s、近 5 分钟成功率、会话数、加权首字节 |
+| `route.live` | `{}` | 实时面板数据（缓存 5 秒）：全局在途请求数；被路由引用的模型的在途数、RPM、首字节、会话数、近 5 分钟请求与单请求 tok/s；各路由的在途数、近 60 秒 RPM 与输出 tok/s、近 5 分钟成功率、会话数、加权首字节 |
 | `alert.get` | `{}` | 告警推送配置：`enabled`、`kind`（telegram / webhook）、`chat_id`、`has_secret`、`events`；不返回凭证 |
 | `alert.save` | `{enabled, kind, secret?, chat_id?, events:{quota,failures,route}}` | 保存告警配置；`kind` 为 `telegram`、`webhook`（POST JSON `{event,text,at}`）或 `webhook_text`（POST 纯文本正文）；`secret` 留空表示沿用已保存的 Token / 地址，加密存储 |
 | `alert.test` | `{}` | 立即发送一条测试消息 |
@@ -150,7 +150,6 @@ OpenCode Go 使用供应商现有推理 Key 查询同源 `GET /console/api/go/st
       "native_count":false,
       "context_window":128000,
       "max_output_tokens":4096,
-      "concurrency":2,
       "rpm":0,
       "pricing_set":true,
       "price_locked":false,
@@ -190,7 +189,7 @@ OpenCode Go 使用供应商现有推理 Key 查询同源 `GET /console/api/go/st
 }
 ```
 
-路由由 1 到 5 个**组**按顺序组成。请求先在第 1 组按该组的 `strategy` 选候选；本组全部被淘汰、冷却、并发已满或上游失败，
+路由由 1 到 5 个**组**按顺序组成。请求先在第 1 组按该组的 `strategy` 选候选；本组全部被淘汰、冷却或上游失败，
 或都接不了这次请求时，才轮到第 2 组，依此类推。每组有自己的 `strategy` 与 `affinity`。同一个模型只能出现在一个组里；
 组内可以没有候选（新建路由、免费模型路由本来就允许）。`candidates[].disabled:true` 暂停候选。
 
@@ -215,9 +214,9 @@ OpenCode Go 使用供应商现有推理 Key 查询同源 `GET /console/api/go/st
 | `weighted` | 按 `weight` 比例随机抽签，备选顺序同样按剩余权重抽取 |
 | `latency` | 按上游 2xx 响应头耗时的滑动平均升序，没有样本的先试。非流式请求的响应头要等生成结束，长回答会被算慢 |
 | `cost` | 按 `input_price + output_price` 升序，`pricing_set=false` 的排最后 |
-| `least_busy` | 按当前并发 / 并发上限升序 |
+| `least_busy` | 按当前在途请求数升序 |
 
-所有策略共用三条规则：本组会话亲和的模型排最前；冷却中、并发已满或本地 RPM 已满的候选排本组最后（不剔除）；原生协议在同分时优先。
+所有策略共用三条规则：本组会话亲和的模型排最前；冷却中或本地 RPM 已满的候选排本组最后（不剔除）；原生协议在同分时优先。
 后一组的所有候选一律排在前一组之后。
 
 **会话亲和按组记**：键是「网关 Key + 客户端会话头」加组序号，第 1 组的键与分组之前相同，升级前的会话绑定不受影响。
@@ -252,7 +251,6 @@ OpenCode Go 使用供应商现有推理 Key 查询同源 `GET /console/api/go/st
 | --- | --- | --- |
 | `app_name` | 文本 | 后台识别名称 |
 | `default_route` | 文本 | 配置指引用；调用仍须显式传 model |
-| `global_concurrency` | 1–512 | 超出返回 429，不排队 |
 | `max_body_mb` | 1–32 | 请求体上限 |
 | `retention_days` | 31–3650 | 请求记录保留天数 |
 | `session_ttl_hours` | 1–720 | 会话亲和映射保留时长 |
@@ -439,7 +437,7 @@ curl -sN --fail-with-body https://HOST/api.json \
 - 令牌每 5 秒复核一次，撤销或过期后流自动结束。
 - 服务停止时先结束所有监控流，不会占用优雅停止的等待时间。生成的命令带断线重连，
   部署重启后约 2 秒自动接上；令牌失效（HTTP 401）时停止重连。
-- 仪表盘的并发、RPM、首字节等数字来自路由实时面板，最多滞后 5 秒；事件与趋势是实时的。
+- 仪表盘的在途请求数、RPM、首字节等数字来自路由实时面板，最多滞后 5 秒；事件与趋势是实时的。
 - 事件与趋势按尝试计数，不是按请求计数：一次请求先在候选 A 上被限流、再切到候选 B 成功，会产生两条事件。
 - 事件只保存在内存里，重启后清空；趋势图覆盖最近 30 分钟。
 

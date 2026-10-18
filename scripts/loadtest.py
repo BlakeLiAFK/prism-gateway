@@ -129,13 +129,10 @@ def main():
                 return d['data']
 
             rpc('demo.enable', {'version': rpc('config.get')['version']})
-            # 放开本地限流：这里要压的是网关本身，不是限流器
-            cfg = rpc('config.get')
-            rpc('settings.update', {'version': cfg['version'],
-                                    'settings': {'global_concurrency': 512}})
+            # 本地限流只剩 RPM，压测用的模型本来就没设 RPM，无需再改设置
             for m in rpc('config.get')['models']:
                 if m['id'] == 'demo-chat':
-                    m2 = dict(m, concurrency=128, rpm=0)
+                    m2 = dict(m, rpm=0)
                     rpc('model.save', {'version': rpc('config.get')['version'],
                                        'id': m['id'], 'model': m2})
             key = rpc('apikey.create', {'name': 'loadtest', 'allowed': []})['key']
